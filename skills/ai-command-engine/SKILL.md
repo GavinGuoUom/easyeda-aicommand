@@ -5,15 +5,21 @@ description: 通过简易 JSON 指令操作嘉立创 EDA 专业版（EasyEDA Pro
 
 # AI Command Engine — 嘉立创 EDA 操作指令集
 
-本技能可独立安装，不依赖作者本机的其他技能或调试网关。首次装机见仓库 README；连接细节见 setup。
+0.10.116 起移除工程内布局要求与短标记功能，停止开发。旧工程已有属性和标记不会自动删除。
 
-配套代理和技能从[项目仓库](https://github.com/quhuii-lgtm/easyeda-aicommand)获取，并按所用版本/提交保持一致；插件市场安装不会替使用者部署本地代理或向 AI 工具安装技能。v0.10.93 是 2026-10-09 的预发布候选，当前最新稳定版为 [v0.10.87](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/tag/v0.10.87)。候选验证范围见[版本说明](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/v0.10.93/docs/releases/v0.10.93.md)。使用仍需另行安装 Node.js >=20.17.0、运行本地代理、安装本技能，并在 EDA 启用扩展和允许外部交互。
+本技能可独立安装，不依赖作者本机的其他技能或调试网关。首次装机见仓库 README；连接细节见 setup。
 
 HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `eda.*` API。
 
-嘉立创下单检查提供 `pcb.runDfm`、`pcb.runSmtDfm` 和 `pcb.checkSameNetPadSpacing`。`pcb.runDfm` 必须明确输入 `outerCopperOz` 和 `innerCopperOz`；图纸来源铜厚另行报告，不能替代输入。检查完整性和几何覆盖边界见[下单检查说明](references/commands-dfm.md)。
+嘉立创下单检查可用 `pcb.runDfm`、`pcb.runSmtDfm` 与 `pcb.checkSameNetPadSpacing`；完整性和几何覆盖边界见[下单检查说明](references/commands-dfm.md)。`pcb.runDfm` 必须明确输入本地选项 `outerCopperOz` 和 `innerCopperOz`；图纸源厚度另行报告，差异或缺失本身不判失败。命令执行成功不等于检查通过，未完整检查不得报告通过。0.10.91 P11 实机结论见参考页；0.10.92 铜厚输入已通过本地及实机命令对照，菜单定位与导出对话框待实机验收。
 
-v0.10.93 预发布候选新增 `pcb.getFanoutPlan`、`pcb.fanout`、`pcb.getAutoCopperPlan` 和 `pcb.autoCopper`。扇出五项尺寸必须明确输入 mil；曲线几何有明确覆盖边界。接口、输入规则和失败处理见[几何命令说明](references/commands-geometry.md)。几何功能尚未在真实 EDA 工程验证写入和保存关闭重开。
+少数边界行为先查参考页：`project.copyPcb` 缺省归属和结果未确认处理见[工程/板子说明](references/commands-project.md)；PCB 层别名与 `modifyPour` 优先级 读回、停止规则见[PCB 说明](references/commands-pcb.md)。`modifyPour` 0.10.89 已通过本地模拟及隔离工程的0/1优先级、部分失败停止和保存重开验证；任意顺序值仍受宿主限制。
+
+0.10.93 本地候选新增焊盘扇出与自动局部铜皮计划/执行命令；扇出五项尺寸必须明确输入，曲线几何有明确覆盖边界。接口、输入规则、几何覆盖和失败处理见[几何命令说明](references/commands-geometry.md)。安装宿主验收状态以更新记录为准。
+
+0.10.97 矩形板框读取、扇出创建和保存重开已在隔离工程通过。0.10.98 单环反向边框读回已实测通过，实际填充校验仍有 SDK 对象适配错误。0.10.99 候选改用关联父边框核对网络/层，并从填充路径对象读取 getSource()；新增 `pcb.getPourFillReadback` 只读核对已有填充。2026-10-10 已在隔离工程通过现有铜皮的实填充读回及保存关闭重开核对，DRC为0错误/0警告。本次未在0.10.99重新创建铜皮，详见[几何命令说明](references/commands-geometry.md)。
+
+`modifyComponent` 系统属性读回已在 0.10.94 隔离宿主保存重开验证；0.10.95 确认图页资源接口返回空数组。0.10.96 候选将 `placeDevice` 核验改用完整工程导出，并让只读 `getPlacementResourcesDiagnostic` 补充目标资源摘要；2026-10-10 已在 0.10.96 隔离宿主通过既有 TP2 诊断、新 TP3 放置及保存关闭重开检查；此结果仅覆盖已测器件。参数、结果和验证范围见[原理图命令](references/commands-schematic.md)。
 
 ## 新手必读（首次操作前读一遍，熟悉后跳过）
 
@@ -22,10 +28,6 @@ v0.10.93 预发布候选新增 `pcb.getFanoutPlan`、`pcb.fanout`、`pcb.getAuto
 - **坐标**：原理图 10mil/格（A4≈1170×825，取 10 倍数）；PCB 是 mil（1mm≈39.37）。差 10 倍，混用放飞。→ [setup.md](references/setup.md) §6
 - **激活**：`schematic.*`/`pcb.*` 前先 `editor.openDocument {"uuid":...}`（uuid 来自 project.getInfo）。→ [setup.md](references/setup.md) §7
 - **守则**：先查再画、**每条指令带顶层 instanceId**（先 GET /connections 查、勿缓存）；批量优先；画完必读回（有假成功）；常 save、大改前备份；0 致命才 importChanges；超时≠取消（有 taskId 则查进度并只读核实，不能盲目重发或自动解除写保护）；**视觉验收用 schematic.exportPng**（后台窗口 editor.screenshot 截的是缓存帧，连截字节相同=没重绘，pitfalls K9~K10）。
-
-## 插件问题反馈
-
-遇到插件问题，按 [问题上报流程](references/issue-reporting.md) 整理必要证据；提交前告知使用者，然后用其 GitHub CLI 登录身份自动提交到本仓库并返回链接，无需逐条再次确认。使用者明确不提交时遵从；未登录或结果未知时按流程报告，不盲目重发。
 
 ## 按任务选指令（速查，先看这里）
 
@@ -59,7 +61,7 @@ v0.10.93 预发布候选新增 `pcb.getFanoutPlan`、`pcb.fanout`、`pcb.getAuto
 | --- | --- |
 | 原理图（含宏） | [commands-schematic.md](references/commands-schematic.md) |
 | PCB（含低频附录+自动布线闭环） | [commands-pcb.md](references/commands-pcb.md) |
-| PCB 扇出与自动局部铜皮 | [commands-geometry.md](references/commands-geometry.md) |
+| PCB 扇出、局部铜皮、焊盘外扩与网络丝印 | [commands-geometry.md](references/commands-geometry.md) |
 | 嘉立创下单检查（DFM/SMT/同网间距） | [commands-dfm.md](references/commands-dfm.md) |
 | 网络类/差分对/生产导出 | [commands-net.md](references/commands-net.md) |
 | 工程/板子/图页 | [commands-project.md](references/commands-project.md) |
@@ -74,5 +76,18 @@ v0.10.93 预发布候选新增 `pcb.getFanoutPlan`、`pcb.fanout`、`pcb.getAuto
 - [setup.md](references/setup.md) — 连接/坐标/激活全文（新手区引用的详情）+ 超时心跳 + 编辑器操作/截图
 - [workflow.md](references/workflow.md) — 标准流程 + 工作守则全文
 - [pitfalls.md](references/pitfalls.md) — ⚠️ 踩坑实录，出问题时先查它
+- [issue-reporting.md](references/issue-reporting.md) — 插件问题记录、预览和可选提交流程
 
 单条指令参数拿不准 → `GET /help?cmd=<名>` 在线查。
+
+0.10.100 起移除原理图自动连线命令。原理图使用 drawWire、batchWire、labelWire、linkWire 或 buildBlock 按明确连接关系绘制。PCB 自动布线不受影响。
+
+## 独立安装与配套文件
+
+本技能可单独安装。获取 [v0.10.116 配套技能包](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_v0.10.116.zip)，解压后将完整的 `ai-command-engine/` 目录安装到 AI 工具的技能目录，保留 `references/` 和 `scripts/`，不要只复制 `SKILL.md`。也可从 [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip) 的 `skills/ai-command-engine/` 目录获取。
+
+扩展、代理和技能分别安装；扩展包不会替使用者安装本地代理或技能。首次安装代理、启用扩展和核对连接目标见仓库[安装指南](../../docs/QUICKSTART.md)。
+
+## 插件问题上报
+
+遇到实际插件问题时，按[问题上报说明](references/issue-reporting.md)收集并脱敏必要信息。使用者可选择 GitHub CLI 作为提交身份；告知使用者将公开提交的仓库、标题、正文和证据后再执行提交。创建结果未知时先检查 GitHub，不要重复提交。此流程不会由 EDA 指令自动触发，也不会扫描或上传整个工程。

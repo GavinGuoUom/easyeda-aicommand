@@ -72,9 +72,13 @@
 
 `pcb.getFanoutPlan` 和 `pcb.getAutoCopperPlan` 先生成只读计划；`pcb.fanout` 与 `pcb.autoCopper` 按完整计划执行。扇出线长、线宽、过孔外径、孔径和安全间距都须以 mil 明确输入。几何支持范围、保守近似和拒绝条件见[几何命令说明](skills/ai-command-engine/references/commands-geometry.md)。相关几何功能目前只有本地回归和算法对照，尚未在真实 EDA 工程验证写入或保存重开。
 
+### 10. 焊盘外扩与网络文字丝印
+
+可用 `pcb.getPadExpansionPlan` / `pcb.expandPads` 规划并执行焊盘外扩，也可用 `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` 为焊盘网络生成可编辑丝印文字。外扩的支持形状、区域拆分与持久性限制，以及网络文字的放置和避让限制，见[几何命令说明](skills/ai-command-engine/references/commands-geometry.md)；本功能不替代对实际图形、间距和生产结果的检查。
+
 ## 实际操作演示
 
-以下动画录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.10.93 的实机验收记录。
+以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.10.116 的实机验收记录。
 
 ### 原理图：多脚 MCU、外围元件、短连线与标签
 
@@ -98,18 +102,18 @@
 
 ## 版本状态
 
-**v0.10.93 是 2026-10-09 的预发布候选。**开发目录的 104 份冻结文件核对通过，本地回归与安装包核对已完成；尚未安装真实 EDA，也未在真实 PCB 工程验证几何写入、保存关闭重开和整板 DRC。市场错误 `103014`（“entry 不能为空”）是否已解决尚未验证，GitHub 发布也不代表市场审核通过。详见 [v0.10.93 版本说明](docs/releases/v0.10.93.md)。
+**v0.10.116 是 2026-10-11 的预发布候选。**本地定向回归与构建检查已通过。安装检查读回 218 条命令，另核对移除的 4 项入口；这不表示所有命令均已实测。普通原生放置、元件移动和布局能力保留。此次未做真实 EDA 写入，也未验证全部功能和场景；GitHub 发布不代表 EDA 市场审核通过。历史市场错误 `103014`（“entry 不能为空”）尚未重新验证。详见 [v0.10.116 版本说明](docs/releases/v0.10.116.md)。
 
 页面展示的“小机器人画电路板”图标是项目 Logo；市场发布图标文件为 `images/logo-marketplace.png`。
 
-## v0.10.93 下载与安装
+## v0.10.116 下载与安装
 
-本预发布版本的扩展包、技能包、校验文件和源码包均按 tag `v0.10.93` 获取：
+本预发布版本的扩展包、技能包、校验文件和源码包均按 tag `v0.10.116` 获取：
 
-- [扩展包 ai-command-engine_v0.10.93.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.93/ai-command-engine_v0.10.93.eext)
-- [配套技能包 ai-command-engine-skill_v0.10.93.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.93/ai-command-engine-skill_v0.10.93.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.93/SHA256SUMS.txt)
-- [v0.10.93 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.93.zip)
+- [扩展包 ai-command-engine_v0.10.116.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine_v0.10.116.eext)
+- [配套技能包 ai-command-engine-skill_v0.10.116.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_v0.10.116.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS.txt)
+- [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip)
 
 技能 ZIP 解压后，将 `ai-command-engine/` 整个目录安装到所用 AI 工具的技能目录，保留 `references/` 和脚本等子目录，不能只复制 `SKILL.md`。源码 ZIP 中的技能位于 `skills/ai-command-engine/`。代理不单独打包；下载源码 ZIP 后，按[安装与使用指南](docs/QUICKSTART.md)安装 Node.js 依赖并运行本地代理。扩展、代理和技能分别安装，扩展市场不会替使用者安装代理或技能。
 

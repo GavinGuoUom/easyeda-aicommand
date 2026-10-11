@@ -5,6 +5,7 @@
  */
 import type { ICommandDef } from '../engine/types'
 import { modifyComponentSafely, moveComponentSafely } from '../engine/componentMutation'
+import { getProjectFootprintDiagnostic, placeDeviceSafely } from '../engine/componentPlacement'
 import { assertSnapshotFocused, captureDocumentSnapshot, withDocumentRecovery } from '../engine/documentRecovery'
 import { fileToResult } from './util'
 import { beginTask, failTask, finishTask, taskProgress } from '../engine/tasks'
@@ -1998,42 +1999,195 @@ export const schematicCommands: Array<ICommandDef> = [
 			{ name: 'y', type: 'number', required: true, description: '坐标 Y（单位 10mil；A4 图框有效范围约 0–830，建议 100–700）' },
 			{ name: 'rotation', type: 'number', description: '旋转角度，默认 0' },
 			{ name: 'mirror', type: 'boolean', description: '是否镜像，默认 false' },
+			{ name: 'subPartName', type: 'string', description: '多部件器件的子部件名' },
+			{ name: 'addIntoBom', type: 'boolean', description: '是否加入 BOM，默认 true' },
+			{ name: 'addIntoPcb', type: 'boolean', description: '是否转换到 PCB，默认 true' },
 		],
-		returns: '{ primitiveId, designator }',
-		example: { cmd: 'schematic.placeDevice', params: { lcscId: 'C25804', x: 300, y: 300 } },
+		returns: '{ primitiveId, designator, readback: { footprint, pinPadMap?, verified, persistenceVerified: false } }',
+		example: { cmd: 'schematic.placeDevice', params: { lcscId: 'C25804', x: 300, y: 300, addIntoBom: false, addIntoPcb: true } },
 		handler: async (params) => {
-			if (params.x == null || params.y == null)
-				throw new Error('缺少坐标参数 x / y')
-
-			let deviceRef: { libraryUuid: string, uuid: string } | undefined
-			if (params.lcscId) {
-				const items = await eda.lib_Device.getByLcscIds([String(params.lcscId)])
-				if (!items?.[0])
-					throw new Error(`未找到立创编号为 ${params.lcscId} 的器件`)
-				deviceRef = { libraryUuid: items[0].libraryUuid, uuid: items[0].uuid }
+			return await placeDeviceSafely(eda as any, params)
+		},
+	},
+	{
+		name: 'schematic.getPlacementResourcesDiagnostic',
+		summary: '只读诊断器件实例封装 UUID 与当前文档封装资源返回，不执行放置或保存',
+		params: [
+			{ name: 'primitiveId', type: 'string', required: true, description: '待检查的原理图器件实例 primitiveId' },
+		],
+		returns: '{ diagnosticOnly: true, placementVerified: false, documentUuid, projectUuid, focusStart, focusEnd, focusUnchanged, instanceFootprintUuid, resourceListState, resourceCount, resources, projectResource, complete }',
+		example: { cmd: 'schematic.getPlacementResourcesDiagnostic', params: { primitiveId: 'a1b2c3d4' } },
+		handler: async (params) => {
+			const primitiveId = String(params.primitiveId ?? '').trim()
+			if (!primitiveId)
+				throw new Error('缺少参数 primitiveId')
+			const focusSummary = (info: any) => ({
+				documentType: info?.documentType ?? null,
+				uuid: typeof info?.uuid === 'string' ? info.uuid : null,
+				parentProjectUuid: typeof info?.parentProjectUuid === 'string' ? info.parentProjectUuid : null,
+			})
+			let complete = true
+			let focusStart: any
+			let focusEnd: any
+			let instanceFootprintUuid: string | null = null
+			let focusReadError: string | undefined
+			let instanceReadError: string | undefined
+			let resourceReadError: string | undefined
+			let projectResourceError: string | undefined
+			let projectResource: Record<string, unknown> | null = null
+			let sources: Array<any> = []
+			let resourceCount: number | null = null
+			try {
+				focusStart = await eda.dmt_SelectControl.getCurrentDocumentInfo()
 			}
-			else if (params.deviceUuid && params.libraryUuid) {
-				deviceRef = { libraryUuid: String(params.libraryUuid), uuid: String(params.deviceUuid) }
+			catch (error: any) {
+				complete = false
+				focusReadError = `读取起始焦点失败：${String(error?.message ?? error)}`
+			}
+			const hasValidStartIdentity = focusStart?.documentType === 1
+				&& typeof focusStart.uuid === 'string' && focusStart.uuid.trim() !== ''
+				&& typeof focusStart.parentProjectUuid === 'string' && focusStart.parentProjectUuid.trim() !== ''
+			if (!hasValidStartIdentity) {
+				complete = false
+				focusReadError ??= '起始焦点不是具有 page/project UUID 的原理图'
+			}
+			if (hasValidStartIdentity) {
+				try {
+					const component = await eda.sch_PrimitiveComponent.get(primitiveId)
+					if (!component)
+						throw new Error(`找不到器件实例 ${primitiveId}`)
+					const getFootprint = component?.getState_Footprint
+					if (typeof getFootprint !== 'function')
+						throw new Error('实例缺少 getState_Footprint')
+					const footprint = getFootprint.call(component)
+					if (footprint == null)
+						instanceFootprintUuid = null
+					else if (typeof footprint === 'object' && typeof footprint.uuid === 'string' && footprint.uuid)
+						instanceFootprintUuid = footprint.uuid
+					else
+						throw new Error('实例 Footprint 结构缺少有效 uuid')
+				}
+				catch (error: any) {
+					complete = false
+					instanceReadError = `读取实例 Footprint 失败：${String(error?.message ?? error)}`
+				}
 			}
 			else {
-				throw new Error('需要提供 lcscId，或 deviceUuid + libraryUuid')
+				complete = false
 			}
-
-			const component = await eda.sch_PrimitiveComponent.create(
-				deviceRef,
-				Number(params.x),
-				Number(params.y),
-				params.subPartName ? String(params.subPartName) : undefined,
-				params.rotation != null ? Number(params.rotation) : undefined,
-				params.mirror != null ? Boolean(params.mirror) : undefined,
-				params.addIntoBom != null ? Boolean(params.addIntoBom) : true,
-				params.addIntoPcb != null ? Boolean(params.addIntoPcb) : true,
-			)
-			if (!component)
-				throw new Error('器件放置失败（可能当前打开的不是原理图）')
+			if (hasValidStartIdentity) {
+				try {
+					const result = await eda.sys_FileManager.getDocumentFootprintSources()
+					if (!Array.isArray(result))
+						throw new Error('getDocumentFootprintSources 返回值不是数组')
+					sources = result
+					resourceCount = result.length
+				}
+				catch (error: any) {
+					complete = false
+					resourceReadError = `读取工程封装资源失败：${String(error?.message ?? error)}`
+				}
+			}
+			const resources = sources.map((resource: any, index: number) => {
+				const summary: Record<string, unknown> = {
+					index,
+					rawFootprintUuid: resource?.footprintUuid ?? null,
+					sourceLength: typeof resource?.documentSource === 'string' ? resource.documentSource.length : null,
+					doctype: null,
+					headUuid: null,
+				}
+				const errors: Array<string> = []
+				if (typeof resource?.footprintUuid !== 'string' || !resource.footprintUuid.trim())
+					errors.push('资源条目缺少 footprintUuid')
+				if (typeof resource?.documentSource !== 'string')
+					errors.push('documentSource 不是字符串')
+				else {
+					const rows: Array<Array<any>> = []
+					for (const [lineIndex, line] of resource.documentSource.split(/\r?\n/).entries()) {
+						if (!line.trim())
+							continue
+						try {
+							const row = JSON.parse(line)
+							if (!Array.isArray(row) || typeof row[0] !== 'string') {
+								errors.push(`第 ${lineIndex + 1} 行不是数组记录`)
+								continue
+							}
+							rows.push(row)
+						}
+						catch {
+							errors.push(`第 ${lineIndex + 1} 行 JSON 解析失败`)
+						}
+					}
+					const doctypes = rows.filter(row => row[0] === 'DOCTYPE')
+					const heads = rows.filter(row => row[0] === 'HEAD' || row[0] === 'DOCHEAD')
+					if (doctypes.length !== 1 || typeof doctypes[0]?.[1] !== 'string')
+						errors.push(`DOCTYPE 数量或内容无效（${doctypes.length}）`)
+					else {
+						summary.doctype = { type: doctypes[0][1], version: typeof doctypes[0][2] === 'string' ? doctypes[0][2] : null }
+						if (doctypes[0][1] !== 'FOOTPRINT')
+							errors.push(`DOCTYPE 类型不支持（${doctypes[0][1]}）`)
+					}
+					if (heads.length !== 1 || !heads[0]?.[1] || typeof heads[0][1] !== 'object' || Array.isArray(heads[0][1]))
+						errors.push(`HEAD/DOCHEAD 数量或内容无效（${heads.length}）`)
+					else if (typeof heads[0][1].uuid !== 'string' || !heads[0][1].uuid.trim())
+						errors.push('HEAD/DOCHEAD.uuid 缺失或无效')
+					else
+						summary.headUuid = heads[0][1].uuid
+				}
+				if (errors.length) {
+					complete = false
+					summary.parseError = errors.join('; ')
+				}
+				return summary
+			})
+			if (instanceFootprintUuid && hasValidStartIdentity) {
+				try {
+					projectResource = await getProjectFootprintDiagnostic(eda as any, instanceFootprintUuid, primitiveId, focusStart)
+				}
+				catch (error: any) {
+					complete = false
+					projectResourceError = String(error?.message ?? error)
+				}
+			}
+			else if (!instanceFootprintUuid && !instanceReadError && !focusReadError && hasValidStartIdentity) {
+				projectResource = { state: 'no-instance-footprint' }
+			}
+			else {
+				complete = false
+			}
+			try {
+				focusEnd = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			}
+			catch (error: any) {
+				complete = false
+				focusReadError = [focusReadError, `读取结束焦点失败：${String(error?.message ?? error)}`].filter(Boolean).join('; ')
+			}
+			const start = focusSummary(focusStart)
+			const end = focusSummary(focusEnd)
+			const focusUnchanged = hasValidStartIdentity
+				&& start.documentType === end.documentType && start.uuid === end.uuid && start.parentProjectUuid === end.parentProjectUuid
+			if (!focusUnchanged)
+				complete = false
+			const resourceListState = resourceReadError ? 'unavailable' : !hasValidStartIdentity ? 'not-read-invalid-focus' : sources.length === 0 ? 'empty-returned' : 'nonempty-returned'
 			return {
-				primitiveId: safeState<string>(component, 'getState_PrimitiveId'),
-				designator: safeState<string>(component, 'getState_Designator'),
+				diagnosticOnly: true,
+				placementVerified: false,
+				primitiveId,
+				documentUuid: start.uuid,
+				projectUuid: start.parentProjectUuid,
+				focusStart: start,
+				focusEnd: end,
+				focusUnchanged,
+				instanceFootprintUuid,
+				...(focusReadError ? { focusReadError } : {}),
+				...(instanceReadError ? { instanceReadError } : {}),
+				resourceListState,
+				resourceCount,
+				resources,
+				...(resourceReadError ? { resourceReadError } : {}),
+				projectResource,
+				...(projectResourceError ? { projectResourceError } : {}),
+				complete,
 			}
 		},
 	},
@@ -2995,20 +3149,6 @@ export const schematicCommands: Array<ICommandDef> = [
 		},
 	},
 	{
-		name: 'schematic.autoRoute',
-		summary: '原理图自动连线（官方引擎，可指定器件 uuid 集合）',
-		params: [
-			{ name: 'uuids', type: 'string[]', description: '参与连线的器件 uuid，留空为全部' },
-		],
-		returns: '官方自动连线结果',
-		example: { cmd: 'schematic.autoRoute', params: {} },
-		handler: async (params) => {
-			return await eda.sch_Document.autoRouting(
-				params.uuids ? { uuids: params.uuids as Array<string> } : undefined,
-			)
-		},
-	},
-	{
 		name: 'schematic.save',
 		summary: '保存当前原理图',
 		params: [],
@@ -3105,7 +3245,8 @@ export const schematicCommands: Array<ICommandDef> = [
 				if (Object.prototype.hasOwnProperty.call(params, field))
 					requested[field] = params[field]
 			}
-			return await moveComponentSafely(eda as any, params.primitiveId, requested)
+			const movement = await moveComponentSafely(eda as any, params.primitiveId, requested)
+			return movement
 		},
 	},
 	{
@@ -4515,7 +4656,11 @@ export const schematicCommands: Array<ICommandDef> = [
 				}
 			}
 			if (!rewire) {
-				return { dryRun: false, moved, note: '已按方案移动器件（rewire:false 未重建连线；旧导线/标签原地未动——官方移动不跟随，需要时用 rewire:true 重跑）' }
+				return {
+					dryRun: false,
+					moved,
+					note: '已按方案移动器件（rewire:false 未重建连线；旧导线/标签原地未动——官方移动不跟随，需要时用 rewire:true 重跑）',
+				}
 			}
 			// ---------- ⑥ rewire：删碰旧引脚的导线（级联删标签）→ 清浮标 → batchWire 重建 ----------
 			const segDist = (px: number, py: number, x1: number, y1: number, x2: number, y2: number): number => {
@@ -5120,8 +5265,8 @@ export const schematicCommands: Array<ICommandDef> = [
 				params.netlistType ? String(params.netlistType) as any : undefined,
 			)
 			const result = await fileToResult(file, 'netlist.net')
-			if (!result)
-				throw new Error('网表导出失败：官方返回空（File|undefined 中的 undefined——官方未文档化触发条件；数据校验不满足如引脚编号重复时官方会抛错而非返空。可改用 schematic.getNetlist 直接取网表字符串做连通性审计，或 schematic.runDrcDetailed 查致命项）')
+			if (!result || !Number.isFinite(result.size) || result.size <= 0 || !result.base64)
+				throw new Error('网表导出失败：官方返回空、零字节文件或空 base64（如数据校验不满足可能抛错而非返空）。可改用 schematic.getNetlist 直接取网表字符串做连通性审计，或 schematic.runDrcDetailed 查致命项')
 			return result
 		},
 	},
@@ -5148,7 +5293,7 @@ export const schematicCommands: Array<ICommandDef> = [
 			).catch((e: any) => {
 				throw new Error(`网表读取失败：${String(e?.message ?? e)}——该格式官方实现可能不可用，请换 Protel2 / PADS / Allegro / DISA / DSNET 实测可用格式`)
 			})
-			if (typeof netlist !== 'string' || netlist.length === 0)
+			if (typeof netlist !== 'string' || netlist.trim().length === 0)
 				throw new Error('网表读取失败：官方返回非字符串或空——该接口与 exportNetlist 是两条独立路径，同时失败才说明原理图数据不满足网表校验')
 			return { netlistType: rawType ?? 'default', length: netlist.length, netlist }
 		},

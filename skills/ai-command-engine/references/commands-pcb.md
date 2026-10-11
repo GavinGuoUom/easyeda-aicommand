@@ -60,7 +60,7 @@
 | `pcb.setLayerVisible` / `setLayerLocked` | 层显示/隐藏、锁定 | `layers[]`, `visible?`/`locked?` |
 | `addCustomLayer` / `removeCustomLayer` / `modifyLayer` / `setPcbType` | 自定义层与板型（刚性 NORMAL / 柔性 FPC；⚠️ 加删层触发文档重载，需重新 openDocument，守卫会自愈） | 层名/板型 |
 
-- 官方把板框层图形自动转成 **Region**——重复/幽灵板框用 `getPrimitivesInRegion` 扫全板找 Region ID 再 `pcb.delete`。
+- 不预设板框一定是 Region。2026-10-10 隔离实测中，`drawOutline` 创建的是板框层 Polyline，源码类型为 POLY。处理重复板框前先核对实际类型与图元 ID，再对已确认对象操作。
 - `getPrimitivesInRegion` **查不到丝印文字**（只返回 Line/Via/Pad/Region 等铜类）。
 - **层参数严格化**：不认识的层名/层号一律报错（列出合法值），不静默回退；只有未传才用缺省。合法值：top(1)/bottom(2)/top-silk(3)/bottom-silk(4)/top-mask(5)/bottom-mask(6)/top-paste(7)/bottom-paste(8)/top-assembly(9)/bottom-assembly(10)/outline(11)/multi(12)/document(13)/mechanical(14)/inner1~32(15~46)/custom1~200(71~270)，数字字符串亦识别。
 - 层叠配置管理（多层板）见附录 ⑥。
@@ -74,12 +74,12 @@
 | `pcb.runDfm` | 嘉立创 PCB 下单检查（18 项；材料、板厚及本次外/内铜厚选择为必填） | `material`, `thickness`, `outerCopperOz`, `innerCopperOz` |
 | `pcb.runSmtDfm` | 嘉立创 SMT 下单检查（7 项；经济/标准、板厚为必填） | `standard`, `thickness` |
 | `pcb.checkSameNetPadSpacing` | 同网络焊盘间距检查（1 项） | `minSpacingMm` |
-| `pcb.importChanges` | 从原理图导入（⚠️ 弹对话框，需用户点「应用修改」） |
+| `pcb.importChanges` | 从原理图导入；可能弹出应用对话框，按实际界面处理 |
 | `pcb.save` | 保存（⚠️ 无修改时官方返回 false，非失败） |
 
 下单检查参数、铜厚输入与图纸对照、结果完整性和覆盖限制见[嘉立创下单检查说明](commands-dfm.md)。0.10.92 铜厚参数已通过本地及实机命令对照，菜单定位与导出对话框待实机验收。
 
-- **原理图有致命 DRC 时 `importChanges` 静默返回 false**——导入前必须清到 0 致命。
+- 导入前先确认原理图 DRC 为 0 致命。0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
 - 导入后 `listComponents`+逐器件 `getComponentPads` 比对焊盘网络与网表。
 - `runDrcDetailed` 偶发超时一次后自恢复——先重试，勿判插件失效。`editor.openDocument` 切页偶发超时同理。
 - `project.renameBoard` 按名字匹配，重名会改错——改名前先 `project.getBoardInfo`。
@@ -150,3 +150,7 @@
 | `pcb.autoRouteStart` | 启动自动布线（导出 DSN→FreeRouting 服务→启动任务） | `maxPasses?`, `viaCosts?`, `maxThreads?`, `skipDrc?` |
 | `pcb.autoRouteStatus` | 查进度；COMPLETED 时自动清未锁定走线+回灌 SES+DRC，返回统计 | `jobId?`, `noImport?` |
 | `pcb.autoRouteStop` | 停止任务（保留当前结果） | `jobId?` |
+
+- 0.10.106 候选：`autoRouteStart` 仅返回 `outcome:start-request-submitted,stateVerified:false`，不再把提交请求称为 RUNNING。 启动调用失败也会保留 jobId 并返回 partial、retryable:false，禁止重提；先查询原任务或取消后核对状态。用 `autoRouteStatus` 的 `noImport:true` 先读取实际状态；目标及内容核对后再允许回灌。本地回归已通过，候选尚未安装。
+- EDA 4.1.71 本轮含既有布线的 DSN 在 FreeRouting 2.2.3 中触发递归溢出，未回灌。不能将宿主原生布线修复视为此插件流程通过。
+

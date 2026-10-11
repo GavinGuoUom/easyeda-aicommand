@@ -255,14 +255,46 @@ export const projectCommands: Array<ICommandDef> = [
 					newProjectName: params.newProjectName ? String(params.newProjectName) : undefined,
 				}
 			}
-			const project = await eda.sys_FileManager.importProjectByProjectFile(
-				file,
-				fileType as any,
-				undefined,
-				saveTo as any,
-			)
-			if (!project)
-				throw new Error('导入失败：官方返回空')
+			let beforeProjectUuid: string | undefined
+			try {
+				const before = await eda.dmt_Project.getCurrentProjectInfo()
+				if (typeof before?.uuid === 'string' && before.uuid)
+					beforeProjectUuid = before.uuid
+			}
+			catch { /* 仅作恢复线索，不影响导入前置校验 */ }
+			const target = saveTo?.operation === 'New Project'
+				? { operation: saveTo.operation, teamUuid: saveTo.newProjectOwnerTeamUuid, projectName: saveTo.newProjectName }
+				: saveTo ? { operation: saveTo.operation, folderPath: saveTo.folderPath } : undefined
+			const unknownOutcome = (reason: unknown) => {
+				const detail = reason instanceof Error ? reason.message : reason === undefined ? 'SDK 返回空结果' : String(reason)
+				return new Error('工程导入调用已发起，但结果无法确认；不要自动重试，请先核对目标工程是否已创建', {
+					cause: {
+						partial: true,
+						retryable: false,
+						outcome: 'unknown',
+						fileName,
+						fileType,
+						newProjectName: params.newProjectName ? String(params.newProjectName) : undefined,
+						target,
+						beforeProjectUuid,
+						sdkError: detail,
+					},
+				})
+			}
+			let project: any
+			try {
+				project = await eda.sys_FileManager.importProjectByProjectFile(
+					file,
+					fileType as any,
+					undefined,
+					saveTo as any,
+				)
+			}
+			catch (error) {
+				throw unknownOutcome(error)
+			}
+			if (!project || typeof project !== 'object' || typeof project.uuid !== 'string' || !project.uuid)
+				throw unknownOutcome(project === undefined ? 'SDK returned undefined' : project === null ? 'SDK returned null' : 'SDK returned no valid project UUID')
 			return project
 		},
 	},

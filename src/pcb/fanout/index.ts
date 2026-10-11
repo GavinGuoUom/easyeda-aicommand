@@ -1,6 +1,7 @@
 import type { ICommandDef } from '../../engine/types';
 import type { GeometryHost } from '../geometryHost';
 import type { CopperObstacle, Point } from './fanout-routing';
+import { normalizeBoardOutlinePolylines } from '../boardOutline';
 import { createGeometryHost } from '../geometryHost';
 import { planRouteDetailed } from './fanout-routing';
 
@@ -572,9 +573,14 @@ async function collect(host: GeometryHost): Promise<Collected> {
 			warnings.push('发现铜层折线图元，当前安全障碍转换未覆盖');
 		}
 	}
-	const boardLines = (lines as any[]).filter((line: any) => layerOf(line, '板框线') === 11);
+	const boardPolylines = normalizeBoardOutlinePolylines(polylines as any[]);
+	if (boardPolylines.issues.length) {
+		complete = false;
+		warnings.push(...boardPolylines.issues);
+	}
+	const boardLines = [...(lines as any[]).filter((line: any) => layerOf(line, '板框线') === 11), ...boardPolylines.lines];
 	const boardGeometry = outlinePaths(boardLines);
-	if (boardLines.length === 0 || boardGeometry.open) {
+	if (boardLines.length === 0 || boardGeometry.open || boardPolylines.issues.length) {
 		complete = false;
 		warnings.push('板框线未形成完整闭合直线边界，弧形板框当前不支持安全规划');
 	}

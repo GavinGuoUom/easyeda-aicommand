@@ -67,7 +67,7 @@
 
 | 指令 | 说明 | 关键参数 |
 | --- | --- | --- |
-| `schematic.placeDevice` | 放器件（默认进 BOM 和 PCB） | `lcscId` 或 `deviceUuid`+`libraryUuid`, `x`, `y`, `rotation?` |
+| `schematic.placeDevice` | 放器件并核对工程封装资源与编号（默认进 BOM 和 PCB） | `lcscId` 或 `deviceUuid`+`libraryUuid`, `x`, `y`, `rotation?`, `addIntoBom?`, `addIntoPcb?` |
 | `schematic.connectPin` | 底层单脚连线：引脚尖端外 30→引脚原点，端点落原点即连通。**普通场景优先 labelWire** | `primitiveId`, `pin`, `net` |
 | `schematic.drawWire` | 画导线（折点数组；自动拆段+去重+智能命名；支持 color/lineWidth/lineType） | `points`, `net?`, `color?`, `lineWidth?`, `lineType?` |
 | `schematic.placeNetLabel` | 放网络标签（**自动验证附着**；同名防呆） | `net`, `x`, `y`, `noVerify?`, `force?`, `rotation?` |
@@ -83,11 +83,29 @@
 - placeNetLabel：标签压线体上会被拒（自动 ±2 微偏重试）；只有按本次标签 ID、父导线及父导线属性三处读回一致，才返回 `attached:true` 和 `wireId`，ghost 标签也走同一验证。读回未知或确认浮空时以 partial 异常返回并保留标签及 ID，不自动删除；`noVerify:true` 不证明已附着。附近同名导线或负坐标都不能证明附着；已有该网名的导线仍拒绝（`force:true` 强放）；`rotation` 默认 0，显式传入时尝试设置并读回核对。
 - 网格吸附：坐标取 10 的倍数，否则 DRC 报"网络图元不在格点上"。
 
+#### placeDevice 的封装核验（0.10.94 候选）
+
+- 先读取完整库器件关联，仍按官方 UUID 引用创建一次；再独立读取实例、工程封装资源以及引脚。不会自动修复缺失关联或重复放置。
+- 库器件有关联封装时，实例封装须指向目标工程资源，资源来源须匹配库封装与库 UUID，当前实例的每个引脚编号须在封装 PAD 编号中存在。0.10.96 候选改用公开完整工程 epro 导出，读取精确 `FOOTPRINT/<实例封装UUID>.efoo`，保留 HEAD.uuid 与来源检查；需宿主允许下载工程。当前支持逐行数组格式 FOOTPRINT 资源，格式不支持或证据缺失即报错。
+- 成功保留 `primitiveId`、`designator`，新增 `readback.footprint`（含 `projectUuid`、`resourceSource`、`resourceVerified`）及 `pinPadMapVerified`。`pinPadMap` 为引脚编号到 PAD 图元 ID 的对应，`pinMapScope:"placed-instance-only"` 只覆盖本次子部件，不证明其他子部件或整个器件的映射。
+- 库器件没有封装关联仍可放置，返回 `libraryFootprint:"none"`；没有电气引脚和编号焊盘时 `electricalMapping:"none"`、`pinPadMapVerified:false`，不得当作已验证电气映射。
+- 创建尝试后的核验失败带 `partial:true`、`retryable:false`、阶段和已取得的 `primitiveId`。先核对现场，不自动重试或删除。执行期间原理图页或工程焦点变化也会停止。
+- `readback.verified:true` 仅表示上述即时核验通过，`persistenceVerified:false` 明确尚未保存重开；网表、DRC 与保存重开须另行验证。
+
+0.10.95 实机诊断已确认当前图页资源接口返回空数组，完整工程包中目标资源存在。0.10.96 候选据此修正核验的数据来源，并在导出前后检查图页/工程及实例引用。返回增加 `resourceOrigin:"project-export-epro"` 和 `resourcePath`，仍不等于保存持久性通过。2026-10-10 已在 0.10.96 隔离工程完成新测试点放置：封装来源与引脚/PAD 映射核验通过。保存、关闭并重开后，封装引用、BOM/PCB 标志、位号与唯一 ID 保留，网表一致。该结果仅覆盖已测器件；历史封装丢失根因未复现。
+
+#### 封装资源的只读诊断（0.10.96 候选）
+
+`schematic.getPlacementResourcesDiagnostic` 必须提供现有器件 `primitiveId`。读取当前原理图页和工程身份、实例封装 UUID，以及 `getDocumentFootprintSources()` 的资源数量和逐项摘要（原始 `footprintUuid`、源码长度、DOCTYPE、HEAD.uuid、解析错误）。不返回完整源码，不创建、修改或保存器件。
+
+0.10.96 候选额外返回 `projectResource`，用与放置核验相同的完整工程读取函数提供目标路径、HEAD/来源及焊盘编号摘要。结果保留 `diagnosticOnly:true`、`placementVerified:false`，解析/导出错误或焦点变化按未完成处理；不据此重试创建器件。0.10.95 的空数组已实测确认。2026-10-10 的 0.10.96 隔离宿主中，既有 TP2 和新 TP3 保存重开后的 projectResource 路径、HEAD、来源及 PAD 编号均正确。只读诊断仍不单独代表新建器件已通过全部核验。
+
 ### 修改类
 
 | 指令 | 说明 | 关键参数 |
 | --- | --- | --- |
 | `schematic.setWireNet` | 改导线网名（modify 后强制读回，返回 `readback:{net,verified}`） | `primitiveId`, `net` |
+| `schematic.modifyComponent` | 完整修改器件属性并独立读回 | `primitiveId`, 完整 `property`，见下文 |
 | `schematic.modifyWire` | 改颜色/线宽/线型/网名（可按网名批量，如 3V3 全网标红） | `primitiveId` 或 `net`, `color?`, `lineWidth?`, `lineType?`, `newNet?` |
 | `schematic.modifyNetLabel` | 改颜色/位置/改名/**文字方向**（可按网名批量） | `primitiveId` 或 `net`, `color?`, `newNet?`, `x?`, `y?`, `rotation?` |
 | `schematic.modifyText` | 改注释文本 | `primitiveId` |
@@ -96,6 +114,20 @@
 - 官方 modify 多字段合并改会整体失效（实测"位置+旋转"同传→什么都没改）——插件已**原子化拆分**（每字段独立步骤+逐步读回，不符挪 failed 带实际值），调用侧多字段照传。
 - 官方 modify 有假失败也有假成功——凡修改，成败以读回/源码重扫为准。
 - 镜像/rotation 180 都反字——正常标签 rotation 0、锚点压导线；官方属性接口不支持 mirror，被镜像的标签只能转正或删了重放。
+
+#### modifyComponent 的完整属性与系统别名（0.10.94 候选）
+
+`property` 必须明确包含这 14 项：`x`、`y`、`rotation`、`mirror`、`addIntoBom`、`addIntoPcb`、`designator`、`name`、`uniqueId`、`manufacturer`、`manufacturerId`、`supplier`、`supplierId`、`otherProperty`。`otherProperty` 须包含实例当前已有的自定义属性，避免 SDK 清掉漏传的键。
+
+宿主把九个系统键放在专用字段中：`Add into BOM`→`addIntoBom`、`Convert to PCB`→`addIntoPcb`、`Designator`→`designator`、`Name`→`name`、`Unique ID`→`uniqueId`、`Manufacturer`→`manufacturer`、`Manufacturer Part`→`manufacturerId`、`Supplier`→`supplier`、`Supplier Part`→`supplierId`。插件按对应字段读回。
+
+- 若 `otherProperty` 重复提供这些键，值须与顶层字段一致。布尔别名只接受 `"yes"` / `"no"`，分别对应 `true` / `false`。冲突在写入前报错。
+- 顶层字符串为 `null`、别名为空字符串时表示清空。实际读回允许 `null`、`undefined` 或空字符串。其他字符串和布尔值保持严格比较。
+- 返回的 `readback.otherProperty` 保持实际读回内容，可能没有上述系统键。不要据此判定漏写。
+- 真正不匹配、读回失败或焦点变化仍报错。已尝试写入的失败带 `partial:true`、`retryable:false`；先核对现场，不能直接重发。
+- 不要把库器件默认属性直接当作工程实例的修改请求。封装、符号和器件的工程内引用与库 UUID 可能不同。
+
+该修复已通过本地回归及 0.10.94 隔离宿主测试：BOM=false、PCB=true、位号及唯一 ID 修改读回正确，保存关闭重开后属性保留、网表逐字一致。此结果只覆盖已测字段与器件，不代表所有属性组合均已实测。
 
 ## ③ 修复维护（出问题再用）
 
@@ -133,10 +165,11 @@
 | `schematic.runDrc` | 原理图 DRC（内部自动两遍取稳定值） | 无 |
 | `schematic.runDrcDetailed` | DRC 逐条明细（**需 EDA v4.2+**；4.1 只返回聚合结构并标 `aggregated:true`，别假装支持或反复重试） | 无 |
 | `schematic.structuralAudit` | **【0.10.60】整页结构+排版验收（只读）**：并查集编树+官方 net 对账。blocking=桥接(LABEL_NET_MISMATCH/树内多网名)/异网共线重叠/重复位号；candidate=孤立树/浮标/引脚穿线/十字交叉/区框重叠/器件出区/器件相碰(引脚云近似待目检)；info=零长段/悬端/同网重叠。九页验收逐页调用 | `ncExempt?`(豁免名单如 ["U2.2"]), `deviceMargin?`(相碰筛选外扩 mil,默认 10) |
-| `schematic.exportNetlist` | 导网表（base64；⚠️ 验证连通性的最终手段） | 无 |
+| `schematic.exportNetlist` | 导网表（base64；须解析后逐网络核对引脚） | `fileName?`, `netlistType?` |
 | `schematic.getNetlist` | 直接读网表字符串（0.10.44；exportNetlist 返空时的连通性审计备选，只读不写） | `netlistType?` |
 | `schematic.save` | 保存原理图 | 无 |
 
+- 0.10.104 起，网表文件导出拒绝零字节文件及空 base64；`getNetlist` 拒绝纯空白文本。返回非空数据仍须解析并核对实际引脚，不能只看导出成功。
 - 官方单对象 `get()` 对已删除 ID 永久返回缓存旧对象——存在性判断用全量列表/源码重扫，别用 `get()`。
 - **structuralAudit 宿主语义边界（0.10.61 实测）**：①宿主会把物理相接的异网名导线**合并成一个 wire** 并把 net 定为其中一个名——桥接实际由 LABEL_NET_MISMATCH[blocking] 抓获，MULTI_NET_TREE 只在字段可伪造的场景出现，不触发属正常；②画线穿过引脚会被官方**吸附拆分**、引脚成为端点=合法连接——PIN_INTERIOR_LANDING 在宿主数据上通常不触发，规则保留作防御；③图框 (0,0) 会被报 COMP_OUTSIDE_REGION[candidate]，图框不是器件，可忽略。
 - 官方 `getAll(net)` 网络过滤不可靠——插件已改全量取回手动过滤。

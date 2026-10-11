@@ -20,6 +20,8 @@ import { editorCommands } from './commands/editor';
 import { fanoutCommands } from './commands/fanout';
 import { knowledgeCommands } from './commands/knowledge';
 import { libCommands } from './commands/lib';
+import { netSilkscreenCommands } from './commands/netSilkscreen';
+import { padExpansionCommands } from './commands/padExpand';
 import { pcbCommands } from './commands/pcb';
 import { pcbGroupingCommands } from './commands/pcbGrouping';
 import { libraryCommands, projectCommands } from './commands/project';
@@ -41,6 +43,8 @@ function registerAllCommands(): void {
 		...pcbCommands,
 		...fanoutCommands,
 		...autoCopperCommands,
+		...padExpansionCommands,
+		...netSilkscreenCommands,
 		...dfmCommands,
 		...pcbGroupingCommands,
 		...knowledgeCommands,

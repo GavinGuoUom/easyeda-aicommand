@@ -10,7 +10,6 @@
 | --- | --- |
 | `schematic.getPrimitiveAtPoint` | 查询指定坐标处的图元（返回 id+类型），排查"这个位置是什么" |
 | `schematic.setAttribute` | 改器件属性（如位号 R?→R4，key=Designator）。⚠️ 只能改已存在属性；Footprint 别写裸名/空串（见 pitfalls G1/G2） |
-| `schematic.autoRoute` | ⚠️ **薄封装官方整页自动连线，未加防护**——可能大面积打乱已有走线，生产环境别用；整理已有图用 `autoLayout` |
 
 ## lib 库管理（⚠️ 全族记住：modify 后 uuid 可能变化——0.10.62 起三个 Modify 已内置回查，返回 `uuid/uuidChanged/verify`；Copy/Delete 仍信返回值，失败按名复核）
 

@@ -14,10 +14,10 @@
 
 ## 1. 下载仓库并安装代理依赖
 
-从 [仓库首页](https://github.com/quhuii-lgtm/easyeda-aicommand) 的 Code → Download ZIP 下载并解压到固定目录，或使用 Git：
+从 [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip) 下载并解压到固定目录，或检出同一 tag：
 
 ```powershell
-git clone https://github.com/quhuii-lgtm/easyeda-aicommand.git
+git clone --branch v0.10.116 --depth 1 https://github.com/quhuii-lgtm/easyeda-aicommand.git
 Set-Location easyeda-aicommand
 ```
 
@@ -44,16 +44,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bridge\install-url-sch
 
 ## 2. 安装并连接 EDA 插件
 
-1. 从 [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases) 下载 `ai-command-engine_v*.eext`。源代码 ZIP 与 `.eext` 用途不同。
+1. 从 [v0.10.116 预发布](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/tag/v0.10.116) 下载 `ai-command-engine_v0.10.116.eext`。源代码 ZIP 与 `.eext` 用途不同。
 2. 在 EDA 的扩展/插件管理界面导入该 `.eext`，启用插件并勾选“允许外部交互”。不同 EDA 版本菜单位置可能不同，以当前客户端的插件导入入口为准。
 3. 新建一个用于试用的空白工程及原理图页，打开该页。
 4. 在“AI Command”菜单使用“启动桥接”“停止桥接”或“重新连接桥接”。启动已连接的窗口是幂等操作；重新连接会先排空本窗口已有请求，再换连。停止会拒绝排队中的新写请求，交付已派发请求的结果后再断开本窗口。partial 或结果不确定时停止会明确报告并保留写保护。
 
-v0.10.87 附件校验值见 [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.87/SHA256SUMS.txt)。
+v0.10.116 附件校验值见 [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS.txt)。
 
 可用 PowerShell `Get-FileHash -Algorithm SHA256 -LiteralPath '<下载的 eext 路径>'` 核对。校验值只适用于本次发布附件，不适用于自行重新打包的文件。
 
-本版尚未完成完整宿主安装验收；升级后先在试用工程核对，验证边界见 [版本说明](releases/v0.10.87.md)。从旧版升级需关闭并重新打开 EDA 窗口，代理和技能也应更新到同一标签。
+v0.10.116 是预发布候选。安装记录读回 218 条命令，并核对 4 项已移除入口；这不表示所有功能均已测试。此次未做真实 EDA 写入，不能据此宣称所有功能和场景通过。历史市场问题 `103014` 未重新验证。升级后先在试用工程核对，详细范围见 [v0.10.116 版本说明](releases/v0.10.116.md)。从旧版升级需关闭并重新打开 EDA 窗口，代理和技能也应更新到同一标签。
 
 ## 3. 完成第一次只读调用
 
@@ -130,6 +130,6 @@ python skills/ai-command-engine/scripts/eda.py project.getInfo --instance-id '<�
 
 ## 反馈与验证边界
 
-在 [Issues](https://github.com/quhuii-lgtm/easyeda-aicommand/issues) 提交操作系统、EDA/插件/Node 版本、仓库提交、最小复现步骤和脱敏后的报错。日志与工程内容可能含个人信息，分享前先检查。
+遇到插件问题时，可按[问题上报说明](../skills/ai-command-engine/references/issue-reporting.md)使用本机 GitHub CLI 提交 Issue。提交前告知使用者将公开提交的仓库、标题、主要内容和所含证据；创建结果未知时先到 GitHub 核对，不要重复提交。问题上报是可选的本地流程，不由 EDA 指令自动触发。也可以直接在 [GitHub Issues](https://github.com/quhuii-lgtm/easyeda-aicommand/issues) 提交操作系统、EDA/插件/Node 版本、仓库提交、最小复现步骤和脱敏后的报错。日志与工程内容可能含个人信息，分享前先检查。
 
 仓库提供的模拟测试不等于完整客户端兼容性测试。本次文档修订不宣称完成所有平台的干净装机验收，也不提供未经实机核对的设置截图。

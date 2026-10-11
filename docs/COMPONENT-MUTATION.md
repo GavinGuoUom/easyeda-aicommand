@@ -37,6 +37,28 @@
 
 命令只调用一次官方 `modify`，随后读回全部请求字段和 `otherProperty` 键值。null 字段按官方空值读回语义允许表现为空字符串或 `undefined`。属性不符、器件读回失败，或操作前后焦点图页/所属工程变化时，命令报错；若官方写入已经尝试，错误会带 `cause.partial: true`、`cause.retryable: false`。这表示结果可能已部分写入，调用方应先检查图页状态再决定后续操作。
 
+### 0.10.94 系统属性读回修复
+
+宿主会把以下系统属性从 `otherProperty` 分离到专用字段。命令按对应 getter 核验，不能因它们未出现在 `getState_OtherProperty()` 中就判定漏写。
+
+| otherProperty 中的键 | 对应顶层字段 |
+| --- | --- |
+| Add into BOM | addIntoBom |
+| Convert to PCB | addIntoPcb |
+| Designator | designator |
+| Name | name |
+| Unique ID | uniqueId |
+| Manufacturer | manufacturer |
+| Manufacturer Part | manufacturerId |
+| Supplier | supplier |
+| Supplier Part | supplierId |
+
+两个布尔属性的别名值只接受 `"yes"` 或 `"no"`。字符串别名保持原值。若同时提供顶层字段和别名，两者必须一致，否则写入前报错。顶层为 `null`、别名为空字符串时，沿用清空契约。不要把库返回的属性整包当作实例修改意图；库的默认名称和别名可能不同。
+
+一致别名仍原样传给 SDK，以保留既有空字符串写入行为。返回的 `readback.otherProperty` 是实际读到的属性表，不补造系统别名。自定义属性、额外键、非空字符串和布尔值仍严格核对。清空请求可接受 `null`、`undefined` 或空字符串；缺少 getter 方法仍报错。
+
+本地回归和类型检查已通过。新版本安装后的宿主读回及保存重开另行验收。
+
 ## 安全移动
 
 只移动、旋转或镜像时使用 `schematic.moveComponent`。它通过当前器件对象的 `toAsync()`，只设置请求中提供的 `x`、`y`、`rotation`、`mirror`，再调用一次 `done()`。读回会核对请求几何、未请求的几何，以及名称、位号、唯一 ID、库器件/符号/封装关联、BOM/PCB 设置、网络、子部件名、厂家/供应商和 `otherProperty`。

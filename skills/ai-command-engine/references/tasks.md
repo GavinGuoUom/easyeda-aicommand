@@ -49,8 +49,8 @@
 
 ## E. 原理图 → PCB
 
-1. 原理图 `runDrc` 清到 **0 致命**（有致命时 `importChanges` 静默 false）。
-2. `pcb.importChanges` → **弹对话框须用户点「应用修改」**，AI 代点不了。
+1. 原理图 `runDrc` 清到 **0 致命**。0.10.104 起，导入失败或结果不确定会报告 partial 并停止宏，不自动重试。
+2. 0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
 3. 对账：`pcb.listComponents` + 逐器件 `pcb.getComponentPads` 比焊盘网络。
 4. 布局：`pcb.groupBySchematicRegions`（先 dryRun）/ `pcb.moveComponent`；摆完 `pcb.checkPlacement`。
 5. 布线：`pcb.routeTrack`（大电流先 `knowledge.widthForCurrent` 算线宽）+ `pcb.placeVia`；GND 整面 `pcb.pourCopper`。

@@ -1,8 +1,12 @@
-# 工程与板子管理指令（project.*，0.10.37 共 23 条）
+# 工程与板子管理指令（project.*）
 
 > 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
 
 工程/板子/图页的创建、复制、删除、关联。文档树 uuid 一律从 `project.getInfo` 读，不猜。
+
+## 工程导入结果不明（0.10.106 候选）
+
+`project.importFile` 调用 SDK 后返回空、异常或无合法工程 UUID 时，报告 `partial:true`、`retryable:false`、`outcome:unknown`。这表示导入结果不能确认，不表示没有创建工程。先按错误中的目标名称和目录核对，禁止自动再导入。调用前参数错误仍是普通拒绝；成功返回也须另验工程内容。
 
 ## 工程级
 
@@ -23,7 +27,7 @@
 
 | 指令 | 说明 | 关键参数 |
 | --- | --- | --- |
-| `project.getBoardInfo` | 当前板子信息与原理图/PCB 关联状态；`pcb.importChanges` 返回 false 时用它排查游离 PCB | 无 |
+| `project.getBoardInfo` | 当前板子信息与原理图/PCB 关联状态；`pcb.importChanges` 报导入失败时用它排查游离 PCB | 无 |
 | `project.associateBoard` | 关联原理图+PCB 到板子（修复游离 PCB） | `schematicUuid`, `pcbUuid` |
 | `project.copyBoard` | 复制板子 | `boardName` |
 | `project.deleteBoard` | 删除板子 | `boardName` |

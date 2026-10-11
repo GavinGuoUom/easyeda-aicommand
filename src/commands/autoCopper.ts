@@ -1,6 +1,9 @@
 import type { ICommandDef } from '../engine/types';
 import type { GeometryHost } from '../pcb/geometryHost';
+import { comparePolygonSource } from '../pcb/autoCopper/geometryReadback';
+import { readPourFillReadback } from '../pcb/autoCopper/pourReadback';
 import { configureCopperRuntime } from '../pcb/autoCopper/runtime';
+import { normalizeBoardOutlinePolylines } from '../pcb/boardOutline';
 import { createGeometryHost } from '../pcb/geometryHost';
 import { parseSourceLog, resolveRecords } from '../pcb/sourcelog';
 
@@ -503,7 +506,13 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 	const arcObjects = await readArray(host, sdk.pcb_PrimitiveArc, '读取目标铜层圆弧', undefined, targetLayerId);
 	const outlineLines = await readArray(host, sdk.pcb_PrimitiveLine, '读取板框层线段', undefined, BOARD_OUTLINE);
 	const outlineArcs = await readArray(host, sdk.pcb_PrimitiveArc, '读取板框层圆弧', undefined, BOARD_OUTLINE);
-	const outline = outlineArcs.length ? { rings: [], reason: '官方纯规划链不对板框弧线作拓扑内含验证' } : outlineRings(outlineLines, upstream.polygonUtils);
+	const outlinePolylines = await readArray(host, sdk.pcb_PrimitivePolyline, '读取板框折线图元');
+	const normalizedPolylines = normalizeBoardOutlinePolylines(outlinePolylines);
+	const boardLines = [...outlineLines, ...normalizedPolylines.lines];
+	const lineOutline = outlineArcs.length ? { rings: [], reason: '官方纯规划链不对板框弧线作拓扑内含验证' } : outlineRings(boardLines, upstream.polygonUtils);
+	const outline = normalizedPolylines.issues.length
+		? { rings: [], reason: normalizedPolylines.issues.join('；') }
+		: lineOutline;
 	const nearbyArcs: string[] = [];
 	const boardConflictIds: string[] = [];
 	for (const planned of plannedPrimitives) {
@@ -517,7 +526,7 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 			if (boxesOverlap(bounds, asBox(arcTarget)))
 				nearbyArcs.push(String(state(arc, 'PrimitiveId') ?? '(无 ID)'));
 		}
-		for (const line of outlineLines) {
+		for (const line of boardLines) {
 			const lineTarget = upstream.primitiveTargets.makeLineObstacleTarget(line);
 			if (boxesOverlap(bounds, asBox(lineTarget)))
 				boardConflictIds.push(String(state(line, 'PrimitiveId') ?? '(无 ID)'));
@@ -561,7 +570,7 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 	const coverage = {
 		upstreamBoundaryAvoidanceAndClipping: '完整静态提取：实际边界生成、DRC margin、difference/union/offsetRings、障碍裁剪及多目标 envelope-to-bridge 几何策略',
 		arcClearance: nearbyArcs.length ? { complete: false, nearbyArcIds: [...new Set(nearbyArcs)] } : { complete: true, method: '目标多边形边界框冲突核对，远离目标的圆弧不参与形状裁剪' },
-		boardOutline: { complete: !outline.reason && outline.rings.length === 1 && boardConflictIds.length === 0, lineRingCount: outline.rings.length, arcs: outlineArcs.length, method: '线段闭环核对并验证多边形点；多环/弧线板框明确拒绝' },
+		boardOutline: { complete: !outline.reason && outline.rings.length === 1 && boardConflictIds.length === 0, lineRingCount: outline.rings.length, arcs: outlineArcs.length, polylines: normalizedPolylines.summaries, method: '线段闭环核对并验证多边形点；多环/弧线及未知板框折线明确拒绝' },
 		search: '上游按目标外接范围有限收集候选；collectors 对数据层执行完整 getAll 后再按搜索范围筛选',
 		drc: '完整读取规则；候选网络需解析到通用铜间距规则，收集到的异网障碍逐一解析，计划网络之间另作保守包围框净距核对；不代表完整板级 DRC 结论',
 		crossGroupClearance,
@@ -657,19 +666,38 @@ async function executePlan(params: Record<string, any>) {
 			const actualLayer = state<number>(readback, 'Layer');
 			const actualPolygon = state<any>(readback, 'ComplexPolygon');
 			const actualSource = actualPolygon?.getSource?.();
-			if (actualNet !== planned.net || Number(actualLayer) !== planned.layerId || stableJson(actualSource) !== stableJson(planned.polygonSources.length === 1 ? planned.polygonSources[0] : planned.polygonSources))
-				throw new Error(`新铜皮 ${id} 的独立读回网络/层/几何与计划不符`);
-			host.recordVerified(id);
+			const plannedSource = planned.polygonSources.length === 1 ? planned.polygonSources[0] : planned.polygonSources;
+			const geometryComparison = comparePolygonSource(plannedSource, actualSource);
+			if (actualNet !== planned.net || Number(actualLayer) !== planned.layerId || !geometryComparison.matches) {
+				const error = new Error(`新铜皮 ${id} 的独立读回网络/层/几何与计划不符`) as Error & { cause?: unknown };
+				error.cause = {
+					geometryReadback: {
+						plannedSource,
+						actualSource: actualSource ?? null,
+						comparison: geometryComparison.mode,
+						geometryMatches: geometryComparison.matches,
+						plannedNet: planned.net,
+						actualNet: actualNet ?? null,
+						plannedLayer: planned.layerId,
+						actualLayer: actualLayer ?? null,
+					},
+				};
+				throw error;
+			}
+			if (submitted.inputs.generationType === 'fill')
+				host.recordVerified(id);
 			const resultRecord: Record<string, unknown> = {
 				id,
 				net: actualNet,
 				layer: actualLayer === TOP ? 'top' : actualLayer === BOTTOM ? 'bottom' : actualLayer,
 				layerId: actualLayer,
 				geometry: actualSource,
+				geometryComparison: { mode: geometryComparison.mode, plannedSource, actualSource },
 				status: submitted.inputs.generationType === 'fill' ? 'created-and-read-back-fixed-fill' : 'created-border; fill not yet verified',
 			};
 			created.push(resultRecord);
 			if (submitted.inputs.generationType === 'pour') {
+				resultRecord.status = 'border-read-back; fill pending';
 				const orderSource = await host.read(`读回铜皮排序源码 ${id}`, async () => {
 					const source = await eda.sys_FileManager.getDocumentSource();
 					if (typeof source !== 'string')
@@ -692,22 +720,22 @@ async function executePlan(params: Record<string, any>) {
 				if (typeof pourObject.rebuildCopperRegion !== 'function')
 					throw new Error(`覆铜 ${id} 不支持 rebuildCopperRegion`);
 				const poured = await host.write(`重建覆铜填充 ${id}`, async () => await pourObject.rebuildCopperRegion());
-				if (!poured)
+				if (!poured) {
+					resultRecord.status = 'border-read-back; rebuild returned false; fill pending';
 					throw new Error(`覆铜 ${id} rebuildCopperRegion 返回 false`);
-				const fills = await readArray(host, eda.pcb_PrimitivePoured, `读回覆铜 ${id} 的实际填充`);
-				const actualFills = fills.filter(fill => String(state(fill, 'PourPrimitiveId') ?? '') === id);
-				if (actualFills.length === 0)
-					throw new Error(`覆铜 ${id} 重建后没有读回填充图元`);
-				resultRecord.status = 'created-border-and-rebuilt; fill read back';
-				resultRecord.filledReadback = actualFills.map((fill) => {
-					const fillsGeometry = state<any[]>(fill, 'PourFills');
-					const geometry = Array.isArray(fillsGeometry) ? fillsGeometry.filter(item => item?.fill === true).map(item => item.path ?? null) : [];
-					const net = state<string>(fill, 'Net');
-					const layer = state<number>(fill, 'Layer');
-					if (net !== planned.net || Number(layer) !== planned.layerId || geometry.length === 0 || geometry.some(item => !Array.isArray(item) || item.length === 0))
-						throw new Error(`覆铜 ${id} 的实填充网络/层/几何读回与计划不符或为空`);
-					return { id: state(fill, 'PrimitiveId'), pourPrimitiveId: state(fill, 'PourPrimitiveId'), net, layer, geometry };
+				}
+				resultRecord.status = 'border-read-back; rebuild returned; fill pending';
+				const fillReadback = await readPourFillReadback(host, eda, {
+					primitiveId: id,
+					net: planned.net,
+					layerId: planned.layerId,
+					plannedSource,
 				});
+				resultRecord.fillReadback = fillReadback;
+				resultRecord.parentReadback = fillReadback.parent;
+				resultRecord.filledReadback = fillReadback.filledRegions;
+				resultRecord.status = 'created-border-and-rebuilt; fill read back';
+				host.recordVerified(id);
 			}
 		}
 		await host.finish();
@@ -716,6 +744,27 @@ async function executePlan(params: Record<string, any>) {
 	catch (error) {
 		const firstUnattempted = activePrimitiveIndex < 0 ? 0 : activePrimitiveIndex + 1;
 		return host.fail(error, { created, unattemptedPrimitives: submitted.plannedPrimitives.slice(firstUnattempted).map((item, offset) => ({ index: firstUnattempted + offset, net: item.net, layer: item.layer })) });
+	}
+}
+
+async function getPourFillReadback(params: Record<string, any>) {
+	if (typeof params.primitiveId !== 'string' || !params.primitiveId.trim())
+		throw new Error('primitiveId 必须是非空覆铜边框图元 ID');
+	if (typeof params.net !== 'string' || !params.net.trim())
+		throw new Error('net 必须是非空预期网络名称');
+	const layer = requestedLayer(params.layer);
+	const host = await createGeometryHost(eda, params);
+	try {
+		const fillReadback = await readPourFillReadback(host, eda, {
+			primitiveId: params.primitiveId,
+			net: params.net,
+			layerId: layer.id,
+		});
+		await host.finish();
+		return { documentUuid: host.documentUuid, operation: 'getPourFillReadback', ...fillReadback, saved: false };
+	}
+	catch (error) {
+		return host.fail(error);
 	}
 }
 
@@ -744,5 +793,17 @@ export const autoCopperCommands: ICommandDef[] = [
 		returns: '返回新建图元的网络、层、实际几何、覆铜排序源码读回、创建/填充读回状态；不自动保存。',
 		example: { cmd: 'pcb.autoCopper', params: { plan: '$step1.data' } },
 		handler: executePlan,
+	},
+	{
+		name: 'pcb.getPourFillReadback',
+		summary: '按已有覆铜边框图元 ID 只读核对实填充关联、父边框和路径源码；不创建、重建或保存。',
+		params: [
+			{ name: 'primitiveId', type: 'string', required: true, description: '已存在的覆铜边框图元 ID。' },
+			{ name: 'net', type: 'string', required: true, description: '预期网络名称，用于核对父覆铜边框。' },
+			{ name: 'layer', type: 'top|bottom', required: true, description: '预期铜层，用于核对父覆铜边框。' },
+		],
+		returns: '返回当前 PCB 指定覆铜边框的实际 source 和 PourPrimitiveId 关联实填充证据；不与历史计划比较，不推断路径单位。',
+		example: { cmd: 'pcb.getPourFillReadback', params: { primitiveId: 'pour-id', net: 'N1', layer: 'top' } },
+		handler: getPourFillReadback,
 	},
 ];

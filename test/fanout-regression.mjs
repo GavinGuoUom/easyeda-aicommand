@@ -76,7 +76,7 @@ async function main() {
 		};
 	}
 
-	function install({ pads = [pad('P1')], vias = [], fills = [], arcs = [], holeLines = [], rules = emptyRules, focusUuid = 'pcb-A', outline = true, outlineLines } = {}) {
+	function install({ pads = [pad('P1')], vias = [], fills = [], arcs = [], holeLines = [], outlinePolylines = [], rules = emptyRules, focusUuid = 'pcb-A', outline = true, outlineLines } = {}) {
 		const state = { writes: [], reads: [], source: docHead(focusUuid), rules, pads: [...pads], vias: [...vias], fills: [...fills], arcs: [...arcs], holeLines: [...holeLines], lines: [], created: new Map(), nextId: 1, failCreate: undefined, mismatchReadback: false };
 		if (outlineLines)
 			state.lines = outlineLines;
@@ -122,11 +122,19 @@ async function main() {
 				pcb_PrimitivePour: { getAll: async () => [] },
 				pcb_PrimitivePoured: { getAll: async () => [] },
 				pcb_PrimitiveRegion: { getAll: async () => [] },
-				pcb_PrimitivePolyline: { getAll: async () => [] },
+				pcb_PrimitivePolyline: { getAll: async () => [...outlinePolylines] },
 			},
 		};
 		globalThis.eda = result.sdk;
 		return result;
+	}
+	function outlinePolyline(id, source, { layer = 11, width = 0.1, missingPolygonGetter = false } = {}) {
+		return {
+			getState_PrimitiveId: () => id,
+			getState_Layer: () => layer,
+			getState_LineWidth: () => width,
+			...(!missingPolygonGetter ? { getState_Polygon: () => ({ getSource: () => source }) } : {}),
+		};
 	}
 	function params(extra = {}) {
 		return { __docUuid: 'pcb-A', padIds: ['P1'], lineLength: 100, lineWidth: 8, viaDiameter: 24, holeDiameter: 12, clearance: 8, direction: 'N', ...extra };
@@ -156,6 +164,52 @@ async function main() {
 		assert.equal(plan.plannedPrimitives[0].net, 'N1');
 		assert.equal(plan.plannedPrimitives[1].layer, 'all-copper');
 		assert.equal(f.state.writes.length, 0);
+	});
+
+	await test('polygon-only rectangular outline is normalized into the closed board boundary', async () => {
+		const f = install({ pads: [pad('P1', { x: 300, y: 0 })], outline: false, outlinePolylines: [outlinePolyline('BOARD-R', ['R', -200, 500, 1000, 1000, 0, 0])] });
+		const plan = await runPlan(f);
+		assert.equal(plan.executable, true, plan.warnings.join('; '));
+		assert.equal(plan.coverage.boardPolygons, 1);
+		assert.equal(f.state.writes.length, 0);
+	});
+
+	await test('multiple supported board polylines remain separate closed routing regions', async () => {
+		const f = install({
+			pads: [pad('P1', { x: 300, y: 0 })],
+			outline: false,
+			outlinePolylines: [
+				outlinePolyline('BOARD-R1', ['R', -200, 500, 1000, 1000, 0, 0]),
+				outlinePolyline('BOARD-R2', ['R', 2000, 500, 1000, 1000, 0, 0]),
+			],
+		});
+		const plan = await runPlan(f);
+		assert.equal(plan.executable, true, plan.warnings.join('; '));
+		assert.equal(plan.coverage.boardPolygons, 2);
+		assert.equal(f.state.writes.length, 0);
+	});
+
+	await test('unsupported board polyline rectangles and additional board outlines fail closed', async () => {
+		for (const source of [
+			['R', -200, 500, 1000, 1000, 15, 0],
+			['R', -200, 500, 1000, 1000, 0, 5],
+			['R', -200, 500, 0, 1000, 0, 0],
+			['R', Number.MAX_VALUE, 500, 1000, 10, 0, 0],
+		]) {
+			const f = install({ outline: false, outlinePolylines: [outlinePolyline('BOARD-R', source)] });
+			assert.equal((await runPlan(f)).executable, false);
+			assert.equal(f.state.writes.length, 0);
+		}
+		const missingGetter = install({ outline: false, outlinePolylines: [outlinePolyline('NO-POLYGON', undefined, { missingPolygonGetter: true })] });
+		assert.equal((await runPlan(missingGetter)).executable, false);
+		const invalidId = install({ outline: false, outlinePolylines: [outlinePolyline(7, ['R', -200, 500, 1000, 1000, 0, 0])] });
+		assert.equal((await runPlan(invalidId)).executable, false);
+		const secondBoard = install({ outline: false, outlinePolylines: [
+			outlinePolyline('BOARD-R', ['R', -200, 500, 1000, 1000, 0, 0]),
+			outlinePolyline('BOARD-UNKNOWN', ['P', 0, 0, 1, 1]),
+		] });
+		assert.equal((await runPlan(secondBoard)).executable, false);
+		assert.equal(secondBoard.state.writes.length, 0);
 	});
 
 	await test('bottom SMT, pad rotation, and multilayer pad requires explicit layer', async () => {

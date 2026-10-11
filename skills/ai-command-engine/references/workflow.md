@@ -1,5 +1,26 @@
 # 标准工作流程
 
+## 功能区布局与引脚接线准备
+
+- 多功能区图纸先规划各区的位置、阅读顺序和标题空间。
+- 区框按实际符号、引脚出线、标签及属性文字的范围留余量。
+- 大型模块和高引脚数器件按实际占用单独留位。
+- 元件间距按符号尺寸调整，不直接套用其他工程的固定坐标。
+- 批量放置前整理料号、预期位号和引脚网络表。
+- 已取得的器件资料按料号复用；当前命令支持批量查询时优先批量查询。
+- 引脚网络表以器件身份和引脚编号定位，多单元器件同时区分单元。
+- 核对 `buildBlock` 返回的 `refMap` 后，再对照实际位号和引脚接线。
+- 电源、地、信号和合法 NC 分别列明；未分配引脚先核实用途。
+- 相近同网引脚优先直连；需用标签时，从实际引脚接线端向符号外侧引出短线。
+- 标签间距按当前单位、文字和邻近引脚调整，不统一套用上游的 10 单位偏移。
+- 生成后检查器件、标签和文字是否留在所属区框内，必要时调整布局或扩大区框。
+
+这些要求用于规划和读回检查，不代表 `buildBlock` 已实现按符号尺寸自动避让。
+已有图纸只在授权范围内调整，不因套用功能框而重排全图。
+
+借鉴来源：[官方原理图放置与网络引出技能](https://github.com/easyeda/easyeda-enhanced-schematic-skill/blob/main/SKILL.md)（2026-10-10 核查）。
+这里只吸收布局与批量准备方法；执行仍使用本插件命令及现有保存验收流程。
+
 ## 画原理图（批量优先）
 
 1. `GET /connections` 核对窗口；每条请求带顶层 `instanceId` → `editor.openDocument` 激活 → 页级请求带 `params.__docUuid` → `schematic.getPageInfo` 读图框。
@@ -25,8 +46,8 @@
 
 ## 原理图转 PCB
 
-1. ⚠️ 原理图有致命 DRC 时 `importChanges` **静默 false**——先清到 0 致命。
-2. `importChanges` 弹对话框，**提示用户点「应用修改」**，AI 代点不了。
+1. 原理图先清到 0 致命。
+2. 0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
 3. 导入后 `listComponents`+逐器件 `getComponentPads` 比对焊盘网络与网表。
 4. 布局：零散 `moveComponent`；功能区成组用 `groupBySchematicRegions`（先 dryRun）。⚠️ DRC 不查本体/丝印挤压——摆完跑 `checkPlacement`，大本体器件（连接器、电感）加 `margin`（10~30mil）。
 5. 布线：`routeTrack`（大电流先 `knowledge.widthForCurrent`）、`placeVia`、`pourCopper`（GND 整面）；量大走自动布线闭环（先锁电源网，见 commands-pcb.md 附录 ⑦）。

@@ -27,7 +27,7 @@
 | `pcb.exportGerber` | Gerber 打板文件（通常 zip） | `fileName?` |
 | `pcb.exportPickPlace` | 贴片坐标（Pick&Place） | `fileName?`, `fileType?`(xlsx\|csv), `unit?`(mm\|mil) |
 | `pcb.exportDsn` | Specctra DSN（外部自动布线第一步：`exportDsn` → 外部布线器 → `importAutoRouteSes` 导回） | `fileName?` |
-| `pcb.exportNetlist` | PCB 网表 | `fileName?`, `netlistType?`（如 Protel2） |
+| `pcb.exportNetlist` | PCB 网表；0.10.104 起拒绝零字节文件及空 base64，导出后仍须解析核对 | `fileName?`, `netlistType?`（如 Protel2） |
 
 ## 选择/交叉探针
 
@@ -40,7 +40,6 @@
 
 | 指令 | 说明 | 关键参数 |
 | --- | --- | --- |
-| `schematic.autoRoute` | 原理图自动连线（官方引擎；⚠️ 官方能力，AI 批量场景仍优先 batchWire/buildBlock，失败再考虑它。**与批量引擎的差异**：autoRoute 是官方引擎按几何走线风格自动连，批量语义化引擎是 labelWire/linkWire 短桩+标签 / U 形无名线——两套风格，混用同一张图纸会乱；批量一律 batchWire/buildBlock，autoRoute 仅作失败兜底，且不保证按语义网名走线） | `uuids?`（参与连线的器件 uuid，留空=全部） |
 | `schematic.setPinNoConnect` | 给引脚打/取消 X 非连接标识（消除悬空引脚 DRC 提示） | `componentId`, `pinNumbers[]`, `noConnected?` |
 | `schematic.getAttributes` / `setAttribute` | 读/改图元属性（key=Designator/Value/Footprint 等） | `primitiveId`（set 再加 `key`,`value`） |
 | `schematic.getSelection` | 读当前选中的图元 | 无 |

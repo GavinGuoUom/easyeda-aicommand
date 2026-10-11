@@ -325,7 +325,11 @@ export const pcbCommands: Array<ICommandDef> = [
 			const { readback, verified } = verifyReadback(back, checks)
 			if (!verified && checks.length)
 				throw new Error(`器件 ${primitiveId} 修改读回不匹配（读回 ${JSON.stringify(readback)}，目标 ${JSON.stringify(property)}）——官方 modify 假成功，请重试`)
-			return { modified: okAny || verified, primitiveId, ...(checks.length ? { readback: { ...readback, verified } } : {}) }
+			return {
+				modified: okAny || verified,
+				primitiveId,
+				...(checks.length ? { readback: { ...readback, verified } } : {}),
+			}
 		},
 	},
 	{
@@ -607,17 +611,64 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.importChanges',
-		summary: '从原理图导入变更到 PCB（注意：会弹出确认对话框，需要用户在 EDA 中点击应用；原理图有致命 DRC 错误时会静默返回 false，先跑 schematic.runDrc）',
+		summary: '请求将原理图变更导入 PCB（SDK true 仅表示导入请求返回，应用完成状态未知；可能弹出确认框。所有 SDK 结果均标 partial 并停止后续依赖；不得自动重试，需读回 PCB 验收）',
 		params: [
 			{ name: 'schematicUuid', type: 'string', description: '原理图 UUID，默认同 Board 关联的原理图' },
 		],
-		returns: '{ imported }（false 表示失败或该 PCB 未关联原理图）',
+		returns: '不返回成功值；SDK true 抛出 partial=true,retryable=false，cause 标记 sdkResult=true、outcome=pending-verification、importRequested=true、contentsVerified=false、completionVerified=false；可能需要 UI 确认，禁止自动重试并须读回验收',
 		example: { cmd: 'pcb.importChanges' },
 		handler: async (params) => {
-			const imported = await eda.pcb_Document.importChanges(
-				params.schematicUuid ? String(params.schematicUuid) : undefined,
-			)
-			return { imported, note: '若弹出导入变更对话框，需要用户在 EDA 中点击应用' }
+			const IMPORT_TIMEOUT_MS = 280_000
+			const FOCUS_TIMEOUT_MS = 5_000
+			const withCleanTimeout = <T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> => new Promise<T>((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error(`${label}超时（>${timeoutMs}ms）；原调用可能仍在后台执行`)), timeoutMs)
+				Promise.resolve(operation).then(
+					value => { clearTimeout(timer); resolve(value) },
+					error => { clearTimeout(timer); reject(error) },
+				)
+			})
+			const focusPcbUuid = async (label: string): Promise<string> => {
+				const getInfo = (eda as any).dmt_SelectControl?.getCurrentDocumentInfo
+				if (typeof getInfo !== 'function')
+					throw new Error('dmt_SelectControl.getCurrentDocumentInfo 不存在，无法核对目标 PCB')
+				const focus = await withCleanTimeout(Promise.resolve().then(() => getInfo.call((eda as any).dmt_SelectControl)), FOCUS_TIMEOUT_MS, label)
+				if (focus?.documentType !== 3 || typeof focus?.uuid !== 'string' || !focus.uuid.trim())
+					throw new Error(`${label}未返回有效 PCB 身份（documentType=${focus?.documentType ?? '未知'}, uuid=${focus?.uuid ?? '无'}）`)
+				return focus.uuid
+			}
+			const beforeUuid = await focusPcbUuid('导入前读取焦点 PCB')
+			const requestedUuid = typeof params.__docUuid === 'string' && params.__docUuid.trim() ? params.__docUuid : undefined
+			if (requestedUuid && beforeUuid !== requestedUuid)
+				throw new Error(`导入前焦点 PCB 与请求目标不符（请求=${requestedUuid}, 当前=${beforeUuid}）`)
+			const failPartial = (message: string, details: Record<string, unknown>, original?: unknown): never => {
+				const error = original instanceof Error ? original : new Error(message)
+				;(error as any).cause = { partial: true, retryable: false, documentUuid: beforeUuid, contentsVerified: false, ...details }
+				if (!original)
+					error.message = message
+				throw error
+			}
+			let imported: unknown
+			try {
+				const operation = Promise.resolve().then(() => eda.pcb_Document.importChanges(
+					params.schematicUuid ? String(params.schematicUuid) : undefined,
+				))
+				imported = await withCleanTimeout(operation, IMPORT_TIMEOUT_MS, 'pcb.importChanges')
+			}
+			catch (error) {
+				return failPartial(`pcb.importChanges 返回异常或超时；目标 PCB=${beforeUuid}，原调用可能仍在后台执行，不要自动重试`, { sdkResult: 'unknown', outcome: 'unknown', importRequested: true, completionVerified: false, operationError: String((error as any)?.message ?? error) }, error)
+			}
+			let afterUuid: string
+			try {
+				afterUuid = await focusPcbUuid('导入后复核焦点 PCB')
+			}
+			catch (error) {
+				return failPartial(`pcb.importChanges 已调用，但写后文档身份无法确认；目标 PCB=${beforeUuid}，不要自动重试`, { sdkResult: imported === undefined ? 'undefined' : imported, outcome: imported === true ? 'pending-verification' : imported === false ? 'sdk-false' : 'undefined', importRequested: true, contentsVerified: false, completionVerified: false, writeAfterIdentityError: String((error as any)?.message ?? error) }, error)
+			}
+			if (afterUuid !== beforeUuid)
+				return failPartial(`pcb.importChanges 返回后焦点已从目标 PCB ${beforeUuid} 切换到 ${afterUuid}；不要自动重试`, { sdkResult: imported === undefined ? 'undefined' : imported, outcome: imported === true ? 'pending-verification' : imported === false ? 'sdk-false' : 'undefined', importRequested: true, contentsVerified: false, completionVerified: false, afterDocumentUuid: afterUuid })
+			if (imported !== true)
+				return failPartial(`pcb.importChanges 未返回严格 true（${String(imported)}）；目标 PCB=${beforeUuid}，不要自动重试`, { sdkResult: imported === undefined ? 'undefined' : imported, outcome: imported === false ? 'sdk-false' : 'undefined', importRequested: true, contentsVerified: false, completionVerified: false, afterDocumentUuid: afterUuid })
+			return failPartial(`pcb.importChanges SDK 返回 true，但仅能确认请求已发出；应用完成状态未知，目标 PCB=${beforeUuid}，不要自动重试`, { sdkResult: true, outcome: 'pending-verification', importRequested: true, contentsVerified: false, completionVerified: false, afterDocumentUuid: afterUuid })
 		},
 	},
 	{
@@ -1181,8 +1232,8 @@ export const pcbCommands: Array<ICommandDef> = [
 				params.netlistType ? String(params.netlistType) as any : undefined,
 			)
 			const result = await fileToResult(file, 'pcb-netlist.net')
-			if (!result)
-				throw new Error('PCB 网表导出失败：官方返回空')
+			if (!result || !Number.isFinite(result.size) || result.size <= 0 || !result.base64)
+				throw new Error('PCB 网表导出失败：官方返回空、零字节文件或空 base64')
 			return result
 		},
 	},
@@ -2829,14 +2880,14 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.autoRouteStart',
-		summary: '【宏】启动 FreeRouting 自动布线（0.10.0 起；需本地 FreeRouting 服务运行：bridge/start-freerouting.bat 或官方脚本，端口 37864）。流程：导出 DSN → 创建会话 → 上传 → 启动。⚠️ 回灌会清除全部未锁定线段、圆弧与过孔：电源主路径必须先 pcb.setNetLock 锁定！启动后用 pcb.autoRouteStatus 轮询，完成自动回灌+DRC',
+		summary: '【宏】提交 FreeRouting 自动布线启动请求（0.10.0 起；需本地 FreeRouting 服务运行：bridge/start-freerouting.bat 或官方脚本，端口 37864）。流程：导出 DSN → 创建会话 → 上传 → 提交启动。启动请求返回不证明已进入布线；先用 pcb.autoRouteStatus 查询实际状态，不要重复提交。⚠️ 回灌会清除全部未锁定线段、圆弧与过孔：电源主路径必须先 pcb.setNetLock 锁定！完成后自动回灌+DRC',
 		params: [
 			{ name: 'maxPasses', type: 'number', description: '最大布线轮数，默认 50' },
 			{ name: 'viaCosts', type: 'number', description: '过孔成本权重（越高越少过孔），默认 50' },
 			{ name: 'maxThreads', type: 'number', description: '并行线程数，默认 4' },
 			{ name: 'skipDrc', type: 'boolean', description: '回灌后跳过自动 DRC，默认 false' },
 		],
-		returns: '{ jobId, state, note }',
+		returns: '{ jobId, outcome: "start-request-submitted", stateVerified: false, note }；/start 响应不确定时抛出 partial=true,retryable=false 和 jobId；只能查状态或取消，不要重提',
 		example: { cmd: 'pcb.autoRouteStart', params: { maxPasses: 50 } },
 		handler: async (params) => {
 			if (currentRouteJobId)
@@ -2866,13 +2917,21 @@ export const pcbCommands: Array<ICommandDef> = [
 			}
 			await frRequest('POST', `/jobs/${job.id}/settings`, settings)
 			await frRequest('POST', `/jobs/${job.id}/input`, { filename: dsnFile.name, data: dsnBase64 })
-			await frRequest('PUT', `/jobs/${job.id}/start`)
 			currentRouteJobId = job.id
 			routeSkipDrc = Boolean(params.skipDrc)
+			try {
+				await frRequest('PUT', `/jobs/${job.id}/start`)
+			}
+			catch (error) {
+				throw new Error(`FreeRouting 启动请求结果未知（jobId=${job.id}）；服务端可能已接受请求，只能用 pcb.autoRouteStatus 查询或 pcb.autoRouteStop 取消，不要重提`, {
+					cause: { partial: true, retryable: false, jobId: job.id, outcome: 'start-request-unknown', startRequestSubmitted: 'unknown', operationError: String((error as any)?.message ?? error) },
+				})
+			}
 			return {
 				jobId: job.id,
-				state: 'RUNNING',
-				note: '布线已启动；完成回灌会清除全部未锁定线段、圆弧与过孔。用 pcb.autoRouteStatus 轮询（完成会自动回灌结果并跑 DRC）；pcb.autoRouteStop 可随时停止',
+				outcome: 'start-request-submitted',
+				stateVerified: false,
+				note: '启动请求已提交，尚未确认任务正在布线；用 pcb.autoRouteStatus 查询任务实际状态，不要重复提交。任务完成后的回灌会清除全部未锁定线段、圆弧与过孔，并自动导入结果及运行 DRC；pcb.autoRouteStop 可停止任务',
 			}
 		},
 	},

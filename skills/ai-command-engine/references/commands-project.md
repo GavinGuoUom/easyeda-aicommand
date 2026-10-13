@@ -1,67 +1,67 @@
-# 工程与板子管理指令（project.*）
+# Project and Board Commands (`project.*`)
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+> The tables and parameter objects on this page describe commands and `params`; they are not complete HTTP requests. A `/command` request must include outer `cmd`, top-level `instanceId`, and required `params`. A macro routes only at the outer level; its steps inherit the instance. See [setup](setup.md) for a complete example.
 
-工程/板子/图页的创建、复制、删除、关联。文档树 uuid 一律从 `project.getInfo` 读，不猜。
+Create, copy, delete, and associate projects, boards, and schematic pages. Always read document-tree UUIDs from `project.getInfo`; do not guess them.
 
-## 工程导入结果不明（0.10.106 候选）
+## Unclear result from project import (0.10.106 candidate)
 
-`project.importFile` 调用 SDK 后返回空、异常或无合法工程 UUID 时，报告 `partial:true`、`retryable:false`、`outcome:unknown`。这表示导入结果不能确认，不表示没有创建工程。先按错误中的目标名称和目录核对，禁止自动再导入。调用前参数错误仍是普通拒绝；成功返回也须另验工程内容。
+If the SDK call to `project.importFile` returns empty, throws, or provides no valid project UUID, report `partial:true`, `retryable:false`, `outcome:unknown`. This means the import result cannot be confirmed; it does not mean that no project was created. Check the target name and directory from the error first; do not automatically import again. Invalid parameters before the call remain an ordinary rejection. A successful return still requires independent verification of project contents.
 
-## 工程级
+## Project-level commands
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `project.getInfo` | 当前工程信息（名称+文档树 uuid） | 无 |
-| `project.getInfoOf` | 指定工程信息 | `projectUuid` |
-| `project.list` | 全部工程（`detail:true` 逐个查信息，较慢） | `detail?` |
-| `project.create` | 新建工程 | `name`, `projectName?`（英文内部名）, `description?` |
-| `project.open` | 打开指定工程（切换当前工程）。⚠️ **当前工程有未保存修改时官方直接返回失败**（"工程打开失败"）——先 `schematic.save` 再切 | `projectUuid` |
-| `project.moveToFolder` | 移动工程到文件夹（留空=根目录） | `projectUuid`, `folderUuid?` |
-| `project.exportFile` | 导出 .epro/.epro2（base64 自行落盘做备份/迁移） | `fileName?`, `fileType?`(epro\|epro2) |
-| `project.importFile` | 导入外部文件成新工程（0.10.35；.PcbDoc/.SchDoc/.epro 等 fileType 自动推断；缺省自动取当前团队走 New Project） | `base64`, `fileName`, `fileType?`, `newProjectName?` |
-| `project.getDocumentSource` | 读当前激活文档源数据 JSON（只读整体分析，比逐个查图元快） | 无 |
-| `project.modifyTitleBlock` | 改标题栏（⚠️ data 键必须是图框已存在字段，先 getPageInfo 查 titleBlockData；Page Size/Symbol 不能接口切换） | `showTitleBlock?`, `data?` |
+| `project.getInfo` | Current project info (name + document-tree UUID) | None |
+| `project.getInfoOf` | Info for a specified project | `projectUuid` |
+| `project.list` | List all projects (`detail:true` reads each project's info and is slower) | `detail?` |
+| `project.create` | Create a project | `name`, `projectName?` (English internal name), `description?` |
+| `project.open` | Open/switch to a project. ⚠️ The official API fails directly when the current project has unsaved changes (“工程打开失败” / project open failed); run `schematic.save` before switching. | `projectUuid` |
+| `project.moveToFolder` | Move a project to a folder (empty means root) | `projectUuid`, `folderUuid?` |
+| `project.exportFile` | Export `.epro`/`.epro2` (decode base64 to disk for backup/migration) | `fileName?`, `fileType?` (epro\|epro2) |
+| `project.importFile` | Import an external file as a new project (since 0.10.35; `.PcbDoc`/`.SchDoc`/`.epro` etc. infer `fileType`; if omitted, automatically use the current team and create a New Project) | `base64`, `fileName`, `fileType?`, `newProjectName?` |
+| `project.getDocumentSource` | Read JSON source data for the active document (read-only; faster for whole-document analysis than querying primitives one by one) | None |
+| `project.modifyTitleBlock` | Modify title block (⚠️ `data` keys must exist in the current frame; read `titleBlockData` using `getPageInfo` first. Page Size/Symbol cannot be changed through the API.) | `showTitleBlock?`, `data?` |
 
-## 板子（Board）与关联
+## Boards and associations
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `project.getBoardInfo` | 当前板子信息与原理图/PCB 关联状态；`pcb.importChanges` 报导入失败时用它排查游离 PCB | 无 |
-| `project.associateBoard` | 关联原理图+PCB 到板子（修复游离 PCB） | `schematicUuid`, `pcbUuid` |
-| `project.copyBoard` | 复制板子 | `boardName` |
-| `project.deleteBoard` | 删除板子 | `boardName` |
-| `project.renameBoard` | 重命名板子（⚠️ 按名字匹配，重名会改错——先 getBoardInfo 确认） | `boardName`, `newName` |
+| `project.getBoardInfo` | Current board info and schematic/PCB association state; use to diagnose a detached PCB when `pcb.importChanges` reports import failure | None |
+| `project.associateBoard` | Associate a schematic and PCB with a board (repair a detached PCB) | `schematicUuid`, `pcbUuid` |
+| `project.copyBoard` | Copy a board | `boardName` |
+| `project.deleteBoard` | Delete a board | `boardName` |
+| `project.renameBoard` | Rename a board (⚠️ matches by name and may rename the wrong board if names collide; verify with `getBoardInfo` first) | `boardName`, `newName` |
 
-## 原理图与图页
+## Schematics and pages
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `project.createSchematic` | 新建原理图（`boardName` 必须是已存在板子名；新建省略后用 associateBoard 关联） | `boardName?` |
-| `project.createSchematicPage` | 指定原理图下新建图页（uuid 是 Schematic 节点，非图页） | `schematicUuid` |
-| `project.deleteSchematicPage` | 删图页 | `pageUuid` |
-| `project.copySchematicPage` | 复制图页（留空=同原理图内；0.10.37 起复制后读回验证，返回 name/parentSchematicUuid/sourcePageUuid，归属异常带 warning；新页名官方自动派生"源名_N"属正常） | `pageUuid`, `schematicUuid?` |
-| `project.renameSchematicPage` | 按 UUID 改图页名（0.10.59 加固：改名前后快照比对，renamed 只信快照）。⚠️ 目标页**须在本窗口打开激活、且所在文档在本窗口 save 过一次**，否则官方假失败；全新窗口从未改过页名时其他窗口的旧页会被永远拒绝——对本窗口新建页成功改名一次即解锁 | `pageUuid`, `name` |
-| `project.listSchematicPages` | 列全部图页 | 无 |
-| `project.reorderSchematicPages` | 调图页顺序（⚠️ 须包含全部图页） | `schematicUuid`, `pageUuids[]` |
+| `project.createSchematic` | Create a schematic (`boardName` must name an existing board; if omitted when creating, associate later with `associateBoard`) | `boardName?` |
+| `project.createSchematicPage` | Create a page under the specified schematic (the UUID is the Schematic node, not a page) | `schematicUuid` |
+| `project.deleteSchematicPage` | Delete a page | `pageUuid` |
+| `project.copySchematicPage` | Copy a page (omit `schematicUuid` to copy within the same schematic; since 0.10.37 readback verifies the copy and returns name/parentSchematicUuid/sourcePageUuid; ownership anomalies carry a warning; the host deriving a new name as “sourceName_N” is normal) | `pageUuid`, `schematicUuid?` |
+| `project.renameSchematicPage` | Rename a page by UUID (hardened in 0.10.59: compare snapshots before/after; `renamed` is based only on snapshots). ⚠️ The target page must be open and active in this window, and its document must have been saved at least once in this window; otherwise the official API can falsely fail. In a new window that has never renamed a page, it may permanently reject pages created in other windows; successfully rename a page created in this window once to unlock it. | `pageUuid`, `name` |
+| `project.listSchematicPages` | List all pages | None |
+| `project.reorderSchematicPages` | Reorder pages (⚠️ must include every page) | `schematicUuid`, `pageUuids[]` |
 
-## PCB
+## PCB commands
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `project.createPcb` | 新建 PCB（boardName 规则同上） | `boardName?` |
-| `project.copyPcb` | 复制 PCB；`boardName` 是副本归属的目标 Board 名称，不是副本名称 | `pcbUuid`, `boardName?` |
-| `project.deletePcb` | 删除 PCB | `pcbUuid` |
-| `project.listPcbs` | 列全部 PCB | 无 |
+| `project.createPcb` | Create a PCB (same `boardName` rule as above) | `boardName?` |
+| `project.copyPcb` | Copy a PCB; `boardName` names the target Board for the copy, not the copy itself | `pcbUuid`, `boardName?` |
+| `project.deletePcb` | Delete a PCB | `pcbUuid` |
+| `project.listPcbs` | List all PCBs | None |
 
-- **`project.copyPcb`**：省略 `boardName` 时创建游离 PCB，不要求预先证明已有 Board 归属。若指定不存在的 Board 名而 SDK 返回空，具体根因未知。SDK 空返回或抛错时结果未确认，插件以 `error.cause.partial=true` 返回并停止依赖宏步骤，不自动重试；先用 `project.getInfo` 与 `project.listPcbs` 只读核对。成功返回以 `pcbUuid` 标识副本。
+- **`project.copyPcb`:** If `boardName` is omitted, creates a detached PCB; prior proof of board ownership is not required. If a nonexistent board name is specified and the SDK returns empty, the cause is unknown. On an empty SDK return or exception, the result is unconfirmed; the plugin returns `error.cause.partial=true` and stops dependent macro steps. Do not retry automatically. Inspect with read-only `project.getInfo` and `project.listPcbs`. A successful return identifies the copy with `pcbUuid`.
 
 ```json
 {
-  "instanceId": "当前工程窗口 ID",
+  "instanceId": "current project window ID",
   "cmd": "project.copyPcb",
-  "params": { "pcbUuid": "源 PCB UUID", "boardName": "副本归属的目标 Board 名" }
+  "params": { "pcbUuid": "source PCB UUID", "boardName": "target Board name for the copy" }
 }
 ```
 
-遇 `error.cause.partial=true` 时不要再次复制；按上文只读核对结果处理。
+If `error.cause.partial=true` is returned, do not copy again; inspect using the read-only checks above.

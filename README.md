@@ -1,125 +1,134 @@
 # EasyEDA AI Command
 
-嘉立创 EDA 专业版的 AI 操作扩展：AI 按任务调用配套技能中的简明指令，由本地代理转发至已连接的 EDA 窗口，用于原理图、PCB、工程和元件库查询及编辑。具体操作仍需按项目目标检查结果并由使用者验收。
+**English:** [README.md](README.md) | **简体中文：** [README_ZH.md](README_ZH.md)
 
-你可以向配套 AI 工具描述任务，例如“查一下这个芯片的库存和阶梯价”“把 PCB 上的元件按原理图功能区分组”“把这个符号和封装组合成我的库器件”“放置 MCU 和外围元件，接线并整理网络标签”。AI 会结合当前工程，查询器件和引脚、调用绘图指令，再读取执行结果。插件将**选料查询、自建器件库、批量绘图、PCB 功能区聚合和结果检查**整合到同一套操作流程中。
+EasyEDA AI Command is an AI operation extension for JLCEDA Pro. An AI uses concise instructions from the companion skill, and a local proxy forwards them to a connected EDA window. The extension supports schematic, PCB, project, and component-library queries and editing. Always check the results against the project requirements; the user remains responsible for final acceptance.
 
-## 重点功能
+Describe a task to your AI tool, such as “check this chip’s stock and price breaks,” “group the PCB components by schematic function block,” “combine this symbol and footprint into a library component,” or “place the MCU and its supporting parts, wire them, and organize the net labels.” The AI can inspect the current project, look up components and pins, call drawing commands, and read back the results. The extension brings **parts lookup, custom component libraries, batch drawing, PCB functional grouping, and result checks** into one workflow.
 
-### 1. 元器件库存、价格与可贴装物料查询
+> This README is the primary English guide. Some linked documents and captions embedded in the demonstration animations may be in Chinese. This describes the documentation language only; it does not claim that the extension interface supports an English language switch.
 
-选料时即可查询嘉立创 SMT 物料的**元件编号、型号、封装、品牌、库存、参考单价和阶梯价格**，也支持按多个元件编号批量查询详情，方便比较候选器件的供货情况和采购数量对应的价格。
+## Key features
 
-- **AI 查询**：让 AI 按关键词查找物料，或对一批料号查询库存、参数描述和阶梯报价。
-- **独立查询窗口**：通过插件菜单打开 SMT 物料查询页面，直接查看查询结果。
-- **结合绘图选料**：配合器件库搜索与按立创编号放置器件，把查询到的候选型号用于后续原理图绘制。
+### 1. Component stock, pricing, and SMT parts lookup
 
-库存与价格来自嘉立创开放平台的查询结果，具体以平台当次返回和下单时信息为准；参考单价不等于所有采购数量的成交价。此功能需单独配置开放平台凭据，见[物料查询配置](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md#5-可选-smt-物料查询)。普通绘图功能不需要这组凭据。
+During component selection, look up JLC SMT parts by **part number, model, package, brand, stock, reference unit price, and price breaks**. You can also query details for multiple part numbers at once to compare availability and prices for different order quantities.
 
-### 2. PCB 按原理图功能区聚合与初步排布
+- **AI lookup:** Ask the AI to find parts by keywords or query stock, parameter descriptions, and price breaks for a list of part numbers.
+- **Separate lookup window:** Open the SMT parts lookup page from the extension menu and view results directly.
+- **Lookup while drawing:** Combine parts-library search with placement by JLC part number to use candidate parts in a schematic.
 
-把原理图中已用矩形区框划分的“电源”“MCU”“驱动”“接口”等功能区，转换成 PCB 上对应的器件分组。插件读取区框和器件归属，将同一功能区的器件聚合排布，并生成组边框和组名，便于从分散的器件开始整理布局。
+Stock and pricing come from the JLC Open Platform query results. The response at the time of the query and the information shown when ordering are authoritative; a reference unit price is not the transaction price for every order quantity. This feature requires separate Open Platform credentials. See [Parts lookup setup](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md#5-可选-smt-物料查询). These credentials are not needed for ordinary drawing features.
 
-- 整合了 PCB 元件聚合能力，布局引擎移植自官方 `eext-pcb-component-grouping`，可由 AI 直接调用。
-- 支持跨图页读取功能区，也可指定图页；组内按器件类别分行，组间分区排列。
-- **先预览再执行**：默认返回分组与位置方案；实际执行时检查板框范围、避让已有器件，并做写入前备份和位置读回核对。
+### 2. PCB grouping and initial placement by schematic function blocks
 
-适合原理图导入 PCB 后的功能区归组和初步排布。需要先在原理图中建立功能区框；聚合完成后仍需结合去耦、回流、散热、射频和机械要求继续调整，不等同于完成最终布局或自动布线。
+Convert rectangular function blocks in a schematic, such as “Power,” “MCU,” “Driver,” and “Interface,” into corresponding PCB component groups. The extension reads the block boundaries and component membership, groups and arranges components, and creates group borders and names to help organize a scattered board.
 
-### 3. 自建器件库：符号、封装与完整器件管理
+- Includes PCB component grouping, with a placement engine adapted from the official `eext-pcb-component-grouping` project, callable by AI.
+- Reads function blocks across schematic pages or from a specified page; components are arranged in rows by category within each group, and groups are arranged in separate regions.
+- **Preview before execution:** By default, the extension returns a grouping and placement plan. During execution it checks the board boundary, avoids existing components, creates a backup before writing, and reads component positions back for verification.
 
-除了使用现有商城器件，也能通过 AI 管理自己的符号库、封装库和器件库，把项目中需要的自定义元件保存下来，供后续工程复用。库操作默认面向个人库，也可指定有权限访问的目标库。
+This feature is intended for grouping and initial placement after importing a schematic into a PCB. Function blocks must first be drawn in the schematic. After grouping, continue adjusting the layout for decoupling, return paths, heat, RF, and mechanical constraints. Grouping does not complete final placement or automatic routing.
 
-- **创建与编辑符号、封装**：新建库条目、打开对应编辑器，并将编辑后的符号或封装内容写回库中。
-- **组合完整器件**：把已有原理图符号与 PCB 封装关联成器件，可同时绑定已有 3D 模型，并设置位号前缀、制造商、供应商及 BOM、转 PCB 属性。
-- **复制与派生型号**：将已有符号、封装或器件复制到指定库并另命名，便于在现有资料基础上维护自己的版本。
-- **查询与维护**：搜索、读取、修改或删除库条目，调整器件的符号和封装关联，维护常用元件资料。
+### 3. Custom component libraries: symbols, footprints, and complete components
 
-例如，将已绘制的专用连接器符号和已核对尺寸的封装组合成自有器件，后续按该库器件放入原理图。创建库条目不等于自动完成引脚和封装设计，实际使用前仍需核对引脚编号、焊盘对应关系与尺寸；绑定 3D 模型也不代表自动生成模型。
+Use AI to manage personal symbol, footprint, and component libraries alongside existing marketplace parts. Save custom components for reuse in later projects. Library operations target the personal library by default, or another library the user is authorized to access.
 
-### 4. 从器件清单与连接关系批量画原理图
+- **Create and edit symbols and footprints:** Create library entries, open the corresponding editor, and write edited symbol or footprint content back to the library.
+- **Combine complete components:** Link an existing schematic symbol to a PCB footprint, optionally attach an existing 3D model, and set reference designator prefix, manufacturer, supplier, BOM, and PCB conversion properties.
+- **Copy and derive variants:** Copy an existing symbol, footprint, or component to a specified library under a new name to maintain a project-specific version.
+- **Search and maintain:** Search, read, modify, or delete library entries; change component-to-symbol and component-to-footprint links; and maintain commonly used parts.
 
-支持按立创料号放置器件、读取实际引脚、修改位号与属性，以及批量创建功能区。AI 可以依据器件清单和连接关系，分步骤完成放置、连接、命名和检查，减少重复的查找、点击和输入。
+For example, combine a custom connector symbol with a footprint whose dimensions have been checked, then place that library component in a schematic. Creating a library entry does not design its pins or footprint automatically. Before use, check pin numbers, pad mapping, and dimensions. Attaching a 3D model also does not generate a model automatically.
 
-已有原理图也可按指定器件或区域预览整理方案，再执行重排和连线重建。适合重复通道、MCU 外围、接口模块等具有明确连接关系的绘制任务。
+### 4. Batch schematic drawing from a parts list and connection relationships
 
-### 5. 批量连线、网络标签与连接核对
+Place components by JLC part number, read their actual pins, edit reference designators and properties, and create function blocks in batches. Given a parts list and connection relationships, AI can place, connect, name, and check components step by step, reducing repetitive searching, clicking, and typing.
 
-提供引脚间直连、短线加网络标签，以及混合批量连线。支持网络标签命名和整理、引脚非连接标记、网络成员查询与网表导出。
+For an existing schematic, preview an organization plan for selected components or regions before rearranging them and rebuilding connections. This is suitable for repeated channels, MCU peripherals, interface modules, and other drawing tasks with clear connection relationships.
 
-连线时可依据真实引脚位置处理路径，标签创建后核对是否实际附着到导线；批量连线会检查网表中的连接结果。这样既能生成整齐的图面，也能进一步确认“这些引脚是否真正进入同一个网络”。下方 MCU 演示展示了短线引出、左右标签对齐及保存重开核对。
+### 5. Batch wiring, net labels, and connection checks
 
-### 6. PCB 绘制、铺铜与网络管理
+Create direct pin-to-pin wires, short wires with net labels, or a mixture of both. Manage net-label names, mark pins as no-connect, query net members, and export netlists.
 
-支持板框绘制、器件移动与旋转、按坐标生成走线、放置过孔、创建和修改铺铜区域，以及重建铺铜后读取填充状态。还可管理网络类、差分对，查询网络长度、读取网络上的走线和焊盘，并通过高亮或原理图与 PCB 联动定位辅助排查。
+When wiring, the extension can use actual pin locations to form paths. After creating a label, it checks whether the label is attached to a wire. Batch wiring checks the resulting netlist connections. This helps create a readable drawing and confirm whether the intended pins really belong to the same net. The MCU demonstration below shows short wire stubs, aligned labels on both sides, and a save/reopen check.
 
-适合按明确规则执行成批操作，例如“按这些坐标布线”“给指定区域建立 GND 铺铜并重建”“把这组信号加入网络类”。外部自动布线流程可使用 DSN 导出与 SES 导入衔接，布线结果仍需检查。
+### 6. PCB drawing, copper areas, and net management
 
-### 7. 工程检查、资料导出与多窗口操作
+Draw board outlines, move and rotate components, create tracks from coordinates, place vias, create or modify copper areas, and read back fill status after rebuilding copper. Manage net classes and differential pairs, query net lengths, read tracks and pads on a net, and use highlighting or schematic-to-PCB cross-probing to help investigate issues.
 
-- **结果检查**：读取器件、引脚、导线、标签和铺铜状态；运行原理图及 PCB DRC，并导出网表核对连接。检查明细的可用程度取决于 EDA 宿主版本。
-- **资料导出**：支持 BOM、原理图图片、PCB Gerber、贴片坐标等，便于整理设计资料与后续制造交付。
-- **多窗口定位**：通过实例和文档身份指定操作目标，适用于同时打开多个工程的工作场景。
-- **组合操作**：宏指令可将放器件、连线、检查等步骤串起来，按顺序执行并返回各步结果；遇到写入结果不确定时停止依赖它的后续操作。
+Use these features for batches of operations with clear rules, such as “route along these coordinates,” “create and rebuild GND copper in this region,” or “add these signals to a net class.” An external autorouter workflow can use DSN export and SES import. The resulting routing still needs inspection.
 
-这些能力由本地代理和配套 AI 技能协同使用。插件提供工程操作与结果读取，电路方案和最终验收仍需结合实际项目要求。
+### 7. Project checks, exports, and multi-window operation
 
-### 8. 嘉立创下单检查（DFM）
+- **Result checks:** Read component, pin, wire, label, and copper-fill states; run schematic and PCB DRC; and export a netlist to check connections. The available DRC details depend on the EDA host version.
+- **Exports:** Export BOMs, schematic images, PCB Gerber files, pick-and-place coordinates, and other design materials for review and manufacturing preparation.
+- **Multi-window targeting:** Select the operation target by instance and document identity when several projects are open.
+- **Combined operations:** Macro commands can run component placement, wiring, and checks in sequence and return each step’s result. If a write result is uncertain, later dependent operations stop.
 
-提供 PCB DFM、SMT 和同网间距检查，分别返回 18、7、1 项结果，并保留完整性和几何覆盖信息。运行 DFM 时必须明确输入外层铜厚 `outerCopperOz` 与内层铜厚 `innerCopperOz`；图纸读取到的铜厚单独报告，不能代替输入值。结果不等于制造放行，也不代表完整在线 DFM 服务。详见[下单检查说明](skills/ai-command-engine/references/commands-dfm.md)。
+These capabilities work together with the local proxy and companion AI skill. The extension provides project operations and result readback; circuit design decisions and final acceptance still depend on the actual project requirements.
 
-### 9. 焊盘扇出与自动局部铜皮
+### 8. JLC manufacturing checks (DFM)
 
-`pcb.getFanoutPlan` 和 `pcb.getAutoCopperPlan` 先生成只读计划；`pcb.fanout` 与 `pcb.autoCopper` 按完整计划执行。扇出线长、线宽、过孔外径、孔径和安全间距都须以 mil 明确输入。几何支持范围、保守近似和拒绝条件见[几何命令说明](skills/ai-command-engine/references/commands-geometry.md)。相关几何功能目前只有本地回归和算法对照，尚未在真实 EDA 工程验证写入或保存重开。
+PCB DFM, SMT, and same-net spacing checks return 18, 7, and 1 check items respectively, along with completeness and geometry coverage information. A DFM run requires explicit outer and inner copper thickness inputs: `outerCopperOz` and `innerCopperOz`. Copper thickness read from the design is reported separately and does not replace these inputs. Results do not constitute manufacturing approval or a complete online DFM service. See [DFM check details](skills/ai-command-engine/references/commands-dfm.md).
 
-### 10. 焊盘外扩与网络文字丝印
+### 9. Pad fanout and local copper generation
 
-可用 `pcb.getPadExpansionPlan` / `pcb.expandPads` 规划并执行焊盘外扩，也可用 `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` 为焊盘网络生成可编辑丝印文字。外扩的支持形状、区域拆分与持久性限制，以及网络文字的放置和避让限制，见[几何命令说明](skills/ai-command-engine/references/commands-geometry.md)；本功能不替代对实际图形、间距和生产结果的检查。
+`pcb.getFanoutPlan` and `pcb.getAutoCopperPlan` first produce read-only plans. `pcb.fanout` and `pcb.autoCopper` execute the complete plans. Fanout length, track width, via outer diameter, drill diameter, and clearance must all be specified explicitly in mils. Supported geometry, conservative approximations, and rejection conditions are described in [Geometry command details](skills/ai-command-engine/references/commands-geometry.md). These geometry features have local regression and algorithm comparison results only; writes and save/reopen behavior have not been verified in a real EDA project.
 
-## 实际操作演示
+### 10. Pad expansion and net-name silkscreen text
 
-以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.10.116 的实机验收记录。
+Use `pcb.getPadExpansionPlan` / `pcb.expandPads` to plan and perform pad expansion. Use `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` to create editable silkscreen text for pad nets. Supported shapes, region splitting and persistence limits for expansion, and placement and clearance limits for net text are described in [Geometry command details](skills/ai-command-engine/references/commands-geometry.md). These features do not replace checks of the actual graphics, clearances, or manufacturing output.
 
-### 原理图：多脚 MCU、外围元件、短连线与标签
+## Operation demonstrations
 
-![48 脚 MCU 原理图：放置外围元件、短直线连接、网络标签对齐与保存重开检查](images/demo-schematic.gif)
+Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not hands-on acceptance records for v0.10.116.
 
-实际绘制 STM32F103C8T6 和 6 个外围元件，用短直线连接复位、BOOT0 支路，其余引脚用等长短线引出，最后将网络标签分列对齐。保存重开后，**57 个标签均已附着，60 个引脚网络成员保持一致**。这是绘图功能演示，非完整 MCU 最小系统；本次 DRC 为 0 个致命错误、37 条警告。录制环境为扩展 v0.10.89、EDA Pro 4.1.60；[步骤和验证说明](docs/DEMO-SCHEMATIC.md)。
+### Schematic: multi-pin MCU, supporting parts, short wires, and labels
 
-### PCB：板框、走线、过孔与铺铜
+![48-pin MCU schematic: place supporting parts, add short wires, align net labels, and check after save and reopen](images/demo-schematic.gif)
 
-![AI 指令驱动 PCB 绘制：板框、走线、过孔、铺铜，以及保存重开检查](images/demo-pcb.gif)
+The demonstration draws an STM32F103C8T6 and six supporting components. Short wires connect the reset and BOOT0 branches; equal-length short stubs extend from the other pins, and net labels are aligned in columns. After saving and reopening, **all 57 labels remained attached and the 60 pin-to-net memberships remained consistent**. This demonstrates drawing operations; it is not a complete MCU minimum system. The DRC reported 0 fatal errors and 37 warnings. Recorded with extension v0.10.89 and EDA Pro 4.1.60. See [steps and verification details](docs/DEMO-SCHEMATIC.md).
 
-在独立演示 PCB 中，AI 依次调用指令创建板框、绘制顶层走线、放置过孔并接续底层走线、创建并重建铺铜，最后保存、关闭、重开并读取结果。重开后读回 **6 段走线，铺铜状态为已填充**。
+### PCB: board outline, tracks, vias, and copper
 
-画面来自真实 EDA 操作截图，指令说明为后期字幕，已裁去账号和工程列表。演示预先建立了 GND 焊盘与网络；它是功能演示板，不是完整电路设计。录制环境为 **2026-10-09、扩展 v0.10.89、EDA Pro 4.1.60**，验证范围限于下述演示对象。动画约 18 秒，详细步骤及验证范围见 [演示说明](docs/DEMO.md)。
+![AI-directed PCB drawing: board outline, tracks, vias, copper, and checks after save and reopen](images/demo-pcb.gif)
 
-## 安装前准备
+In a separate demonstration PCB, AI commands create a board outline, draw top-layer tracks, place a via and continue routing on the bottom layer, create and rebuild a copper area, then save, close, reopen, and read back the results. After reopening, **six track segments were read back and the copper area was filled**.
 
-**使用时必须另外安装 Node.js >=20.17.0、本地指令代理和 AI 技能。**从插件市场安装扩展本身不会安装或启动代理，也不会替你安装技能。扩展启用后还需在 EDA 中允许外部交互，并由使用者启动本地代理、安装对应技能及核对连接目标。
+The animation uses screenshots from real EDA operations; command descriptions are later-added captions. Account details and the project list were cropped out. A GND pad and net were set up in advance. This is a feature demonstration board, not a complete circuit design. It was recorded on **2026-10-09 with extension v0.10.89 and EDA Pro 4.1.60**; verification applies only to the demonstration objects described. The animation is about 18 seconds long. See the [demonstration notes](docs/DEMO.md) for steps and verification scope.
 
-扩展、代理和 AI 技能是分别安装的组成部分。代理默认在本机运行，默认地址为 `http://127.0.0.1:49720`。可选的问题上报工具可整理必要问题信息，使用本机 [GitHub CLI](https://cli.github.com/) 登录身份提交 GitHub Issue；提交前由 AI 告知使用者。问题上报不会由 EDA 指令自动触发，也不会在后台上传工程数据。
+## Before installation
 
-## 版本状态
+**You must separately install Node.js >=20.17.0, the local command proxy, and the AI skill.** Installing the extension from the marketplace does not install or start the proxy, or install the skill for you. After enabling the extension, allow external interaction in EDA, start the local proxy, install the corresponding skill, and check the connection target.
 
-**v0.10.116 是 2026-10-11 的预发布候选。**本地定向回归与构建检查已通过。安装检查读回 218 条命令，另核对移除的 4 项入口；这不表示所有命令均已实测。普通原生放置、元件移动和布局能力保留。此次未做真实 EDA 写入，也未验证全部功能和场景；GitHub 发布不代表 EDA 市场审核通过。历史市场错误 `103014`（“entry 不能为空”）尚未重新验证。详见 [v0.10.116 版本说明](docs/releases/v0.10.116.md)。
+The extension, proxy, and AI skill are installed separately. The proxy runs locally by default at `http://127.0.0.1:49720`. An optional issue-reporting tool can collect the information needed for a report and submit a GitHub Issue using the user’s authenticated local [GitHub CLI](https://cli.github.com/). The AI informs the user before submission. Issue reporting is never triggered automatically by an EDA command and does not upload project data in the background.
 
-页面展示的“小机器人画电路板”图标是项目 Logo；市场发布图标文件为 `images/logo-marketplace.png`。
+## Release status
 
-## v0.10.116 下载与安装
+**v0.10.116 was formally released on 2026-10-11.** Local targeted regression and build checks passed. The installation check read back 218 commands and separately checked four removed entry points; this does not mean every command was tested. Ordinary native placement, component movement, and layout features remain available. Real EDA writes were not performed for this release, and not all features and scenarios were verified. A GitHub release does not mean the EDA marketplace has approved the extension. Historical marketplace error `103014` (“entry cannot be empty”) has not been rechecked. See the [v0.10.116 release notes](docs/releases/v0.10.116.md).
 
-本预发布版本的扩展包、技能包、校验文件和源码包均按 tag `v0.10.116` 获取：
+The “little robot drawing a circuit board” shown on the page is the project logo. The marketplace icon file is `images/logo-marketplace.png`.
 
-- [扩展包 ai-command-engine_v0.10.116.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine_v0.10.116.eext)
-- [配套技能包 ai-command-engine-skill_v0.10.116.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_v0.10.116.zip)
+<a id="v010116-下载与安装"></a>
+
+## v0.10.116 downloads and installation
+
+The plugin retains version `v0.10.116`. The English-first documentation and skill were added on 2026-10-13; the original tag and source archive remain unchanged:
+
+- [Extension package: ai-command-engine_v0.10.116.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine_v0.10.116.eext)
+- [Companion skill package: ai-command-engine-skill_en-zh_v0.10.116.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_en-zh_v0.10.116.zip)
+- [English-first skill checksum: SHA256SUMS-docs-20261013.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS-docs-20261013.txt)
 - [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS.txt)
-- [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip)
+- [v0.10.116 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip)
 
-技能 ZIP 解压后，将 `ai-command-engine/` 整个目录安装到所用 AI 工具的技能目录，保留 `references/` 和脚本等子目录，不能只复制 `SKILL.md`。源码 ZIP 中的技能位于 `skills/ai-command-engine/`。代理不单独打包；下载源码 ZIP 后，按[安装与使用指南](docs/QUICKSTART.md)安装 Node.js 依赖并运行本地代理。扩展、代理和技能分别安装，扩展市场不会替使用者安装代理或技能。
+The English-first skill ZIP includes `SKILL.md` and English references, plus `SKILL_ZH.md` and `references/zh/` as the Chinese fallback. These are two documentation versions inside one installed skill; do not install the fallback as a second automatic skill. The original Chinese skill attachment remains available in the release. Verify the new ZIP with `SHA256SUMS-docs-20261013.txt`.
 
-## 首次使用
+After extracting the skill ZIP, install the entire `ai-command-engine/` directory in your AI tool’s skill directory, keeping subdirectories such as `references/` and scripts; do not copy only `SKILL.md`. The original tagged source ZIP contains the original Chinese skill at `skills/ai-command-engine/`. Use the new skill ZIP or current main branch for the English-first edition. The proxy is not packaged separately. Download the source ZIP, then follow the [installation and usage guide](docs/QUICKSTART.md) to install Node.js dependencies and run the local proxy. The extension, proxy, and skill are separate installs; the extension marketplace will not install the proxy or skill for you.
 
-请按[安装与使用指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md)完成 Node.js 与代理依赖、EDA 扩展安装、外部交互授权、首次只读验证和 AI 技能安装。要运行代理，请在仓库目录执行：
+## First use
+
+Follow the [installation and usage guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md) to install Node.js and proxy dependencies, install the EDA extension, allow external interaction, perform the first read-only check, and install the AI skill. To run the proxy, execute these commands in the repository directory:
 
 ```powershell
 git clone https://github.com/quhuii-lgtm/easyeda-aicommand.git
@@ -128,19 +137,19 @@ npm ci
 node bridge/command-proxy.mjs
 ```
 
-ZIP 用户在解压后的仓库目录运行 `npm ci` 和 `node bridge/command-proxy.mjs`。保留代理终端，再从 [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases) 下载 `.eext`，在 EDA 插件管理界面导入、启用并允许外部交互。然后将完整的 [`skills/ai-command-engine/`](https://github.com/quhuii-lgtm/easyeda-aicommand/tree/main/skills/ai-command-engine) 安装到 AI 工具的技能目录，并在 EDA 菜单点击 AI Command → 启动桥接。安装扩展不会在本机部署代理或向 AI 工具安装技能；完整步骤见[首次使用指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md)。
+If you downloaded a ZIP, run `npm ci` and `node bridge/command-proxy.mjs` from the extracted repository directory. Keep the proxy terminal open. Then download the `.eext` package from [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases), import and enable it in the EDA extension manager, and allow external interaction. Install the complete [`skills/ai-command-engine/`](https://github.com/quhuii-lgtm/easyeda-aicommand/tree/main/skills/ai-command-engine) directory in your AI tool’s skill directory, then click AI Command → Start Bridge in the EDA menu. Installing the extension does not deploy the proxy locally or install the skill in your AI tool. See the [first-use guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md) for complete instructions.
 
-Windows 提供可选的 URL 协议启动方式；注册和生命周期说明见[桥接生命周期文档](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/BRIDGE-LIFECYCLE.md)。普通调用不需要 GitHub CLI；只有选择使用可选的问题上报功能时才需要它。SMT 物料查询另需[嘉立创开放平台](https://open.jlc.com)凭据，配置见[物料查询指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md#5-可选-smt-物料查询)。
+Windows users can optionally start the proxy through a URL protocol. See the [bridge lifecycle documentation](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/BRIDGE-LIFECYCLE.md) for registration and lifecycle details. GitHub CLI is not needed for ordinary use; it is needed only if you choose the optional issue-reporting feature. SMT parts lookup also requires [JLC Open Platform](https://open.jlc.com) credentials; see the [parts lookup guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md#5-可选-smt-物料查询).
 
-## 安全与验证边界
+## Safety and verification limits
 
-- 每条 `/command` 请求都须携带顶层 `instanceId`；先查询连接并核对目标窗口。图页操作还要确认页身份。
-- 写入超时不表示操作已取消；遇到未知结果或写保护时先只读核实，不要盲目重试。
-- 插件/API 返回、保存读回、关闭后重开读回和生产验收代表不同证据。命令成功、DRC 或模拟回归都不能单独证明电路正确。
-- 问题上报只使用已取得且可公开的必要证据。提交前需告知使用者；GitHub CLI、Issue 创建和登录都是可选流程。提交入口见[GitHub Issues](https://github.com/quhuii-lgtm/easyeda-aicommand/issues)。
+- Every `/command` request must include a top-level `instanceId`. First query the connections and confirm the target window. For schematic-page operations, also confirm the page identity.
+- A write timeout does not mean the operation was cancelled. If the result is unknown or the document is write-protected, verify using read-only operations before proceeding; do not retry blindly.
+- Plugin/API responses, readback after saving, readback after closing and reopening, and manufacturing acceptance are different levels of evidence. A successful command, DRC result, or simulation regression alone does not prove that a circuit is correct.
+- Issue reports use only necessary evidence that has already been obtained and can be made public. Inform the user before submission. GitHub CLI, issue creation, and sign-in are optional. The submission entry point is [GitHub Issues](https://github.com/quhuii-lgtm/easyeda-aicommand/issues).
 
-## 开发者资料
+## Developer resources
 
-源码、代理与完整 AI 技能见[仓库](https://github.com/quhuii-lgtm/easyeda-aicommand)。本地回归、构建、宿主验证等信息会在对应版本说明中分别标明。项目更新记录见 [CHANGELOG](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/CHANGELOG.md)，构建框架历史见 [SDK changelog](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/SDK-CHANGELOG.md)。
+See the [repository](https://github.com/quhuii-lgtm/easyeda-aicommand) for source code, the proxy, and the complete AI skill. Local regression, build, and host verification details are stated separately in the relevant release notes. See the project [CHANGELOG](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/CHANGELOG.md) and [SDK changelog](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/SDK-CHANGELOG.md) for project and build-framework history.
 
-[Apache-2.0 许可](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/LICENSE)。
+[Apache-2.0 License](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/LICENSE).

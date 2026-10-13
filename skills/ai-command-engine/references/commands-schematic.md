@@ -1,190 +1,190 @@
-# 原理图指令全表
+# Schematic Command Reference
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+> The tables and parameter objects on this page describe commands and `params`; they are not complete HTTP requests. A `/command` request must include outer `cmd`, top-level `instanceId`, and required `params`. A macro routes only at the outer level; its steps inherit the instance. See [setup](setup.md) for a complete example.
 
-四组：**① 批量生成整理（第一入口）→ ② 基础指令 → ③ 修复维护 → ④ 查询检查导出**。完整陷阱见 [pitfalls.md](pitfalls.md)。
+Four groups: **① batch generation and organization (primary entry) → ② basic commands → ③ repair and maintenance → ④ query, inspection, and export**. See [pitfalls.md](pitfalls.md) for the complete pitfalls list.
 
-## ① 批量生成与整理（第一入口）
+## ① Batch generation and organization (primary entry)
 
-### `schematic.buildBlock` — 从零生成功能区
+### `schematic.buildBlock` — Generate a functional block from scratch
 
-器件清单+连接表 → 自动区框（默认 0,0 起、黑虚线，可 color/lineType）→ 行列排布（cw32 模板横距 60 行距 90，标题框底居中字号 20）→ 按 nets 连线 → 网表+DRC 自查。
+Components list + connection table → auto region frame (default origin 0,0, black dashed; `color`/`lineType` can override) → row/column placement (cw32 template: 60 horizontal spacing, 90 row spacing; title centered at the bottom of the frame, font size 20) → wire from `nets` → netlist and DRC self-check.
 
-| 参数 | 说明 |
+| Parameter | Description |
 | --- | --- |
-| `components` | 器件清单（lcscId + 自定义 `ref`） |
-| `nets` | 连接表，引脚用清单里的 `ref`（"U1.7"，**不是 EDA 自动位号**；插件做 ref→位号映射，返回 `refMap`） |
-| `region?` `title?` `color?` `skipAudit?` | 区框起点/标题/颜色/跳过网表审计 |
+| `components` | Component list (`lcscId` + custom `ref`) |
+| `nets` | Connection table. Refer to pins by the list's `ref` (for example, `"U1.7"`; **not the EDA-generated designator**). The plugin maps `ref` to designators and returns `refMap`. |
+| `region?` `title?` `color?` `skipAudit?` | Region origin/title/color/skip netlist audit |
 
-- 用户 ref 自动落为真实位号（"R?" 改写+读回验证，失败带 `designatorNote`）。
-- 连线走 batchWire 引擎：2 引脚非电源网 → link 无名 U 形线；≥3 引脚/电源网（VDD/VCC/GND 及**全大写下划线后缀**如 VDD_T、VOUT_5V；小写后缀算信号）/显式 `style:"label"` → 每引脚 label 短桩。per-net color 透传。
-- 逐条收错不中断 + 一次网表统一审计（明细 `wireAudit`）。**必看返回**：`refMap`、`designatorNote`、`incomplete`/`failed`/`wireAudit`。
-- 规则式网格排布，约 80 分美观；生成后可 `moveComponent` 微调。
+- User refs are automatically assigned as actual designators (`"R?"` is rewritten and read back; failures include `designatorNote`).
+- Wiring uses the `batchWire` engine: two-pin non-power nets use an unnamed U-shaped `link`; nets with ≥3 pins, power nets (VDD/VCC/GND and suffixes after underscores that are **all uppercase**, e.g. VDD_T, VOUT_5V; lowercase suffixes count as signal nets), or explicit `style:"label"` use a short label stub per pin. Per-net color is passed through.
+- Errors are collected per item without stopping; a single unified netlist audit runs at the end (details in `wireAudit`). **Always inspect:** `refMap`, `designatorNote`, `incomplete`/`failed`/`wireAudit`.
+- Rule-based grid placement is roughly 80/100 visually; use `moveComponent` to refine after generation.
 
-### `schematic.autoLayout` — 整理已有功能区
+### `schematic.autoLayout` — Organize an existing functional block
 
-已放好的器件重排+重建连线。`designators` 或 `region` 二选一框定器件。
+Rearrange placed components and rebuild their wiring. Select components using exactly one of `designators` or `region`.
 
-流程：导网表取连接表（NC/悬空跳过）→ 网络聚类贪心排序+行列排布（横距 60 行距 90，`template` 可改）→ 安全移动器件（读回几何并核对其他状态）→ **rewire（默认开）**：删碰旧引脚的导线（级联删标签）+清浮标+连接表转 batchWire 重建。
+Flow: export netlist and derive connections (skip NC/floating pins) → greedily sort network clusters and place in rows/columns (60 horizontal spacing, 90 row spacing; `template` can change this) → safely move components (read back geometry and check other state) → **rewire (on by default):** delete wires touching old pins (labels are cascade-deleted) + remove floating labels + convert connection table to `batchWire` rebuild.
 
-- **dryRun 默认 true**：只出方案（plan 旧→新坐标；connections 连接表+link/label 风格），确认后 `dryRun:false` 才动。真跑前先保存工程。自动布局本身不会自动恢复已发生的移动；
-- 官方移动器件后旧导线/标签不跟随（实测）；rewire 是删旧重建不是平移。
-- 移动失败的 `stateDifferences` 保留 `undefined`、`null`、空串等实际值并由 `autoLayout` 透传；非几何状态保护仍有效，现场属性变化的原因尚未确认。
-- 网表首个坏快照缺失的根因尚未确认；外部逐页脚本用于补充并留存证据，不据此声称 `getNetlist` 算法已修复。
-- rewire：link 直连先于 label；删线前按全页引脚分类——纯内部线照删；带 1 外部引脚的线删后自动补网（`externalRewired`）；穿 ≥3 引脚的复杂长线保留（`skippedWires`，可能留悬线需人工复核）；link 重建因穿第三方引脚失败自动降级两端 label（`fallbacks`）；仍未恢复进 `rewireFailed`（旧线已删、网断，须人工修）。
-- 跑完看 `moved`/失败 `error.cause` 中的 `partial`、`moved`、`phase`、`stateDifferences`/`rewired`（含 wireAudit）/`drc`；有部分移动失败时先停止后续写入并检查 `error.cause.moved` 指出的现场，再依据备份受控恢复，并目测画布。
-- 分工：**buildBlock 从零生成；autoLayout 整理已有**。
+- **`dryRun` defaults to true:** return a plan only (`plan` old→new coordinates; `connections` connection table + link/label styles). Only `dryRun:false` performs changes after review. Save the project before a real run. Auto-layout does not automatically restore moves already made.
+- Live testing showed that old wires/labels do not follow components moved by the official API; rewire deletes and recreates them rather than translating them.
+- On move failure, `stateDifferences` preserves actual values such as `undefined`, `null`, and empty strings and is passed through `autoLayout`; non-geometric state protection remains active. The cause of in-place property changes is unconfirmed.
+- The root cause of the missing first bad netlist snapshot is unconfirmed. External per-page scripts supplement and retain evidence; they do not prove that the `getNetlist` algorithm is fixed.
+- Rewire details: rebuild direct links before labels. Before deleting wires, classify pins across the whole page: delete purely internal wires; after deleting a wire with one external pin, automatically restore the net (`externalRewired`); retain complex long wires passing through ≥3 pins (`skippedWires`), which may leave dangling wires requiring manual review; if link reconstruction crosses a third-party pin, fall back to labels at both ends (`fallbacks`); anything still unrestored is in `rewireFailed` (old wire was deleted and the net is broken; repair manually).
+- After the run, inspect `moved` and failure `error.cause` fields `partial`, `moved`, `phase`, `stateDifferences`/`rewired` (including `wireAudit`)/`drc`. If any moves partially fail, stop later writes, inspect the state identified by `error.cause.moved`, restore in a controlled way from backup, and visually inspect the canvas.
+- Scope: **`buildBlock` generates from scratch; `autoLayout` organizes existing content.**
 
-### `schematic.batchWire` — 批量连线
+### `schematic.batchWire` — Batch wiring
 
-一次提交 label/link 混合项：`items:[{type:"label",pin,net,color?},{type:"link",pins,color?,jogDir?}]`。
+Submit mixed label/link items in one call: `items:[{type:"label",pin,net,color?},{type:"link",pins,color?,jogDir?}]`.
 
-- 逐条执行逐条收错，最后一次网表统一审计——比逐条调快数倍。
-- 网表是缓存快照：任一项未过则等 800ms 重导，最多 5 次取末次。
-- **只报告不自动修复**：audit 失败项按 `audit.detail` 处置后重跑该项。
-- 审计未过的项即使执行 ok 也进 `failed`（带实际网名）。
-- `continueOnError?` `skipAudit?` 可选。
+- Execute and collect errors item by item, then run one unified netlist audit; this is several times faster than issuing separate calls.
+- Netlist is a cached snapshot: if any item fails, wait 800 ms and re-export, up to 5 attempts; use the last result.
+- **Reports only; does not auto-repair.** Handle audit failures according to `audit.detail`, then rerun the affected item.
+- An item that fails audit is listed in `failed` with its actual net name, even if execution returned `ok`.
+- Optional: `continueOnError?`, `skipAudit?`.
 
-## ② 基础指令（第二入口）
+## ② Basic commands (secondary entry)
 
-### 语义化连线（单条也可用）
+### Semantic wiring (also suitable for a single wire)
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `schematic.labelWire` | **单引脚接入命名网**：沿引脚朝向外画短桩+放同名标签（防呆+附着验证）。必须带网名只接 1 脚 | `pin`("U1.7"), `net`, `color?`, `force?`, `stubLen?` |
-| `schematic.linkWire` | **正好 2 引脚物理连通**：U 形正交走线，横腿动态避让防共线合并。必须 2 脚不带名（要命名用 labelWire） | `pins`(["U1.7","C1.1"]), `color?`, `jogDir?`, `force?` |
+| `schematic.labelWire` | **Connect one pin to a named net:** draw a short stub outward along the pin direction and place a same-name label (guarded + attachment-verified). Requires a net name and exactly 1 pin. | `pin` ("U1.7"), `net`, `color?`, `force?`, `stubLen?` |
+| `schematic.linkWire` | **Physically connect exactly 2 pins:** orthogonal U-shaped route with dynamic horizontal-leg avoidance to prevent collinear merging. Requires 2 unnamed pins (use `labelWire` for a named net). | `pins` (["U1.7","C1.1"]), `color?`, `jogDir?`, `force?` |
 
-- 两指令互斥（1 脚带名 vs 2 脚无名），根治"短线已有网名又叠同名标签"事故。
-- 短桩默认长 60（容纳 STATUS_LED 级长网名右伸不压本体；`stubLen` 可覆盖，最小 20，不自适应）。
-- **标签 rotation 恒 0、锚点恒在桩末端**。附着判定看锚点，锚点须在导线上，离线外 5 单位即浮标；rotation 180=反字（装机实锤）。朝左场景用位置偏移，不要旋转。
-- 文字宽度估算 **4.4×字符数+5 单位**（数字/下划线略宽，宁高估）。
-- **占用预检**：引脚已被同名网占用直接复用；异名占用拒绝（防串网）；`force:true` 强并。
-- **整段路径避让**：短桩/横腿全段 8 单位内有任何引脚即换向；linkWire 全部候选（U 形 8 层+L 形 2 变体）逐段查引脚（两端点豁免），无解抛 `PIN_CROSSING_FALLBACK`。
-- **NC 引脚禁止接线**：预检中文报错，不强画。
-- 附着验证失败快速返回 `attached:false`（最多 2 次 500ms 重试）。
+- These commands are mutually exclusive (one named pin vs two unnamed pins), preventing the incident where a short wire already had a net name and an identical label was added on top.
+- Default stub length is 60 (fits long names such as STATUS_LED extending right without overlapping the component); `stubLen` overrides it, minimum 20; it does not adapt automatically.
+- **Label rotation is always 0; its anchor is always at the end of the stub.** Attachment is determined by the anchor, which must lie on the wire; more than 5 units off-wire is floating. Rotation 180 produces reversed text (confirmed on the installed system). For left-facing cases, offset the position; do not rotate.
+- Estimated text width is **4.4 × character count + 5 units** (digits/underscores are slightly wider; overestimate).
+- **Occupancy preflight:** reuse a pin already on the same named net; reject a pin occupied by another net (prevent shorting); `force:true` forces the merge.
+- **Avoid the whole path:** if any pin is within 8 units of any part of a stub/horizontal leg, change direction. `linkWire` checks every candidate segment-by-segment (8 U-shaped layers + 2 L-shaped variants, endpoints exempt); if none works, throws `PIN_CROSSING_FALLBACK`.
+- **Do not wire NC pins:** preflight reports an error in Chinese; it will not force a wire.
+- If attachment verification fails, return promptly with `attached:false` (up to two 500 ms retries).
 
-### 放置与绘制
+### Placement and drawing
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `schematic.placeDevice` | 放器件并核对工程封装资源与编号（默认进 BOM 和 PCB） | `lcscId` 或 `deviceUuid`+`libraryUuid`, `x`, `y`, `rotation?`, `addIntoBom?`, `addIntoPcb?` |
-| `schematic.connectPin` | 底层单脚连线：引脚尖端外 30→引脚原点，端点落原点即连通。**普通场景优先 labelWire** | `primitiveId`, `pin`, `net` |
-| `schematic.drawWire` | 画导线（折点数组；自动拆段+去重+智能命名；支持 color/lineWidth/lineType） | `points`, `net?`, `color?`, `lineWidth?`, `lineType?` |
-| `schematic.placeNetLabel` | 放网络标签（**自动验证附着**；同名防呆） | `net`, `x`, `y`, `noVerify?`, `force?`, `rotation?` |
-| `schematic.placeText` | 注释文本（非电气） | `x`, `y`, `content`, `fontSize?` |
-| `schematic.placeRegion` | 区框+标题一步（标题自动框内左上，返回 span） | `x`, `y`, `width`, `height`, `title`, `color?`, `lineType?`, `fontSize?` |
-| `schematic.moveComponent` | 移动/旋转/镜像（内部分步+读回验证） | `primitiveId`, `x?`, `y?`, `rotation?`, `mirror?` |
-| `schematic.moveLabel` | 移动网络标签/属性 | `primitiveId`, `x`, `y` |
+| `schematic.placeDevice` | Place a component and verify project footprint resource and pad numbering (included in BOM and PCB by default) | `lcscId` or `deviceUuid`+`libraryUuid`, `x`, `y`, `rotation?`, `addIntoBom?`, `addIntoPcb?` |
+| `schematic.connectPin` | Low-level single-pin wire: from 30 units outside the pin tip to the pin origin; an endpoint at the origin connects. **Prefer `labelWire` for ordinary use.** | `primitiveId`, `pin`, `net` |
+| `schematic.drawWire` | Draw wires (array of vertices; auto-split, deduplicate, and intelligently name; supports color/lineWidth/lineType) | `points`, `net?`, `color?`, `lineWidth?`, `lineType?` |
+| `schematic.placeNetLabel` | Place a net label (**automatically verify attachment**; guard against duplicate names) | `net`, `x`, `y`, `noVerify?`, `force?`, `rotation?` |
+| `schematic.placeText` | Non-electrical annotation | `x`, `y`, `content`, `fontSize?` |
+| `schematic.placeRegion` | Create region and title in one step (title automatically placed at inner top-left; returns `span`) | `x`, `y`, `width`, `height`, `title`, `color?`, `lineType?`, `fontSize?` |
+| `schematic.moveComponent` | Move/rotate/mirror (internal atomic steps + readback verification) | `primitiveId`, `x?`, `y?`, `rotation?`, `mirror?` |
+| `schematic.moveLabel` | Move a net label/attribute | `primitiveId`, `x`, `y` |
 
-- **drawWire 带 net 会自动在导线中点落一个 NET 属性标签**（与 placeNetLabel 两套，同网并存即重复；它是导线持有属性，官方不支持单独删）——要标签收尾：**drawWire 不传 net + placeNetLabel 放标签，别两边都命名**。命名成功返回 `namingNote`。
-- drawWire 智能命名：该网已在页面存在则自动画无名段。
-- connectPin 别让导线探入器件本体侧（端点落引脚线中段→T 形结点红点+"单网络"警告）；EDA 只认与引脚线段非零重叠的导线——端点对端点重合、网标直贴引脚都报致命"引脚端点重叠且未连接"。
-- **共线合并陷阱**：官方自动把几何共线重叠/相接的导线合并——勿画穿中间引脚的长直线（会把中间引脚并进网）；勿让不同网的导线/短桩/横腿共线重叠（串网）。批量指令内部已防，手画 drawWire 同样避开。
-- placeNetLabel：标签压线体上会被拒（自动 ±2 微偏重试）；只有按本次标签 ID、父导线及父导线属性三处读回一致，才返回 `attached:true` 和 `wireId`，ghost 标签也走同一验证。读回未知或确认浮空时以 partial 异常返回并保留标签及 ID，不自动删除；`noVerify:true` 不证明已附着。附近同名导线或负坐标都不能证明附着；已有该网名的导线仍拒绝（`force:true` 强放）；`rotation` 默认 0，显式传入时尝试设置并读回核对。
-- 网格吸附：坐标取 10 的倍数，否则 DRC 报"网络图元不在格点上"。
+- **When `drawWire` receives `net`, it automatically places a NET attribute label at the wire midpoint.** This and `placeNetLabel` are separate mechanisms; using both on one net duplicates the name. The NET attribute belongs to the wire and the official API cannot delete it separately. To finish with a label, **omit `net` from `drawWire` and place a label with `placeNetLabel`; do not name it in both places.** Successful naming returns `namingNote`.
+- `drawWire` uses intelligent naming: if the net already exists on the page, it automatically draws an unnamed segment.
+- With `connectPin`, do not extend a wire into the component body (an endpoint on the middle of the pin segment creates a T-junction red dot and “single network” warning). EDA requires non-zero overlap with a pin segment. Endpoint-to-endpoint overlap or placing a net label directly on the pin both produce fatal “pin endpoints overlap but are not connected”.
+- **Collinear merge pitfall:** the official app automatically merges geometrically collinear overlapping/touching wires. Do not draw a long straight wire through an intermediate pin (it will join that pin to the net); do not overlap different nets' wires/stubs/horizontal legs collinearly (short circuit). Batch commands guard against this; manual `drawWire` must avoid it too.
+- `placeNetLabel`: labels placed on the wire body are rejected (automatic ±2-unit offset retries). Return `attached:true` and `wireId` only when readback agrees at all three levels: this label's ID, parent wire, and parent-wire attribute. Ghost labels use the same verification. If readback is unknown or confirms a floating label, return a partial error and retain the label and ID; do not delete it automatically. `noVerify:true` does not prove attachment. Nearby same-name wires or negative coordinates do not prove attachment. A wire with that net name already present is still rejected (`force:true` forces placement). Default `rotation` is 0; if explicitly provided, the plugin attempts to set and read it back.
+- Grid snapping: coordinates must be multiples of 10 or DRC reports “network primitive is off-grid”.
 
-#### placeDevice 的封装核验（0.10.94 候选）
+#### `placeDevice` footprint verification (0.10.94 candidate)
 
-- 先读取完整库器件关联，仍按官方 UUID 引用创建一次；再独立读取实例、工程封装资源以及引脚。不会自动修复缺失关联或重复放置。
-- 库器件有关联封装时，实例封装须指向目标工程资源，资源来源须匹配库封装与库 UUID，当前实例的每个引脚编号须在封装 PAD 编号中存在。0.10.96 候选改用公开完整工程 epro 导出，读取精确 `FOOTPRINT/<实例封装UUID>.efoo`，保留 HEAD.uuid 与来源检查；需宿主允许下载工程。当前支持逐行数组格式 FOOTPRINT 资源，格式不支持或证据缺失即报错。
-- 成功保留 `primitiveId`、`designator`，新增 `readback.footprint`（含 `projectUuid`、`resourceSource`、`resourceVerified`）及 `pinPadMapVerified`。`pinPadMap` 为引脚编号到 PAD 图元 ID 的对应，`pinMapScope:"placed-instance-only"` 只覆盖本次子部件，不证明其他子部件或整个器件的映射。
-- 库器件没有封装关联仍可放置，返回 `libraryFootprint:"none"`；没有电气引脚和编号焊盘时 `electricalMapping:"none"`、`pinPadMapVerified:false`，不得当作已验证电气映射。
-- 创建尝试后的核验失败带 `partial:true`、`retryable:false`、阶段和已取得的 `primitiveId`。先核对现场，不自动重试或删除。执行期间原理图页或工程焦点变化也会停止。
-- `readback.verified:true` 仅表示上述即时核验通过，`persistenceVerified:false` 明确尚未保存重开；网表、DRC 与保存重开须另行验证。
+- First read all library-device associations, create once using the official UUID references, then independently read the instance, project footprint resources, and pins. Missing associations and duplicate placement are not auto-fixed.
+- If the library device has an associated footprint, the instance footprint must point to the target project resource; the resource origin must match the library footprint and library UUID; and each pin number on the current instance must exist among the footprint PAD numbers. The 0.10.96 candidate uses public full-project epro export for verification and reads exact `FOOTPRINT/<instance footprint UUID>.efoo`, retaining HEAD.uuid and origin checks; the host must permit project download. Only line-array FOOTPRINT resources are supported; unsupported format or missing evidence errors.
+- Success retains `primitiveId`, `designator`, and adds `readback.footprint` (including `projectUuid`, `resourceSource`, `resourceVerified`) and `pinPadMapVerified`. `pinPadMap` maps pin numbers to PAD primitive IDs. `pinMapScope:"placed-instance-only"` covers only this subcomponent; it does not verify other subcomponents or the whole device.
+- A library device without a footprint association can still be placed and returns `libraryFootprint:"none"`. If it has no electrical pins and numbered pads, it returns `electricalMapping:"none"`, `pinPadMapVerified:false`; do not treat that as verified electrical mapping.
+- Verification failure after an attempted create includes `partial:true`, `retryable:false`, the phase, and any obtained `primitiveId`. Inspect the current state; do not auto-retry or delete. Execution also stops if the schematic page or project focus changes.
+- `readback.verified:true` means only that these immediate checks passed. `persistenceVerified:false` explicitly means save/close/reopen has not yet been checked. Netlist, DRC, and persistence require separate verification.
 
-0.10.95 实机诊断已确认当前图页资源接口返回空数组，完整工程包中目标资源存在。0.10.96 候选据此修正核验的数据来源，并在导出前后检查图页/工程及实例引用。返回增加 `resourceOrigin:"project-export-epro"` 和 `resourcePath`，仍不等于保存持久性通过。2026-10-10 已在 0.10.96 隔离工程完成新测试点放置：封装来源与引脚/PAD 映射核验通过。保存、关闭并重开后，封装引用、BOM/PCB 标志、位号与唯一 ID 保留，网表一致。该结果仅覆盖已测器件；历史封装丢失根因未复现。
+Live diagnosis in 0.10.95 confirmed that the current page-resource API returned an empty array while the target resource existed in the full project package. Based on this, the 0.10.96 candidate changed the verification source and checks page/project identity and instance references before and after export. It adds `resourceOrigin:"project-export-epro"` and `resourcePath`; this still does not prove persistence. On 2026-10-10, placement of a new test point in an isolated 0.10.96 project passed footprint-origin and pin/PAD mapping checks. After save, close, and reopen, the footprint reference, BOM/PCB flags, designator, and unique ID remained, and the netlist matched. This covers only the tested component; the historical footprint-loss root cause was not reproduced.
 
-#### 封装资源的只读诊断（0.10.96 候选）
+#### Read-only footprint-resource diagnostic (0.10.96 candidate)
 
-`schematic.getPlacementResourcesDiagnostic` 必须提供现有器件 `primitiveId`。读取当前原理图页和工程身份、实例封装 UUID，以及 `getDocumentFootprintSources()` 的资源数量和逐项摘要（原始 `footprintUuid`、源码长度、DOCTYPE、HEAD.uuid、解析错误）。不返回完整源码，不创建、修改或保存器件。
+`schematic.getPlacementResourcesDiagnostic` requires an existing component's `primitiveId`. It reads current schematic-page and project identity, instance footprint UUID, and resource count plus per-item summaries from `getDocumentFootprintSources()` (original `footprintUuid`, source length, DOCTYPE, HEAD.uuid, parse errors). It does not return full source, create/modify components, or save.
 
-0.10.96 候选额外返回 `projectResource`，用与放置核验相同的完整工程读取函数提供目标路径、HEAD/来源及焊盘编号摘要。结果保留 `diagnosticOnly:true`、`placementVerified:false`，解析/导出错误或焦点变化按未完成处理；不据此重试创建器件。0.10.95 的空数组已实测确认。2026-10-10 的 0.10.96 隔离宿主中，既有 TP2 和新 TP3 保存重开后的 projectResource 路径、HEAD、来源及 PAD 编号均正确。只读诊断仍不单独代表新建器件已通过全部核验。
+The 0.10.96 candidate additionally returns `projectResource`, using the same full-project reader as placement verification to provide target path, HEAD/origin, and pad-number summary. Results retain `diagnosticOnly:true`, `placementVerified:false`. Parse/export errors or focus changes count as incomplete; do not retry component creation from this diagnostic. The 0.10.95 empty-array behavior was confirmed in testing. In the isolated 0.10.96 host on 2026-10-10, projectResource path, HEAD, origin, and PAD numbers for existing TP2 and new TP3 were correct after save/close/reopen. A read-only diagnostic alone still does not mean a newly placed component passed all checks.
 
-### 修改类
+### Modification commands
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `schematic.setWireNet` | 改导线网名（modify 后强制读回，返回 `readback:{net,verified}`） | `primitiveId`, `net` |
-| `schematic.modifyComponent` | 完整修改器件属性并独立读回 | `primitiveId`, 完整 `property`，见下文 |
-| `schematic.modifyWire` | 改颜色/线宽/线型/网名（可按网名批量，如 3V3 全网标红） | `primitiveId` 或 `net`, `color?`, `lineWidth?`, `lineType?`, `newNet?` |
-| `schematic.modifyNetLabel` | 改颜色/位置/改名/**文字方向**（可按网名批量） | `primitiveId` 或 `net`, `color?`, `newNet?`, `x?`, `y?`, `rotation?` |
-| `schematic.modifyText` | 改注释文本 | `primitiveId` |
-| `schematic.modifyRect` | 改位置/尺寸/样式（y 也是上沿） | `primitiveId`, `x?`, `y?`, `width?`, `height?` |
+| `schematic.setWireNet` | Change a wire net name (force readback after modify; returns `readback:{net,verified}`) | `primitiveId`, `net` |
+| `schematic.modifyComponent` | Modify full component properties and read back independently | `primitiveId`, complete `property`; see below |
+| `schematic.modifyWire` | Change color/width/type/net (can batch by net, e.g. make all 3V3 wires red) | `primitiveId` or `net`, `color?`, `lineWidth?`, `lineType?`, `newNet?` |
+| `schematic.modifyNetLabel` | Change color/position/name/**text orientation** (can batch by net) | `primitiveId` or `net`, `color?`, `newNet?`, `x?`, `y?`, `rotation?` |
+| `schematic.modifyText` | Change annotation text | `primitiveId` |
+| `schematic.modifyRect` | Change position/size/style (`y` is also the top edge) | `primitiveId`, `x?`, `y?`, `width?`, `height?` |
 
-- 官方 modify 多字段合并改会整体失效（实测"位置+旋转"同传→什么都没改）——插件已**原子化拆分**（每字段独立步骤+逐步读回，不符挪 failed 带实际值），调用侧多字段照传。
-- 官方 modify 有假失败也有假成功——凡修改，成败以读回/源码重扫为准。
-- 镜像/rotation 180 都反字——正常标签 rotation 0、锚点压导线；官方属性接口不支持 mirror，被镜像的标签只能转正或删了重放。
+- Combining multiple fields in the official modify call can make the entire operation fail (observed: passing position + rotation changed nothing). The plugin **splits fields into atomic steps** with readback after each; mismatches are moved to `failed` with actual values. Callers may still pass multiple fields.
+- Official modify operations can fail falsely or succeed falsely. For every modification, use readback/source rescanning to determine success.
+- Mirroring and rotation 180 both reverse text. Keep ordinary labels at rotation 0 with the anchor on the wire. The official attribute API does not support `mirror`; a mirrored label must be corrected or deleted and placed again.
 
-#### modifyComponent 的完整属性与系统别名（0.10.94 候选）
+#### Full `modifyComponent` properties and system aliases (0.10.94 candidate)
 
-`property` 必须明确包含这 14 项：`x`、`y`、`rotation`、`mirror`、`addIntoBom`、`addIntoPcb`、`designator`、`name`、`uniqueId`、`manufacturer`、`manufacturerId`、`supplier`、`supplierId`、`otherProperty`。`otherProperty` 须包含实例当前已有的自定义属性，避免 SDK 清掉漏传的键。
+`property` must explicitly include all 14 fields: `x`, `y`, `rotation`, `mirror`, `addIntoBom`, `addIntoPcb`, `designator`, `name`, `uniqueId`, `manufacturer`, `manufacturerId`, `supplier`, `supplierId`, `otherProperty`. `otherProperty` must include all custom properties already on the instance so the SDK does not clear keys omitted from the request.
 
-宿主把九个系统键放在专用字段中：`Add into BOM`→`addIntoBom`、`Convert to PCB`→`addIntoPcb`、`Designator`→`designator`、`Name`→`name`、`Unique ID`→`uniqueId`、`Manufacturer`→`manufacturer`、`Manufacturer Part`→`manufacturerId`、`Supplier`→`supplier`、`Supplier Part`→`supplierId`。插件按对应字段读回。
+The host stores nine system keys in dedicated fields: `Add into BOM`→`addIntoBom`, `Convert to PCB`→`addIntoPcb`, `Designator`→`designator`, `Name`→`name`, `Unique ID`→`uniqueId`, `Manufacturer`→`manufacturer`, `Manufacturer Part`→`manufacturerId`, `Supplier`→`supplier`, `Supplier Part`→`supplierId`. The plugin reads each back through the corresponding field.
 
-- 若 `otherProperty` 重复提供这些键，值须与顶层字段一致。布尔别名只接受 `"yes"` / `"no"`，分别对应 `true` / `false`。冲突在写入前报错。
-- 顶层字符串为 `null`、别名为空字符串时表示清空。实际读回允许 `null`、`undefined` 或空字符串。其他字符串和布尔值保持严格比较。
-- 返回的 `readback.otherProperty` 保持实际读回内容，可能没有上述系统键。不要据此判定漏写。
-- 真正不匹配、读回失败或焦点变化仍报错。已尝试写入的失败带 `partial:true`、`retryable:false`；先核对现场，不能直接重发。
-- 不要把库器件默认属性直接当作工程实例的修改请求。封装、符号和器件的工程内引用与库 UUID 可能不同。
+- If `otherProperty` repeats any of these keys, values must match the top-level fields. Boolean aliases accept only `"yes"` / `"no"`, corresponding to `true` / `false`. Conflicts error before writing.
+- A top-level string value of `null` or an alias value of an empty string means clear the field. Actual readback may be `null`, `undefined`, or an empty string. Other strings and booleans use strict comparison.
+- `readback.otherProperty` preserves actual readback and may omit the system keys above. Do not treat their absence there as a failed write.
+- A real mismatch, readback failure, or focus change still errors. A failure after an attempted write includes `partial:true`, `retryable:false`; inspect the current state and do not resend directly.
+- Do not use default library-device properties directly as a project-instance modification request. In-project footprint, symbol, and device references may differ from library UUIDs.
 
-该修复已通过本地回归及 0.10.94 隔离宿主测试：BOM=false、PCB=true、位号及唯一 ID 修改读回正确，保存关闭重开后属性保留、网表逐字一致。此结果只覆盖已测字段与器件，不代表所有属性组合均已实测。
+This fix passed local regression and an isolated 0.10.94 host test: BOM=false, PCB=true, designator and unique ID changes read back correctly; after save/close/reopen the properties persisted and the netlist was text-identical. This covers only the tested fields and component, not every property combination.
 
-## ③ 修复维护（出问题再用）
+## ③ Repair and maintenance (use when problems occur)
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `schematic.pruneFloatingLabels` | **【宏】清浮空标签**（附着残留、删线孤儿） | `dryRun?`（默认 `false`；预览须显式传 `true`）, `batchSize?`, `allowSourceRewrite?`（仅控制浮空标签处理的源码改写兜底） |
-| `schematic.fixNetLabels` | **【宏】标签全科体检**：①浮空 ②重复 ③反字 ④位置不对 | `dryRun?`, `angle?`, `net?` |
-| `schematic.repairNet` | **碎网修复宏**：审计→收养无名残线→补标签→网表前后对比 | `net`, `adoptWireIds?`, `dryRun?` |
-| `schematic.dedupeWireNets` | 清"导线多个网络名"警告（仅历史图纸） | 无 |
-| `schematic.delete` | 删图元（批量；先识别类型+删除后立即读回+终扫对账；仍在才按既有间隔复核；未知读回以 partial 停止后续写入） | `primitiveIds`, `batchSize?` |
+| `schematic.pruneFloatingLabels` | **[Macro] Remove floating labels** (attachment remnants and labels orphaned by wire deletion) | `dryRun?` (default `false`; explicitly pass `true` to preview), `batchSize?`, `allowSourceRewrite?` (controls only the source-rewrite fallback for floating-label handling) |
+| `schematic.fixNetLabels` | **[Macro] Full label check:** ① floating ② duplicate ③ reversed ④ misplaced | `dryRun?`, `angle?`, `net?` |
+| `schematic.repairNet` | **Broken-net repair macro:** audit → adopt unnamed leftover wires → add labels → compare netlist before/after | `net`, `adoptWireIds?`, `dryRun?` |
+| `schematic.dedupeWireNets` | Clear “wire has multiple net names” warnings (historical drawings only) | None |
+| `schematic.delete` | Delete primitives in batches (identify type first + immediate post-delete readback + final reconciliation; if still present, recheck at existing intervals; unknown readback returns partial and stops later writes) | `primitiveIds`, `batchSize?` |
 
-- **浮空标签（parentId=$$root）官方删除盲区**：属性图元不支持删除（@internal），主通道**借尸还魂**（建临时导线→modify 挂 parentId→删导线级联带走→源码重扫验证）；官方 modify parentId 有假失败——以走完后的源码重扫为准。
-- pruneFloatingLabels：dryRun 返回每个浮标世界坐标（**Y 已翻成 API 坐标**，便手动框选兜底）。每条 8s 熔断、连 3 败熔断整批、`batchSize` 默认 5（批间停 300ms，看 `batches`/`unprocessed` 分批续删，**不要调大硬跑**）。**大批量分多次跑**。
-- **浮空标签处理的源码改写第三兜底默认禁用**（实机事故：离线字节级验证过 ≠ 运行时安全，官方写回有格式校验弹窗拒绝）：仅显式传入 `allowSourceRewrite:true` 才尝试，返回带 `warning`，操作前保存工程。此开关与普通 `TEXT` 删除使用的内部快照路径分开；全失败返回 `manualDelete` 世界坐标清单。
-- **会话损坏迹象**：创建类指令（drawWire/placeNetLabel/placeText/placeDevice/labelWire/linkWire）突然全 `create failed!` 或超时而读类正常 → 判定损坏；不空跑（插件连 3 败自动熔断）；**不保存直接关页面重开**即可还原，重开后分批继续。
-- fixNetLabels：**dryRun 默认 true 只出四类体检报告**（id/net/世界坐标/问题/建议），确认后 `dryRun:false` 真修，逐条收错，修完自动 pruneFloatingLabels 复核。四类：浮空（parentId=$$root，DRC 来源）；重复（同线同网名>1 或锚点距<10）；反字（rotation 180）；位置不对（锚点离线>20 或导线戳出悬空端点）。
-- repairNet：人工拖标签致网断后用它收尾；流程另见 pitfalls.md。
-- **delete 加固**：先识别类型；删除调用后立即读回，只有仍在才按既有 400/600/1000ms 间隔复核，最后终扫对账。SDK 布尔返回不代表成功；写入超时或读回未知保持 partial，停止后续项和健康探针，不能用“终扫目标消失”清洗未知写入。`unprocessed` 只表示未处理，须先核对现场和写保护。非未知路径的健康探针仅单次串行创建/清理；探针不能代替保存重开。`taskId` 可用于查询原任务，超时不代表取消。`deletedBy` 含 `text` 时，日常统一用 `schematic.delete`，不自动保存；按任务另行 save→close→open 核验持久性。
-- 导线中点的 NET 属性标签**不支持单独删**（delete 报"删后仍在"是预期）——只能删整根导线重画。
+- **Official deletion gap for floating labels (`parentId=$$root`):** attribute primitives do not support deletion (`@internal`). Primary path: attach the label to a temporary wire by modifying `parentId`, delete the wire to cascade-delete the label, then verify by rescanning source. Official `modify` of `parentId` can falsely fail; trust the final source rescan.
+- `pruneFloatingLabels`: dry run returns world coordinates for every floating label (**Y is converted to API coordinates**) as a manual-selection fallback. 8 s circuit breaker per item; three consecutive failures break the whole batch; default `batchSize` 5 (300 ms between batches; review `batches`/`unprocessed` before continuing in batches; **do not increase it for a forced run**). **Run large batches in separate calls.**
+- **The third fallback—source rewrite for floating-label handling—is disabled by default** (live incident: offline byte-level validation did not establish runtime safety; official writeback was rejected by a format-validation dialog). Attempt only with explicit `allowSourceRewrite:true`; result includes `warning`; save the project first. This switch is separate from the internal snapshot path for ordinary `TEXT` deletion. If all methods fail, return a world-coordinate list in `manualDelete`.
+- **Signs of a damaged session:** creation commands (`drawWire/placeNetLabel/placeText/placeDevice/labelWire/linkWire`) suddenly all return `create failed!` or time out while read commands work → treat the session as damaged. Do not keep retrying (the plugin circuit-breaks after 3 consecutive failures); **close and reopen the page without saving** to recover, then continue in batches.
+- `fixNetLabels`: **`dryRun` defaults to true** and returns only a four-category report (id/net/world coordinates/problem/recommendation). After review, `dryRun:false` repairs; errors are collected per item; it then runs `pruneFloatingLabels` for verification. Categories: floating (`parentId=$$root`, source of DRC); duplicate (>1 label with same net on same wire or anchor distance <10); reversed (`rotation` 180); misplaced (anchor >20 from wire or wire extends into a dangling endpoint).
+- Use `repairNet` after manually dragging a label breaks a net; see `pitfalls.md` for the workflow.
+- **Hardened `delete`:** identify primitive type first; immediately read back after deletion, recheck at existing 400/600/1000 ms intervals only if still present, then perform final reconciliation. SDK boolean return does not prove success. On write timeout or unknown readback, keep partial and stop later items and health probes; do not use a “target absent at final scan” to clear an unknown write. `unprocessed` means only not processed; inspect state and write-protection first. On known paths, the health probe performs only one serial create/cleanup; it cannot replace save/close/reopen. `taskId` can query the original task; timeout does not mean cancellation. When `deletedBy` includes `text`, use `schematic.delete` for routine deletion and do not auto-save; verify persistence separately per task with save→close→open.
+- NET attribute labels at wire midpoints **cannot be deleted separately** (`delete` reporting “still present after delete” is expected); delete and redraw the whole wire.
 
-## ④ 查询与检查导出
+## ④ Query, inspection, and export
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `schematic.getPageInfo` | 图页信息+图框尺寸（titleBlock width/height，单位 10mil；titleBlockData 键决定 modifyTitleBlock 能改什么） | `pageUuid?` |
-| `schematic.listComponents` | 列器件 | `allPages?` |
-| `schematic.listPins` | 列引脚（编号/名称/坐标） | `primitiveId` |
-| `schematic.listWires` | 列导线（读回自查） | `net?` |
-| `schematic.listNetLabels` | 列全部网络标签（含 attached 和颜色——浮空标签就是 DRC"没有连接导线"来源；0.10.46 起查标签一律用本指令，listLabels 已删） | `net?` |
-| `schematic.listTexts` | 列注释文本（0.10.46 起带 `offGrid` 格点标记，接替已删 listLabels 的"不在格点"排查） | 无 |
-| `schematic.listRects` | 列全部矩形（返回归一化 `span:{x1,y1,x2,y2}`，布局计算一律用 span） | 无 |
-| `schematic.checkRectOverlap` | 矩形两两重叠检查（输出带 span） | 无 |
-| `schematic.getComponentsInRect` | 区框内器件（按锚点判定；按 rectId 或显式 span；支持 margin 外扩） | `rectId` 或 `x1,y1,x2,y2`, `margin?` |
-| `schematic.getPrimitivesInRegion` / `getPrimitiveAtPoint` | 区域/点查图元 | ⚠️ 文本类可能不被区域查询返回 |
-| `schematic.runDrc` | 原理图 DRC（内部自动两遍取稳定值） | 无 |
-| `schematic.runDrcDetailed` | DRC 逐条明细（**需 EDA v4.2+**；4.1 只返回聚合结构并标 `aggregated:true`，别假装支持或反复重试） | 无 |
-| `schematic.structuralAudit` | **【0.10.60】整页结构+排版验收（只读）**：并查集编树+官方 net 对账。blocking=桥接(LABEL_NET_MISMATCH/树内多网名)/异网共线重叠/重复位号；candidate=孤立树/浮标/引脚穿线/十字交叉/区框重叠/器件出区/器件相碰(引脚云近似待目检)；info=零长段/悬端/同网重叠。九页验收逐页调用 | `ncExempt?`(豁免名单如 ["U2.2"]), `deviceMargin?`(相碰筛选外扩 mil,默认 10) |
-| `schematic.exportNetlist` | 导网表（base64；须解析后逐网络核对引脚） | `fileName?`, `netlistType?` |
-| `schematic.getNetlist` | 直接读网表字符串（0.10.44；exportNetlist 返空时的连通性审计备选，只读不写） | `netlistType?` |
-| `schematic.save` | 保存原理图 | 无 |
+| `schematic.getPageInfo` | Page info and frame size (`titleBlock` width/height in 10 mil units; `titleBlockData` keys determine what `modifyTitleBlock` can change) | `pageUuid?` |
+| `schematic.listComponents` | List components | `allPages?` |
+| `schematic.listPins` | List pins (number/name/coordinates) | `primitiveId` |
+| `schematic.listWires` | List wires for readback checks | `net?` |
+| `schematic.listNetLabels` | List all net labels (including attachment and color; floating labels cause DRC “no connecting wire”; since 0.10.46, use this for labels; `listLabels` was removed) | `net?` |
+| `schematic.listTexts` | List annotation text (since 0.10.46 includes `offGrid` marker, replacing deleted `listLabels` for off-grid checks) | None |
+| `schematic.listRects` | List all rectangles (returns normalized `span:{x1,y1,x2,y2}`; use `span` for all layout calculations) | None |
+| `schematic.checkRectOverlap` | Pairwise rectangle-overlap check (includes `span`) | None |
+| `schematic.getComponentsInRect` | Components in a region (by anchor; use `rectId` or explicit span; supports expanded `margin`) | `rectId` or `x1,y1,x2,y2`, `margin?` |
+| `schematic.getPrimitivesInRegion` / `getPrimitiveAtPoint` | Query primitives by region/point | ⚠️ Region queries may omit text |
+| `schematic.runDrc` | Schematic DRC (internally runs twice to obtain a stable result) | None |
+| `schematic.runDrcDetailed` | Per-item DRC details (**requires EDA v4.2+**; v4.1 returns aggregate structure only and marks `aggregated:true`; do not claim support or retry repeatedly) | None |
+| `schematic.structuralAudit` | **[0.10.60] Read-only whole-page structure/layout acceptance:** union-find tree construction + official net reconciliation. `blocking` = bridges (LABEL_NET_MISMATCH/multiple net names within a tree)/collinear overlap between different nets/duplicate designators; `candidate` = isolated trees/floating labels/pin crossings/orthogonal crossings/overlapping regions/components outside regions/component collisions (approximate pin clouds; visual check required); `info` = zero-length segments/dangling ends/same-net overlap. Call once per page for a nine-page review. | `ncExempt?` (exempt list such as ["U2.2"]), `deviceMargin?` (collision filter expansion in mil; default 10) |
+| `schematic.exportNetlist` | Export netlist (base64; parse and check pins on each net) | `fileName?`, `netlistType?` |
+| `schematic.getNetlist` | Read netlist string directly (since 0.10.44; read-only connectivity-audit fallback when `exportNetlist` is empty) | `netlistType?` |
+| `schematic.save` | Save schematic | None |
 
-- 0.10.104 起，网表文件导出拒绝零字节文件及空 base64；`getNetlist` 拒绝纯空白文本。返回非空数据仍须解析并核对实际引脚，不能只看导出成功。
-- 官方单对象 `get()` 对已删除 ID 永久返回缓存旧对象——存在性判断用全量列表/源码重扫，别用 `get()`。
-- **structuralAudit 宿主语义边界（0.10.61 实测）**：①宿主会把物理相接的异网名导线**合并成一个 wire** 并把 net 定为其中一个名——桥接实际由 LABEL_NET_MISMATCH[blocking] 抓获，MULTI_NET_TREE 只在字段可伪造的场景出现，不触发属正常；②画线穿过引脚会被官方**吸附拆分**、引脚成为端点=合法连接——PIN_INTERIOR_LANDING 在宿主数据上通常不触发，规则保留作防御；③图框 (0,0) 会被报 COMP_OUTSIDE_REGION[candidate]，图框不是器件，可忽略。
-- 官方 `getAll(net)` 网络过滤不可靠——插件已改全量取回手动过滤。
-- 人工在 EDA 界面**拖网络标签会丢附着甚至删标签、碎网**——拖后用 `listNetLabels` 查 attached 并审计成员完整性。
-- **文档源码与 API 的 Y 轴符号相反**（API y=-600 ↔ 源码 y=+600）——两边比对必须翻转 Y。
-- `createNetLabel` 有假失败（返回空但已创建附着）——复查按**属性值+坐标**匹配，别依赖导线网名的异步传播。
+- Since 0.10.104, netlist file export rejects zero-byte files and empty base64; `getNetlist` rejects whitespace-only text. Non-empty data still needs parsing and actual pin verification; export success alone is insufficient.
+- The official single-object `get()` permanently returns a cached old object for a deleted ID. Check existence with a full list/source rescan, not `get()`.
+- **`structuralAudit` host semantics (confirmed in 0.10.61):** ① The host merges physically touching wires with different net names into one wire and assigns one of the names; bridges are actually caught by LABEL_NET_MISMATCH[blocking]. MULTI_NET_TREE may not occur unless fields can be forged; that is normal. ② A wire drawn through a pin is snapped/split by the host, making the pin an endpoint and a legal connection; PIN_INTERIOR_LANDING usually does not trigger on host data but remains as a defensive rule. ③ The frame at (0,0) may be reported as COMP_OUTSIDE_REGION[candidate]; it is not a component and can be ignored.
+- Official `getAll(net)` filtering is unreliable; the plugin now retrieves all items and filters manually.
+- **Dragging a net label in the EDA UI can detach or delete it and break a net.** After dragging, check `attached` with `listNetLabels` and audit membership completeness.
+- **Source and API Y axes have opposite signs** (API y=-600 ↔ source y=+600); invert Y when comparing them.
+- `createNetLabel` can falsely fail (empty return even though an attached label was created). Verify by **attribute values + coordinates**; do not rely on asynchronous propagation of the wire's net name.
 
-## ⑤ 宏指令（组合多个指令）
+## ⑤ Macro commands (combine commands)
 
-`cmd` 为 `macro`，`steps` 按序执行；步骤设 `id` 后，后续步骤可用 `$id` 或 `$id.字段` 引用其结果。**返回结果的键是 `steps`**（⚠️ 不是 result/data，解析时注意）。任一步失败即中断（`stopOnError:false` 可关闭）。
+Use `cmd:"macro"`; `steps` execute in order. After assigning a step `id`, later steps can reference its result using `$id` or `$id.field`. **The response key is `steps`** (⚠️ not `result` or `data`; parse accordingly). Any failed step stops the macro (`stopOnError:false` disables this behavior).
 
 ```json
 {
 	"cmd": "macro",
-	"instanceId": "<已核对的实例ID>",
+	"instanceId": "<verified instance ID>",
 	"params": {
 		"steps": [
 			{ "id": "u1", "cmd": "schematic.placeDevice", "params": { "lcscId": "C25804", "x": 200, "y": 200 } },

@@ -1,162 +1,162 @@
-# ⚠️ 踩坑实录（按主题分组）
+# Field notes: pitfalls grouped by topic
 
-全是实测教训。操作对应主题前必读；历史行为以实际版本、/help 和读回为准。
+These are lessons from hands-on testing. Read the relevant topic before operating. For historical behavior, check the actual version, `/help`, and readback.
 
-## 测试点封装与系统属性（0.10.94 候选）
+## Test-point footprints and system properties (0.10.94 candidate)
 
-- Test-Point 的历史反馈出现过放置后缺封装和属性修改误报。后续干净工程中，0.10.92 只放置该器件能带入工程封装，网表可读；历史丢失原因仍未确认。
-- `modifyComponent` 的九个系统属性会由宿主分离到专用字段。0.10.94 按对应字段核验，不再仅因 `otherProperty` 中缺少系统键就报错。重复值冲突仍在写入前拒绝。
-- 不能把库封装 UUID 当作工程内封装引用。放置后仍需核对资源与引脚编号，交付时验证网表及保存重开。已经人工修好的旧图不能替代新插件验收。
-- 完整参数及验证状态见 [原理图命令](commands-schematic.md)。
-- 0.10.94 属性读回修复通过保存重开；0.10.95 确认 `getDocumentFootprintSources()` 在该原理图返回空数组，完整工程包中资源存在。0.10.96 候选改用完整工程导出的精确封装路径核验，并保留图页/工程与实例引用检查。2026-10-10 已在隔离宿主验证新测试点放置及保存重开，资源引用与网表保持一致。该修复针对验证范围错误，历史丢封装原因仍未复现；不要猜前缀、自动保存或重试放置。
+- Historical feedback reported a missing footprint after placing a test point and a false error during property modification. In a later clean project, placing only this component in 0.10.92 brought its project footprint and allowed netlist readback; the cause of the historical loss remains unconfirmed.
+- The host separates nine system properties from `modifyComponent` into dedicated fields. In 0.10.94, verification checks those fields instead of reporting an error solely because the system keys are absent from `otherProperty`. Conflicting duplicate values are still rejected before writing.
+- Do not use a library-footprint UUID as the in-project footprint reference. After placement, verify the resource and pin numbers; at delivery, verify the netlist and save/reopen. A manually repaired old drawing does not replace acceptance of the new plugin.
+- See [schematic commands](commands-schematic.md) for full parameters and verification status.
+- The 0.10.94 property-readback fix passed save/reopen. In 0.10.95, `getDocumentFootprintSources()` was confirmed to return an empty array for that schematic even though the complete project archive contained the resource. The 0.10.96 candidate verifies the exact footprint path from a full project export and retains page/project and instance-reference checks. On 2026-10-10, placement of a new test point and save/close/reopen passed in an isolated host. Resource references and netlist remained consistent. The fix addresses an incorrect verification boundary; the historical missing-footprint cause has still not been reproduced. Do not guess a prefix, save automatically, or retry placement.
 
-## 1. 返回值不可信（总纲）
+## 1. Do not trust return values (general rule)
 
-- 官方 `delete()` 对类型不匹配甚至不存在的 ID 也可能返回 true——看 `failed` 数组。
-- 官方 modify/create 有**假成功**（返回非空但保存后没生效）也有**假失败**（返回空但实际已生效，事务不回滚）——**成败一律以读回/源码重扫为准**（插件 modify/create/delete 已内置读回验证，返回带 `readback`）。
-- 官方单对象 `get()` 对已删除 ID **永久返回缓存旧对象**——存在性用全量列表/源码重扫判断。
-- 官方 `getAll(net)` 网络过滤不可靠——全量取回手动过滤。
-- **多字段合并修改整体失效**（"位置+旋转"同传→什么都没改）——插件已原子化拆分+逐步读回；调用侧多字段照传，但批量命名偶发失效必须看 `failed`。
-- 大批量改动后网表/DRC 可能返回过渡态——插件已稳定化（runDrc 两遍、batchWire 审计重试），自组指令时注意。
+- The official `delete()` may return true for a mismatched type or a nonexistent ID; inspect the `failed` array.
+- Official modify/create APIs can **falsely succeed** (return nonempty data but fail to persist after save) or **falsely fail** (return empty data even though the change took effect; the transaction is not rolled back). **Always use readback or a source rescan to determine the outcome.** Plugin modify/create/delete commands have built-in readback verification and include `readback` in the response.
+- The official single-object `get()` permanently returns a cached old object for a deleted ID. Check existence with the full list or a source rescan.
+- The official `getAll(net)` net filter is unreliable; retrieve everything and filter manually.
+- **Merging modifications to multiple fields can fail as a whole** (sending position and rotation together can change nothing). The plugin now splits these atomically and reads back each step. Callers can still send multiple fields together, but occasional batch-renaming failures must be checked in `failed`.
+- After large batches, netlist/DRC results may be transitional. The plugin stabilizes them (two runs for `runDrc`, audit retry for `batchWire`); take care when composing commands yourself.
 
-## 2. 无撤销
+## 2. No undo
 
-- 官方无撤销 API，删错无法挽回。
-- 防护：破坏性指令前代理自动导出 .epro 到 `bridge/backups/`（60 秒只备一次，返回带 `backup`，**确认实际备到**）；大改前手动 `project.exportFile`；删除前用列表指令确认目标 ID。
-- 搞坏了：EDA 自动备份在 `文档\LCEDA-Pro\online-projects-backup\<工程名>\`（epru 是 NDJSON 文本，WIRE 是容器、LINE 存 lineGroup 归属、NET 挂 ATTR）；PCB 侧用 `pcb.sourceRollback` 恢复。
-- 关标签页选「不保存」**不一定回滚**（内存模型可能仍在），别当可靠手段。
+- The official API has no undo command. A mistaken deletion cannot be recovered directly.
+- Protection: before destructive commands, the proxy automatically exports an `.epro` to `bridge/backups/` (only once per 60 seconds; the response includes `backup`—**confirm that a backup was actually made**). Manually run `project.exportFile` before major changes. Before deletion, verify the target ID with a list command.
+- If the project is damaged, EDA automatic backups are under `Documents\LCEDA-Pro\online-projects-backup\<project-name>\`. `epru` is NDJSON text; WIRE is a container; LINE stores `lineGroup` ownership; NET is attached to ATTR. On the PCB side, use `pcb.sourceRollback` to restore.
+- Closing a tab and choosing “Don't Save” **may not roll back changes** because the in-memory model may remain modified. Do not rely on this.
 
-## 3. 连线与标签
+## 3. Wires and labels
 
-- **NC 引脚禁止接线**（画短桩抛 `create failed!`）——插件预检给中文报错。
-- **共线合并陷阱**：官方把共线重叠/相接的导线自动合并——① 相邻短桩同间隙重叠合并挂两个标签直接串网；② 直线穿中间引脚把它并进网；③ 不同网横腿同深度共线合并。labelWire/linkWire/buildBlock 已防，**手画 drawWire 同样避开**。
-- connectPin 端点落引脚原点、不探入本体；EDA 只认与引脚线段非零重叠的导线——端点对端点重合、网标直贴引脚=致命"引脚端点重叠且未连接"。
-- **标签 rotation 默认 0、锚点压导线/桩末端**（附着看锚点，离线 5 单位即浮标；文字自锚点右伸）；显式传入 rotation 时尝试设置并读回核对。rotation 180=反字（装机实锤），镜像同反字且官方属性接口不支持 mirror——被转/镜像的标签只能转正或删了重放。文字宽≈4.4×字符数+5 单位。短桩默认 60、最小 20。
-- placeNetLabel：压线被拒（自动 ±2 微偏重试）；只有指定标签 ID、父导线和父导线属性三处读回一致才确认附着，ghost 标签也同样验证。读回未知或确认浮空以 partial 异常返回并保留标签及 ID；`noVerify` 不确认附着。附近同名导线或负坐标不能证明附着；已带网名的导线别再放同名标签（插件拒，force 强行）。
-- **drawWire 带 net 会自动在导线中点落 NET 属性标签**（与 placeNetLabel 两套，同网并存即重复，导线持有属性删不掉）——要标签收尾就"无名线+placeNetLabel"，别两边命名。
-- 导线持有的 Name/NET 属性**删不掉**（官方无类级删除）——唯一可靠办法：**删线重画**（listWires 留几何→delete→drawWire 重画命名→exportNetlist 审计）。
-- `createNetLabel` 假失败复查按**属性值+坐标**匹配，别依赖导线网名异步传播；**文档源码与 API 的 Y 轴符号相反**（API y=-600 ↔ 源码 y=+600），从源码读坐标发指令必须**先翻转 Y**，否则图元画到镜像位置且批量返回全 OK 不易察觉（刹车板实测踩过）。附着以指定标签及父导线关系读回为准，坐标正负本身不能证明附着。
-- 人工在 EDA 界面**拖网络标签会丢附着甚至删标签、碎网**——拖后 listNetLabels 查 attached+网表审计成员。
-- 碎网流程：① exportNetlist 审计期望成员；② 缺标签的导线补同名标签（锚点取线段中点）；③ 删不掉的重复/错误属性→删线重画；④ 补完网表审计+runDrc 双确认。
+- **Do not wire NC pins.** Drawing a short stub causes `create failed!`; the plugin precheck returns a Chinese error.
+- **Collinear merge trap:** the official host automatically merges collinear overlapping or touching wires. (1) Overlapping short stubs with the same gap can merge and attach two labels, shorting the nets. (2) A straight wire passing through a middle pin can connect that pin to the net. (3) Collinear horizontal legs from different nets at the same depth can merge. `labelWire`, `linkWire`, and `buildBlock` guard against this; avoid the same geometry when drawing manually with `drawWire`.
+- `connectPin` endpoints land at pin origins and do not extend into the symbol body. EDA recognizes a wire only when it overlaps the pin segment by a nonzero length. Endpoint-to-endpoint contact or placing a net label directly on a pin causes the fatal “引脚端点重叠且未连接” (“pin endpoint overlaps but is not connected”) error.
+- **Label defaults:** rotation defaults to 0; the anchor is placed on the wire or stub tip. Attachment is determined by the anchor; a label 5 units off the wire is floating. Text extends to the right from the anchor. If `rotation` is explicitly supplied, set it and verify readback. Rotation 180 produces reversed text (confirmed in the installed host); mirroring also reverses text, and the official property interface does not support `mirror`. Rotate labels back or delete and recreate them. Text width is about `4.4 × character count + 5` units. A short stub defaults to 60 and has a minimum of 20.
+- `placeNetLabel`: placing over a wire is rejected (the plugin retries automatically with a ±2-unit offset). Confirm attachment only when readback agrees at all three points: the requested label ID, parent wire, and the parent's properties. Verify ghost labels the same way. Unknown readback or confirmed floating labels produce a partial error while retaining the label and ID; `noVerify` does not confirm attachment. A nearby wire with the same name or positive/negative coordinates do not prove attachment. Do not place a duplicate label on a wire that already has a net name; the plugin rejects this unless `force` is used.
+- **`drawWire` with `net` automatically places a NET property label at the wire midpoint.** This is separate from `placeNetLabel`; using both for the same net creates duplicates, and a wire-owned property cannot be deleted. For a labelled wire, draw it unnamed and finish with `placeNetLabel`; do not name it in both places.
+- The Name/NET property attached to a wire **cannot be deleted** (the official API has no class-level removal). The only reliable fix is to redraw the wire: use `listWires` to preserve its geometry, then `delete`, redraw with `drawWire`, add the name as needed, and audit with `exportNetlist`.
+- When checking a false failure from `createNetLabel`, match by **property value and coordinates**; do not depend on asynchronous propagation of the wire net name. **Document-source and API Y coordinates use opposite signs** (API `y=-600` corresponds to source `y=+600`). If reading coordinates from source and sending a command, **invert Y first**. Otherwise, geometry is mirrored and a batch may report every step as OK; this happened on a brake-board project. Confirm attachment by reading back the specified label and parent-wire relationship; coordinate signs alone prove nothing.
+- **Dragging a net label in the EDA UI can detach it, delete it, or fragment a net.** After dragging, inspect `attached` with `listNetLabels` and audit net membership in the netlist.
+- Repair a fragmented net: (1) audit expected members with `exportNetlist`; (2) add a same-name label to wires missing one, with the anchor at the wire-segment midpoint; (3) redraw wires to remove duplicate or wrong properties that cannot be deleted; (4) audit the netlist again and confirm with `runDrc`.
 
-## 4. 批量删除与浮标清理
+## 4. Batch deletion and floating-label cleanup
 
-- **大批量删除分批多次跑**（原理图 delete batchSize 10 / prune 5），看 `batches`/`unprocessed` 续删，别调大硬跑。
-- `schematic.delete` 在删除调用后立即读回；只有仍存在才按既有 400/600/1000ms 间隔复核。超时不代表没删；读回未知则保留 partial 并停止后续写入，不据此判断宿主根因。
-- 创建连续失败或超时时停止写入并核对现场；删除存在未知写入时跳过健康探针。非未知路径的探针仅单次串行创建/清理，失败或残留必须保留证据。不要依据一次超时直接判断页面损坏或自动关页。
-- 浮标（parentId=$$root）删除主通道借尸还魂（临时线→挂 parentId→删线级联→源码重扫）；官方 modify parentId 假失败（返回 falsy 但已生效）——以源码重扫为准。
-- **浮空标签处理的源码改写第三兜底默认禁用**（离线验证通过 ≠ 运行时安全，官方写回有额外格式校验）：`allowSourceRewrite` 仅用于此路径，须明确传 `true` 才尝试；先保存并检查 warning。此开关与普通 `TEXT` 删除使用的内部快照路径分开。
+- **For large deletions, use several batches** (`schematic.delete` batchSize 10; `prune` batchSize 5). Inspect `batches` and `unprocessed` and continue; do not force a larger batch.
+- `schematic.delete` reads back immediately after deletion. It repeats at the existing 400/600/1000 ms intervals only if the item still exists. A timeout does not prove deletion failed. If readback is unknown, preserve a partial result and stop subsequent writes; do not infer the host root cause from it.
+- If creation repeatedly fails or times out, stop writes and inspect the current state. If a delete has an unknown write outcome, skip health probes. Outside an unknown-outcome path, run a probe only as a single serial create/cleanup; preserve evidence if it fails or leaves residue. Do not infer page damage or automatically close the page from one timeout.
+- The primary floating-label removal path for `parentId=$$root` repurposes an object: create a temporary wire, assign `parentId`, delete the wire (cascading removal), then rescan source. The official modification of `parentId` may falsely fail (return falsy even though it took effect); trust the source rescan.
+- **The third fallback, which rewrites source to handle floating labels, is disabled by default.** Passing offline validation does not prove runtime safety because the official write path performs extra format checks. `allowSourceRewrite` is specific to this path and must be explicitly set to `true` to try it. Save first and inspect warnings. This option is separate from the internal snapshot path used to delete ordinary `TEXT` objects.
 
-## 5. PCB 布局与分组
+## 5. PCB placement and grouping
 
-- DRC **只查铜皮**不查本体挤压——checkPlacement 用焊盘包围盒，大本体加 margin 或按实测尺寸核算。
-- drawOutline 对外 x/y 是**左下角**（官方左上角，插件换算）；板框自动转 Region，重复板框先 getPrimitivesInRegion 找 ID 再 delete。
-- groupBySchematicRegions：板框解析以实时 Polyline/Region API 优先、源码兜底、不一致采信 API；"摆不下"是如实报错——需拆框或加大板框；dryRun 与实跑 placements 逐项可比。
-- groupBySchematicRegions **dryRun 默认 true**，确认方案再真跑（0.10.47 起唯一自动布局宏，autoPlace 已删：autoFromSchematic 模式焦点悖论实测不可用，显式分组无备份且质量等价）。
+- DRC **checks copper only**, not body crowding. `checkPlacement` uses pad bounding boxes; add `margin` for large bodies or calculate from measured dimensions.
+- External `x`/`y` values for `drawOutline` refer to the **bottom-left corner** (the official API uses top-left; the plugin converts). Board outlines become Regions. To remove a duplicate outline, first find its ID with `getPrimitivesInRegion`, then delete it.
+- `groupBySchematicRegions`: prefer the live Polyline/Region API to parse the board outline and fall back to source only when needed; if API and source disagree, trust the API. “Does not fit” is an accurate error; split the frame or enlarge the board. Placements in dry-run and real execution can be compared item by item.
+- `groupBySchematicRegions` defaults `dryRun` to `true`; review the plan before running. Since 0.10.47 it is the only automatic-layout macro (`autoPlace` was removed). The `autoFromSchematic` focus paradox was confirmed unusable, while explicit grouping has no backup and equivalent quality.
 
-## 6. 检查与导入
+## 6. Checks and import
 
-- 原理图 DRC 4.1 只返回分类计数；`runDrcDetailed` 需 EDA v4.2+，4.1 只返回聚合（`aggregated:true`），**别假装支持或反复重试**。
-- 原理图 DRC 致命项清零后再导入。0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
-- `save` 无修改返回 false 是官方行为；`renameBoard` 前先 `project.getBoardInfo` 防重名误改。
-- `openDocument` 参数名是 `uuid`（不是 documentUuid），传错静默失败——调用后查返回 ok；偶发切页超时先重试或手动切页再复核。
-- `runDrcDetailed` 偶发超时一次后自恢复——先重试，勿判插件失效。
+- Schematic DRC in EDA 4.1 returns category counts only. `runDrcDetailed` requires EDA v4.2+; 4.1 returns aggregate results (`aggregated:true`). Do not pretend it supports details or retry repeatedly.
+- Clear fatal schematic DRC errors before importing. Since 0.10.105, even if the SDK returns `true`, `pcb.importChanges` stops the macro with `partial:true,retryable:false,outcome:pending-verification`. The SDK response only means the call ended; the user may still need to click “Apply Changes” in EDA. Do not retry automatically. Handle any confirmation dialog, independently read back expected components and nets, then continue.
+- `save` returning false when there are no changes is official behavior. Before `renameBoard`, run `project.getBoardInfo` to avoid changing the wrong board with the same name.
+- The parameter for `openDocument` is `uuid`, not `documentUuid`; the wrong key fails silently. Check the returned `ok` after the call. For an occasional timeout while switching pages, retry or switch manually and verify again.
+- If `runDrcDetailed` times out once, it may recover on its own. Try again before concluding that the plugin has failed.
 
-## 7. 文档源码写入（开发者向）
+## 7. Writing document source (developer use)
 
-- 文档源码是**行式 JSON 变更日志**（`JSON(header)||JSON(data)`，同 (type,id) 由 ticket 分新旧，空 data=删除墓碑），不是快照。安全写法：**append-only**——① 不编辑旧行，变更追加文末；② ticket 从 max+1 单调递增；③ 改图元用原 data 浅拷贝只覆盖要改的键；④ 移动器件坐标双字段同改（x/y/angle 与 positionX/positionY/rotation 一起）；⑤ 删除用墓碑不物理删行；⑥ 写入前整份备份、写后回读逐值比对（容差 0.001）、失败整份恢复、全过才 save。生成图元一律 `spg_` 前缀+文档层 layerId=13 便于清场。
-- 管线封装在 `pcb.groupBySchematicRegions`/`pcb.sourceRollback`（基础设施 `src/pcb/sourcelog.ts`）。
+- Document source is a **line-oriented JSON change log** (`JSON(header)||JSON(data)`). Entries with the same `(type,id)` use `ticket` to order old and new versions; empty `data` is a deletion tombstone. It is not a snapshot. Safe method: **append only**. (1) Do not edit old lines; append changes at the end. (2) Set `ticket` monotonically from `max+1`. (3) To change a primitive, shallow-copy its original `data` and replace only the needed keys. (4) When moving a component, update both coordinate field pairs (`x/y/angle` and `positionX/positionY/rotation`). (5) Delete with a tombstone, never by physically removing a line. (6) Back up the full source before writing; afterwards read back and compare each value (tolerance 0.001). Restore the entire source on failure and save only if every check passes. Generated primitives must use the `spg_` prefix and document-layer `layerId=13` for cleanup.
+- The pipeline is wrapped by `pcb.groupBySchematicRegions` and `pcb.sourceRollback` (infrastructure: `src/pcb/sourcelog.ts`).
 
-## 8. 界面与杂项
+## 8. UI and miscellaneous
 
-- `editor.screenshot` 默认只截当前视口，全图加 `zoomToAll:true`；截图空白是渲染时机问题，重截即可。**但窗口在后台时它截的是旧缓存帧（连截字节级相同），"图上看不到新物件"先疑截图再疑数据——视觉验收用 `schematic.exportPng`**（pitfalls K9~K10）。裁剪坐标按画布比例换算（PCB mil、原理图 10mil）。
-- macro 返回结果的键是 `steps`（不是 result/data）。
-- `project.modifyTitleBlock` 只能改图框**已存在**的字段；纸张切换让用户在 EDA 界面手动改。
-- `project.createPcb`/`project.createSchematic` 的 boardName **必须是已存在的板子名**；新建省略 boardName，之后 `project.associateBoard` 关联。
-- 历史开发环境另有 49620 原生 API 网关，但未随本仓库发布，不是使用前置条件。普通调用先查正式指令帮助；扩展开发需单独确认调试环境和授权。
-- **按指令授权范围操作**：不超出被调用指令的授权范围修复、删除或恢复。`dedupeWireNets` 与 `autoRouteStatus` 在已写入后失败时会尝试整页快照恢复并读回；恢复失败或未确认仍报错，不保证成功。`autoLayout` 本身不自动恢复。
+- `editor.screenshot` captures only the current viewport by default; add `zoomToAll:true` for the full drawing. Blank screenshots can be a render-timing issue; capture again. **However, when the window is in the background, the screenshot is an old cached frame (identical bytes on consecutive captures).** If a newly placed object is not visible, suspect the screenshot first and the data second. Use `schematic.exportPng` for visual acceptance (see K9–K10). Convert crop coordinates using the canvas scale (PCB mil; schematic 10 mil).
+- A macro response uses the key `steps`, not `result` or `data`.
+- `project.modifyTitleBlock` can modify only fields that already exist in the title block. Ask the user to change sheet size in the EDA UI.
+- `project.createPcb` and `project.createSchematic` require `boardName` to be the name of an existing board. To create a new board, omit `boardName` and then associate it with `project.associateBoard`.
+- Historical development setups had a native API gateway on port 49620, but it was not shipped with this repository and is not a usage prerequisite. For ordinary use, check the official command help first. Extension development requires separate confirmation of the debugging setup and authorization.
+- **Stay within the command's authorization scope:** do not repair, delete, or restore beyond the scope of the invoked command. If `dedupeWireNets` or `autoRouteStatus` fails after writing, it attempts a full-page snapshot restore and readback; if recovery fails or is unconfirmed, the command still reports an error and does not guarantee recovery. `autoLayout` does not recover automatically.
 
-## 桥接开关与多实例（0.10.66~0.10.70 实测，K5~K8）
+## Bridge controls and multiple instances (0.10.66–0.10.70 tested; K5–K8)
 
-- **「断开指令代理」=暂停语义（0.10.68 起）**：用户点断开后连接随即断开、AI 指令一律被拒（错误明示），EDA 封装的自动重连被代理持续挡回，全部断开后代理空闲 300 秒自动退出；点「连接指令代理」恢复，后台没在跑插件会自动拉起。`/connections` 条目带 `paused` 字段。
-- **恢复口令（0.10.69）**：每次断开代理要求匹配口令才允许恢复——旧版本残留模块重放的 hello 帧、其他 AI 会话发的恢复声明一律被拒（`resume-rejected` 记 lane-log）。**AI 侧不要尝试绕**：只有用户点菜单能解除暂停。
-- **`sys_WebSocket.close()` 官方 bug**：调用后连接不关闭。插件已全部改应用层帧（bye/pause/resume），排查连接问题别再用 close 思路。
-- **EDA 为扩展累积多个 JS 上下文**：重复导入/部分菜单点击会产生新上下文；`sys_WebSocket` 注册表按 WS_ID 全局共享、后注册顶替先注册；偶发新上下文指令表只剩 macro（"残态"）。0.10.70 起菜单函数幂等自激活兜底；遇残态让用户重开 EDA 窗口。
-- **多 AI 会话共用代理**：指令必须带顶层 instanceId 且核对 `info.project`；不带会落到全局选中实例——实测另一会话的画图指令曾因此落进本窗口。用户暂停本窗口不影响其他窗口（暂停按实例生效）。
-- **多窗口版本不一很正常**：`/connections` 里不同实例 version 不同（旧窗口没重开），选窗时以实例为准，别假设全是最新版。
+- **“Disconnect Command Proxy” means pause (since 0.10.68):** after the user disconnects, that instance disconnects immediately and rejects all AI commands with an explicit error. The proxy continuously blocks the EDA wrapper's automatic reconnect. After all instances disconnect, the proxy exits after 300 seconds of idle time. Choose “Connect Command Proxy” to resume; if the plugin is not running in the background, EDA starts it automatically. `/connections` includes a `paused` field.
+- **Resume token (0.10.69):** each proxy disconnect requires a matching token to resume. A hello frame replayed from a stale module or a resume declaration from another AI session is rejected (`resume-rejected` is written to lane-log). **Do not try to bypass this from the AI side.** Only the user's menu action can clear the pause.
+- **Official `sys_WebSocket.close()` bug:** the connection does not close after calling it. The plugin now uses application-layer frames (`bye`/`pause`/`resume`); do not troubleshoot connection problems by trying `close` again.
+- **EDA accumulates multiple JavaScript contexts for an extension:** repeated imports or some menu clicks can create new contexts. The `sys_WebSocket` registry is shared globally by `WS_ID`, and a later registration replaces an earlier one. Occasionally, a new context has only the `macro` command table (“residual state”). Since 0.10.70, menu functions have an idempotent self-activation fallback. If residual state occurs, ask the user to reopen the EDA window.
+- **Multiple AI sessions share the proxy:** every command must include the top-level `instanceId` and check `info.project`. Without it, commands route to the globally selected instance; a drawing command from another session once landed in this window. Pausing this window does not affect other windows; pause is per instance.
+- **Different versions in different windows are normal:** `/connections` may show different versions for different instances when an old window has not been reopened. Select by instance and do not assume every window is current.
 
-## 超时与调试（0.10.36~0.10.37 定论）
+## Timeout and debugging (conclusions from 0.10.36–0.10.37)
 
-- **超时≠取消**：代理/扩展超时只是放弃等待，指令内部可能仍在后台执行（EDA 官方 API 无取消机制）。重发前先用只读指令确认现场，避免重复写入。0.10.37 起全链路（客户端 300s / 代理 300s / 扩展 300s / 空闲退出 300s）统一，改代理脚本须重启代理才生效。
-- **system.eval 不可用**：EDA 扩展沙箱同时禁用 new Function 和 eval（0.10.36 实测），别再用它调试，提需求封正式指令。
+- **A timeout does not mean cancellation:** the proxy/extension may stop waiting while the command continues in the background; the official EDA API has no cancellation mechanism. Before resending, check the current state with read-only commands to avoid duplicate writes. Since 0.10.37, all timeouts were aligned at 300 seconds (client, proxy, extension, and idle exit). Restart the proxy after changing its script.
+- **`system.eval` is unavailable:** the EDA extension sandbox disables `new Function` and `eval` (tested in 0.10.36). Do not use them for debugging; request a formal command instead.
 
-## 库指令假失败（0.10.38 实测）
+## Library commands can falsely fail (tested in 0.10.38)
 
-- **lib.footprintModify 报 `[object Object]`/报错但可能实际已改成功**，且**修改后封装 uuid 会变化**（实测 f2382a3a→4b6d2d72）。官方 lib_Footprint.modify 会 reject 普通对象（0.10.38 起框架 JSON 序列化不再吞消息）。任何 modify 后必须 `lib.footprintSearch` 按名字复核，不要沿用旧 uuid。
-- `lib.footprintGet` 对不存在/已改名的 uuid 也会 reject 对象而非返回空——报错不等于封装丢了，先按名字搜。
+- **`lib.footprintModify` may show `[object Object]` or another error even though the change succeeded.** The footprint UUID changes after modification (tested: `f2382a3a` → `4b6d2d72`). Since 0.10.38, framework JSON serialization no longer swallows messages. After any modification, search by name with `lib.footprintSearch` and verify; do not keep using the old UUID.
+- `lib.footprintGet` may reject with an object rather than return an empty value for a missing or renamed UUID. An error does not mean the footprint is lost; search by name first.
 
-## 网表与封装属性（0.10.52 受控实测，EDA 4.1.60）
+## Netlists and footprint attributes (controlled test, 0.10.52; EDA 4.1.60)
 
-- **Footprint 属性 = 空串 → 网表双路径全死**：getNetlist 报"官方返回非字符串或空"、exportNetlist 报"官方返回空（File|undefined）"，Protel2/PADS 一起死，可逆（恢复非空值即恢复）。attr=null（未绑定）反而正常，FOOTPRINT 列自动用器件自带封装。**诊断 XLink 式网表返空先查有没有空串封装**。
-- **Footprint 裸名绑定无效**：setAttribute 写 `R0603` 这类裸名，导出能成功但 FOOTPRINT 列输出 `undefined`（PCB 导入会炸）；正确格式疑为带 uuid 的 JSON（同 DeviceName 格式），未验证。别用裸名补封装。
-- **网表范围 = 整个工程**（跨全部原理图），不是活动页；某页器件属性损坏会把整个工程导出拖死。
-- 网表首个坏快照缺失的根因尚未确认；外部逐页脚本仅用于补充并留存证据，不代表 `getNetlist` 算法已修复。
-- **空串封装失败循环 + save 后，器件全部 ATTR 记录可能丢失**（器件还在，位号/封装/Convert 全没，getAttributes 返空），网表转为**静默剔除**该器件——比报错更危险，导出"成功"但少了器件。时点未隔离，写空串属性是高危操作。
-- `project.save` 不存在，保存用 `schematic.save`（返回 `{saved:true}`）。
-- `getDocumentSource` 读**未打开**的页可能返回当前活动页数据——读源码前先 `editor.openDocument` 激活目标页再核 DOCHEAD.uuid。
-- Convert to PCB 只能改**已存在**的属性；属性丢失后 setAttribute 报"器件上没有属性 X"。
+- **An empty-string Footprint attribute breaks both netlist paths:** `getNetlist` reports “官方返回非字符串或空” (“official response is not a string or is empty”); `exportNetlist` reports “官方返回空（File|undefined）” (“official response is empty (File|undefined)”); Protel2 and PADS exports both fail. The issue is reversible: restoring a nonempty value restores export. An unbound `attr=null` works; the FOOTPRINT column automatically uses the component's own footprint. When an XLink-style netlist returns empty, first check for an empty-string footprint.
+- **A bare footprint name is not a valid binding.** Setting `R0603` as an attribute may allow export, but the FOOTPRINT column becomes `undefined` and PCB import may fail. The correct format may be JSON containing a UUID (like DeviceName), but this is unverified. Do not assign a bare name to repair a footprint.
+- **Netlist scope is the whole project** across all schematics, not the active page. A damaged component attribute on any page can break export for the whole project.
+- The cause of the first missing bad snapshot from the netlist is still unknown. External per-page scripts are only supplemental evidence collection; they do not prove that the `getNetlist` algorithm is fixed.
+- **After a cycle of empty-string footprint failure followed by save, all component ATTR records may disappear.** The components remain, but designators, footprints, and Convert are lost and `getAttributes` returns empty. The netlist then silently excludes the component, which is more dangerous than returning an error: the export “succeeds” but omits the part. The timing has not been isolated; writing an empty-string attribute is high risk.
+- `project.save` does not exist; save with `schematic.save` (returns `{saved:true}`).
+- `getDocumentSource` on a page that is not open may return the active page's data. Before reading source, activate the target with `editor.openDocument` and verify `DOCHEAD.uuid`.
+- Convert to PCB can only modify an existing attribute. After attributes are lost, `setAttribute` reports “器件上没有属性 X” (“component has no attribute X”).
 
-## TEXT 删除与持久性（0.10.85 隔离工程安装验证，EDA 4.1.60）
+## TEXT deletion and persistence (0.10.85 isolated-project install test, EDA 4.1.60)
 
-- 历史故障：旧类级/实例级和源码墓碑路径曾失败；不代表当前路径。
-- 当前统一使用 `schematic.delete`：源码快照移除后核对源码与模型；内容比较仅忽略两层记录的 `header.ticket`，回放仍保留原 ticket，其余 header、data、记录数、有效记录与模型继续严格核对。0.10.85 隔离工程安装版经 save→close→open 后确认目标未复活。
-- 普通删除不自动保存；`persistenceVerified:false` 表示命令本身没有执行关闭重开验证，并不否定任务级独立验收。按任务另行 save→close→open 并重扫目标。0.10.86 候选移除旧实验入口；隔离工程安装版 0.10.85 仍显示该入口，日常操作统一用 `schematic.delete`。
-- 验证删除持久性不能只看即时读回，必须 **save → `editor.closeDocument` → `editor.openDocument` → 重扫源码**（close 是异步的，关掉后轮询页签列表确认真关了再开）。
-- `editor.closeDocument` 官方关闭异步生效（约 2 秒内页签消失）；脏文档会弹确认框 AI 点不了，返回 closed:false——**关前必须先 schematic.save**。
+- Historical failures affected old class-level/instance-level deletion and source-tombstone paths; they do not describe the current path.
+- The current unified command is `schematic.delete`: it removes a source snapshot and then checks source and model. The content comparison ignores only `header.ticket` in the two record layers; replay retains the original ticket, and all other header/data fields, record counts, effective records, and the model are checked strictly. In an isolated project running the installed 0.10.85 build, after save → close → open, the target did not reappear.
+- Ordinary deletion does not save automatically. `persistenceVerified:false` means that the command itself did not perform a close/reopen check; it does not invalidate a separate task-level acceptance check. For the task, perform save → close → open and rescan the target. The 0.10.86 candidate removed an old experimental entry, though the installed 0.10.85 isolated build still showed it; use `schematic.delete` for normal work.
+- To verify persistent deletion, an immediate readback is not enough. **Save → `editor.closeDocument` → `editor.openDocument` → rescan source.** Closing is asynchronous; after closing, poll the tab list to confirm that the tab is really gone before reopening.
+- The official `editor.closeDocument` takes effect asynchronously (the tab disappears within about 2 seconds). A dirty document shows a confirmation dialog that AI cannot click and returns `closed:false`. **Always call `schematic.save` before closing.**
 
-## TEXT 官方 API 层历史实测（0.10.55，EDA 4.1.60）
+## Historical TEXT API test (0.10.55, EDA 4.1.60)
 
-- 当时观察到 TEXT 创建可持久，而修改和类级/实例级删除会在保存重开后弹回；`setDocumentSource` 墓碑实验虽返回 true 也未持久。这是 0.10.55 的历史结论，不代表当前源码快照候选已经通过宿主持久性验收。
-- 判定删除是否持久必须 save → `editor.closeDocument`（轮询确认真关）→ `editor.openDocument` → 重扫，只看即时读回会被骗（TEXT 假删除即时读回也是消失的）。
+- At the time, TEXT creation persisted, but modification and class-level/instance-level deletion reappeared after save/reopen. A `setDocumentSource` tombstone experiment returned true but did not persist. This is a historical conclusion from 0.10.55; it does not mean that the current source-snapshot candidate has passed host persistence acceptance.
+- To determine whether deletion persists, save → `editor.closeDocument` (poll until the tab is gone) → `editor.openDocument` → rescan. Immediate readback alone can mislead; a falsely deleted TEXT also disappears from immediate readback.
 
-## 工程切换与改名（0.10.59~0.10.61 实测）
+## Project switching and renaming (tested in 0.10.59–0.10.61)
 
-- **project.open 遇脏页直接失败**：当前工程有未保存修改时，官方 openProject 返回 false（报"工程打开失败"，uuid 明明正确）。先 `schematic.save`（返回 `{saved:true}`）再切工程。
-- **renameSchematicPage 三前置**（独立工程多窗口实测）：①目标页文档须在本窗口打开激活；②页所在文档须在本窗口 save 过一次；③改名异步提交读回 >800ms。缺任一则官方返回 false 且不排队=假失败。隐藏规律：全新窗口从未成功改过页名时，其他窗口创建的旧页被永远拒绝；对本窗口新建页成功改名一次即解锁全部页。renameBoard 按名匹配会误改 Panel——改名前后快照比对，只信快照。
-- placeNetLabel 的附着要按指定标签 ID、父导线和父导线属性交叉读回；单看标签坐标正负不能判定附着。
-- **deleteBoard 可能删不掉**：空板删除返回 `deleted:false` 且重试无效（实例：XLink 误建空板 Schematic8），只能请用户手动删。
+- **`project.open` fails when the current page is dirty:** the official `openProject` returns false when the current project has unsaved changes, even with a correct UUID (“failed to open project”). Call `schematic.save` first (returns `{saved:true}`), then switch projects.
+- **Three prerequisites for `renameSchematicPage`** (tested in independent projects and multiple windows): (1) the target document must be open and active in this window; (2) its document must have been saved once in this window; (3) read back after the asynchronous rename has been submitted for more than 800 ms. If any is missing, the official API returns false and does not queue the operation—a false failure. Hidden behavior: a new window that has never successfully renamed a page refuses every old page created by other windows; successfully renaming one page created in this window unlocks all pages. Name-based `renameBoard` can modify a Panel by mistake; compare snapshots before and after and trust only the snapshot.
+- Verify `placeNetLabel` attachment by reading back the specified label ID, parent wire, and parent-wire properties. Label coordinate signs alone do not prove attachment.
+- **`deleteBoard` may fail to delete:** deleting an empty board returns `deleted:false` and retrying has no effect (example: the mistakenly created empty XLink board Schematic8). Ask the user to delete it manually.
 
-## structuralAudit 宿主语义边界（0.10.60/0.10.61 故障注入实测）
+## `structuralAudit` host-semantic boundaries (fault injection tests, 0.10.60/0.10.61)
 
-- **宿主合并异网名导线**：物理相接的不同网名导线会被官方合并成一个 wire，net 定为其中一个名，异网名只残留在标签属性 → 桥接由 LABEL_NET_MISMATCH[blocking] 抓获；MULTI_NET_TREE 在真实宿主数据上不触发属正常（规则保留作防御）。
-- **画线穿引脚会被吸附拆分**：导线穿过引脚位置时官方自动在引脚处拆分，引脚成为端点=合法连接 → PIN_INTERIOR_LANDING 在宿主数据上通常不触发（规则保留作候选，供离线/异常数据）。
-- **重复位号丢引脚教训（0.10.60 bug，0.10.61 已修）**：一批器件位号未规范化（全是 "R?"）时，按位号索引引脚会互相覆盖只留第一个——引脚收集必须按器件（primitiveId）条目，不能按位号做 key。
-- **structuralAudit 的 COMP_OUTSIDE_REGION 对图框误报**：图框 (0,0) 不在任何功能区框内会被报 candidate，图框不是器件，验收时忽略。
+- **The host merges wires with different net names:** physically connected wires with different names become one official wire. Its `net` is set to one of the names, while the other name remains only in label properties. The bridge catches this with `LABEL_NET_MISMATCH[blocking]`. It is normal for `MULTI_NET_TREE` not to trigger on real host data; the rule remains as a defense.
+- **A wire crossing a pin is split and snapped by the host:** the official host automatically splits the wire at the pin, making the pin a valid endpoint connection. `PIN_INTERIOR_LANDING` therefore usually does not trigger on host data; retain the rule as a candidate for offline or abnormal data.
+- **Duplicate designators can lose pins (0.10.60 bug, fixed in 0.10.61):** if a batch has unnormalized designators (all `"R?"`), indexing pins by designator overwrites them and keeps only the first. Collect pins by component (`primitiveId`) entry, not by designator key.
+- `structuralAudit` may falsely report `COMP_OUTSIDE_REGION` for the sheet frame: a frame at `(0,0)` is not inside any functional region and may be reported as a candidate. A frame is not a component; ignore this finding during acceptance.
 
-## 视觉验收与工程操作（0.10.71 实测，K9~K12，2026-10-06 VIN 事件定论）
+## Visual acceptance and project operations (tested in 0.10.71; K9–K12; VIN incident resolved 2026-10-06)
 
-- **K9 后台窗口不重绘，screenshot 截缓存帧**：EDA 窗口在后台/不聚焦时交互画布不增量重绘，`editor.screenshot` 拿到的是旧帧——**连截两次返回字节级相同就是缓存帧信号**（zoomToAll/zoomToRegion 返回 ok 也刷不动它）。API 放置/修改后"图上看不到"**先疑截图、再疑数据**；数据核验永远以 listComponents/getDocumentSource/网表/exportPng 为准。实测：同页 5 个器件 screenshot 只显示 1 个，exportPng 全在；生产工程"VIN 不可见"纯属假象，符号一直在图上。
-- **K10 视觉验收首选 `schematic.exportPng`**：独立渲染管线，窗口后台也输出完整图纸。注意返回的是**全部原理图页打包 ZIP 的 base64**（解码后 PK 开头，每页一张 PNG，文件名带页名），不是裸 PNG。验收流程：写入 → save → 读回核对 → exportPng 解 ZIP 逐页目检。
-- **K11 `project.create`/`project.open` 复用当前窗口**：不会新开窗口，实例号不变，但**整个窗口的活动工程被切走**——别人正在用这个窗口就要小心串台。用完必须 `project.open` 原工程切回并 getInfo 验证。插件无 `project.delete`，测试工程会留在用户工程列表，需用户手动删。
-- **K12 参数名小坑三枚**（报错信息有迷惑性）：`editor.openDocument` 参数名是 `uuid`（传 tabId 报"缺少参数 uuid"）；`placeDevice` 用 `deviceUuid` 必须同传 `libraryUuid`（漏传不报错、指令挂起到超时）；`schematic.setAttribute` 参数名是 `key`（传 name 报"器件上没有属性 undefined"）。另：电源符号 setAttribute 改 `Global Net Name` 会自动同步 `Name` 属性，不用手动改两个。
+- **K9: a background window does not redraw; `screenshot` captures a cached frame.** When the EDA window is in the background or unfocused, the interactive canvas does not redraw incrementally and `editor.screenshot` returns an old frame. **Two consecutive captures with byte-for-byte identical results signal a cached frame.** A successful `zoomToAll` or `zoomToRegion` call does not refresh it. If an object placed or modified by API is “not visible,” suspect the screenshot first and the data second. Verify data with `listComponents`, `getDocumentSource`, the netlist, or `exportPng`. In a test, a screenshot showed only one of five components on a page while `exportPng` showed all five. The production project’s “invisible VIN” was only an illusion; its symbol was on the page.
+- **K10: use `schematic.exportPng` for visual acceptance.** It uses an independent rendering pipeline and outputs the complete drawing even when the window is in the background. Its base64 response is a ZIP of **all schematic pages** (starts with PK after decoding), with one PNG per page and page names in filenames; it is not a bare PNG. Acceptance sequence: write → save → verify readback → run `exportPng` → unzip and inspect every page.
+- **K11: `project.create` and `project.open` reuse the current window.** They do not open a new window and the instance ID stays the same, but they switch the active project for the entire window. Be careful if someone else is using it. When finished, use `project.open` to return to the original project and verify with `getInfo`. The plugin has no `project.delete`; test projects remain in the user's project list and the user must delete them manually.
+- **K12: three parameter-name traps** (error messages can mislead): `editor.openDocument` takes `uuid` (`tabId` produces “缺少参数 uuid” / “missing parameter uuid”); `placeDevice` requires `libraryUuid` along with `deviceUuid` (omitting it does not error and the command hangs until timeout); `schematic.setAttribute` takes `key` (`name` produces “器件上没有属性 undefined” / “component has no attribute undefined”). Also, changing `Global Net Name` on a power symbol with `setAttribute` automatically synchronizes `Name`; there is no need to change both.
 
-## 工程备份恢复与 epro 导入（0.10.71 实测，2026-10-06 实测定论）
+## Project backup recovery and epro import (tested 0.10.71; confirmed 2026-10-06)
 
-- **API `project.importFile` 不可用**：`sys_FileManager.importProjectByProjectFile` 对 .epro 官方返回空（"导入失败：官方返回空"，17ms 快拒和 517ms 慢拒都见过），与 base64 内容、fileType（'epro'/'JLCEDA Pro'）、newProjectName 均无关。**epro 恢复只能走客户端 GUI**。
-- **GUI 导入是四级流程，漏一级 = 静默失败**（文件对话框关闭 ≠ 导入提交，日志零痕迹）：①文件→导入→嘉立创EDA(专业版)→系统文件对话框选 .epro→打开；②应用内「导入」对话框（导入选项：导入文档/提取库文件/导入并提取库）→点「导入」；③应用内「导入文档」对话框（新建工程/保存至已有工程 + 工程名输入框）→**工程名必须改成不与云端已有工程同名**（默认带出的名字与原工程同名，疑似同名即静默失败的根因）→点「导入」；④提示「创建成功！是否打开新工程？」→是/在新窗口打开。KimiCU 自动化时前几级之间要等对话框真正出现再动手，每级截图确认。
-- **导入后工程 uuid/页 uuid 全部重新生成**，与原工程无任何共享；`Channel ID` 等内部标识也会重新生成——恢复验证对比网表时这些字段差异无害，只比 `components` 的位号+`pinInfoMap`（电气连接）。
-- **恢复工程验证口径**（轻验证定型）：project.listSchematicPages 页数/页名 vs 原工程结构；目标页 listComponents 器件数与关键器件在不在（如被误删的部件）；exportNetlist 与备份时基线 .enet 逐元件 diff `pinInfoMap`（json.loads 后是 `components` dict，不是 nets 列表）。
-- **`project.getDocumentSource` 返回头/体交替记录**：每实体两条 json（`{"type":"COMPONENT","ticket":N,"id":"eX"}` 头 + 属性体）以 `||` 与 `|\n` 分隔；ATTR 体含 `parentId/key/value`，解析必须先按分隔符切 token 再头体两两配对，按行 split 会丢字段。
-- **多步 GUI 操作（导入/改名/对话框链）必须避开并发会话**：另一 AI 会话在同一窗口高频跑 macro 会把模态对话框挤掉（实测"导入文档"对话框被并发 delete/placeDevice 冲没）。选人/窗口先看该窗口日志面板有无别人的 macro 在跑，挑无干扰窗口执行。
+- **API `project.importFile` does not work for this case:** the official `sys_FileManager.importProjectByProjectFile` returns empty for `.epro` (“import failed: official response is empty”). Both a fast rejection at 17 ms and a slow rejection at 517 ms were observed. This was unrelated to base64 contents, `fileType` (`'epro'` / `'JLCEDA Pro'`), or `newProjectName`. **Recovering an epro must use the client GUI.**
+- **GUI import has four stages; missing any stage silently fails.** Closing the file picker does not submit the import, and the log remains empty. (1) Choose “文件” (File) → “导入” (Import) → “嘉立创EDA(专业版)” (EasyEDA Pro), then select the `.epro` file in the system file picker and click Open. (2) In the in-app “导入” (Import) dialog, choose an import option (“导入文档” / Import Document, “提取库文件” / Extract Library Files, or “导入并提取库” / Import and Extract Library), then click “导入” (Import). (3) In the in-app “导入文档” (Import Document) dialog, choose “新建工程” (New Project) or “保存至已有工程” (Save to Existing Project) and enter a project name. **Change the name so it differs from every project already in the cloud.** The default name matches the original project and is a suspected cause of silent failure for duplicate names. Click “导入” (Import). (4) At “创建成功！是否打开新工程？” (“Created successfully! Open the new project?”), choose “是” (Yes) / “在新窗口打开” (Open in a New Window). With KimiCU automation, wait for each dialog to actually appear before acting and confirm every stage with a screenshot.
+- **All project and page UUIDs are regenerated after import** and share nothing with the original. Internal fields such as `Channel ID` are regenerated too. These differences do not matter when verifying recovery against the netlist; compare only designator and `pinInfoMap` in `components` (electrical connectivity).
+- **Lightweight recovery verification:** compare the page count and names from `project.listSchematicPages` with the original project structure; check the component count on the target page with `listComponents` and confirm key components remain (for example, a component that had been mistakenly deleted); diff each component's `pinInfoMap` in `exportNetlist` against the backup `.enet` baseline. After `json.loads`, the result is a `components` dictionary, not a `nets` list.
+- **`project.getDocumentSource` returns alternating header/body records:** each entity uses two JSON records (a header such as `{"type":"COMPONENT","ticket":N,"id":"eX"}` plus its property body), separated by `||` and `|\n`. ATTR bodies contain `parentId/key/value`. Parse by splitting on the delimiters and pairing header/body records; line-based splitting loses fields.
+- **Avoid concurrent sessions during multi-step GUI operations** (import, rename, or dialog sequences). Another AI session running macros rapidly in the same window can dismiss a modal dialog; in a test, a concurrent `delete`/`placeDevice` macro removed the “导入文档” (“Import Document”) dialog. Before selecting a person/window, check that window's log panel for someone else's running macro. Use a window without interference.
 
-## 写保护状态机与 editor 写队列（0.10.72 引入，0.10.73 v2 定案，0.10.73b 出队检查，KIMI-EDA-20261006-03/04/05 GPT 三轮审查）
+## Write-protection state machine and editor write queue (introduced 0.10.72; finalized in 0.10.73 v2; dequeue check in 0.10.73b; three GPT reviews KIMI-EDA-20261006-03/04/05)
 
-- **写结果不确定保护（writeUncertain）**：写指令超时或心跳超时，代理放弃等待但扩展侧可能仍在后台执行（EDA 无取消机制）——此时放行下一条写会与它交错（半注册导线等不可预期现场）。0.10.73 v2 起：写超时/心跳超时 → 该实例进入写保护，**期间一切写指令被拒**（读指令不受限），拒绝文案含触发指令与解除方法。
-- **双重检查点**：入队前一次（assertWriteCertain，快速拒绝不占队列槽）+ **出队执行前一次**（executeWrite 内，0.10.73b 新增）——入队时保护未设置、排队期间前写超时的，出队必须拦住，不得发往扩展。注意读指令也走 executeWrite 函数（不进队列直接转发），出队检查只对写生效。
-- **保护按实例号键，断线重连不清除**——同一宿主重连后旧写可能仍在后台跑，保护必须延续。解除只有两条路（没有基于时间的自动放行）：
-  ① **id 匹配且非 partial 的迟到 result**——代理记录导致保护那条指令的请求 id，只认这个 id 的迟到结果；扩展熔断杀死的结果带 `error.cause.partial` 标记，**partial 结果不算可信完成信号**（记 lane-log `late-result-partial-ignored`）；其他无主 result（别的超时读请求等）一律不动保护。
-  ② **`write.acknowledge`**（本地指令，需顶层 instanceId）——调用方确认现场后的显式解除。注意：普通写（drawWire/placeDevice）不在任务表，**task.list 空不能证明写已结束**，不要拿它当解除依据。
-- **写被拒时的标准动作**：不要无脑重试——先 `task.get` 查前一条写的实际结果（长任务类），再用只读指令核对现场（listComponents/listWires 看有无半注册残留），然后 `write.acknowledge` 解除。lane-log 记 `write-uncertain-set/cleared` 可对账。
-- **editor.\* 不再整体只读**：只读白名单为 `editor.(listTabs|screenshot|zoomToAll|zoomToRegion)$` 四条；`openDocument/closeDocument` 会改变目标文档上下文，**按写指令排队**；macro 整体占一条写通道，外部切页排在其后不被插入（假宿主实测顺序 macro→openDocument）。
-- **文档守卫（插件侧 0.10.73）**：焦点类型不符时**只有激活的同类标签才自愈**（焦点卡住实测场景的恢复）；无激活命中 → 拒绝，要求显式声明目标。页级操作建议显式传 `params.__docUuid`（页 uuid 用 `project.listSchematicPages` 查），焦点不符即报错。
-- **运维旋钮**：`PROXY_CMD_TIMEOUT_MS` 环境变量可覆盖代理指令超时（默认 300s）；`PORT` 仅改变代理监听端口，不同步插件/启动器/助手；普通用户保持默认 49720。假宿主回归脚本 `bridge/mock-host-test.mjs`（19 用例，独立端口不触真实 EDA）。
+- **Protection for uncertain write results (`writeUncertain`):** when a write command or its heartbeat times out, the proxy stops waiting, but the extension may still be executing in the background (EDA has no cancellation mechanism). Allowing another write at that point could interleave operations and leave an unpredictable state, such as a partially registered wire. Since 0.10.73 v2, a write or heartbeat timeout puts that instance under write protection. **All writes to that instance are rejected while protected.** Reads are still allowed. The rejection message includes the triggering command and the recovery procedure.
+- **Two checkpoints:** one before enqueueing (`assertWriteCertain`, quickly rejects without using a queue slot) and one **before executing after dequeue** (inside `executeWrite`, added in 0.10.73b). If the instance was unprotected at enqueue time but an earlier queued write times out while it waits, the dequeue check must block it from reaching the extension. Note that read commands also pass through `executeWrite` but are forwarded directly without entering the queue; the dequeue check applies only to writes.
+- **Protection is keyed by instance ID and survives a disconnect/reconnect.** The old write may still be running in the same host after reconnect, so protection must persist. There are only two ways to clear it; there is no time-based automatic release:
+  1. **A late `result` with a matching ID and no `partial` marker.** The proxy records the request ID of the command that triggered protection and trusts only a late result with that ID. A result killed by the extension circuit breaker carries `error.cause.partial`; **a partial result is not a trusted completion signal** (the lane log records `late-result-partial-ignored`). Unowned results, such as another timed-out read request, never clear protection.
+  2. **`write.acknowledge`**, a local command requiring the top-level `instanceId`, explicitly clears protection after the caller verifies the current state. Ordinary writes such as `drawWire` and `placeDevice` are not listed in the task table, so **an empty `task.list` does not prove that a write has finished**. Do not use it as the basis for clearing protection.
+- **When a write is rejected:** do not blindly retry. First, for a long task, use `task.get` to inspect the actual result of the preceding write. Then use read-only commands to inspect the current state (for example, `listComponents` or `listWires` for partially registered objects). Only then clear with `write.acknowledge`. The lane log records `write-uncertain-set/cleared` for reconciliation.
+- **Not all `editor.*` commands are read-only anymore.** The read-only allowlist contains exactly `editor.(listTabs|screenshot|zoomToAll|zoomToRegion)$`. `openDocument` and `closeDocument` change the active document context and are queued like writes. A macro occupies one write channel for the whole run; an external page switch is queued behind it and cannot interleave (fake-host test confirmed `macro` → `openDocument`).
+- **Document guard (plugin-side, 0.10.73):** when the focused document type is wrong, only an active tab of the matching type can self-correct the focus (the recovery observed in the stuck-focus case). Without an active match, the command is rejected and requires an explicit target. For page-level commands, include `params.__docUuid` (get the page UUID with `project.listSchematicPages`); a mismatched focus returns an error.
+- **Operational settings:** environment variable `PROXY_CMD_TIMEOUT_MS` overrides the proxy command timeout (default 300 s). `PORT` changes only the proxy listening port, not the extension, launcher, or helper; ordinary users should keep 49720. Fake-host regression script: `bridge/mock-host-test.mjs` (19 cases, uses a separate port and does not touch real EDA).

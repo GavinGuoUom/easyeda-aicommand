@@ -1,35 +1,35 @@
-# 插件问题上报
+# Reporting Plugin Issues
 
-本流程随 AI Command Engine 技能使用。遇到插件错误、读回与返回结果不一致等问题，AI 按下面格式整理记录，在提交前告知使用者，然后用使用者当前的 GitHub 身份提交到 `quhuii-lgtm/easyeda-aicommand`。不需要逐条等待再次确认；使用者明确要求不提交时，遵从该要求。
+Use this process with the AI Command Engine skill when an issue occurs, such as a plugin error or a mismatch between a read-back value and the returned result. The AI prepares a report in the format below, tells the user what it will submit, then submits it using the user's current GitHub identity to `quhuii-lgtm/easyeda-aicommand`. Do not ask for separate confirmation for each step. If the user explicitly says not to submit, follow that instruction.
 
-## AI 操作规则
+## Instructions for the AI
 
-1. 只记录本次实际遇到的插件问题。缺少关键复现信息时先补充，无法确认的版本填“未知”；区分已观察事实与原因猜测。
-2. 只使用任务中已取得、可公开的必要证据。删除密钥、令牌、个人信息和私有工程内容；不能为了上报扫描整个工程、上传完整日志或工程文件。工具不会自动脱敏，AI 必须在写入报告前完成检查。
-3. 保存 UTF-8 JSON 报告到系统临时目录，在插件仓库目录运行 `preview`，读取将提交的标题和正文。
-4. 在对话中告知使用者：将以其 GitHub 身份公开提交到哪个仓库、问题标题、主要内容及包含哪些证据。告知后直接执行 `submit`，不再增加逐条确认步骤。仅工具输出不等于已告知使用者。
-5. 提交成功后返回 Issue 链接。未登录、缺少工具或 GitHub 拒绝请求时如实报告，保留本地草稿，不能报告为已提交。工具对 GitHub 拒绝只返回通用拒绝信息，不凭状态码猜测权限或限流原因。
-6. 创建结果未知时，先到问题列表核对，不能盲目重发。已经创建但读回失败时，提供工具保留的 Issue 链接并说明尚未核验，不能重复创建。
+1. Record only plugin issues encountered during the current task. Fill in missing reproduction details first. If the version cannot be confirmed, use “unknown”. Distinguish observed facts from suspected causes.
+2. Use only necessary evidence already obtained in the task that can be made public. Remove secrets, tokens, personal information, and private project content. Do not scan the entire project or upload complete logs or project files for a report. The tool does not redact automatically; the AI must inspect the report before writing it.
+3. Save a UTF-8 JSON report in the system temporary directory, run `preview` from the plugin repository directory, and read the title and body that will be submitted.
+4. Tell the user in the conversation which repository will receive a public report under their GitHub identity, its title, the main content, and what evidence it includes. Then run `submit` without asking for another per-step confirmation. Tool output alone does not count as informing the user.
+5. Return the Issue link after a successful submission. If the user is not logged in, the tool is unavailable, or GitHub rejects the request, report that accurately and keep the local draft; do not claim it was submitted. GitHub rejections return a generic message; do not infer an authorization or rate-limit cause from a status code.
+6. If the submission result is unknown, check the issue list before trying again. If the Issue was created but read-back failed, provide the retained Issue link and explain that verification is incomplete; do not create a duplicate.
 
-这是一项由 AI 显式执行的本地工具，不是后台错误监控；EDA 命令执行本身不会自动上传数据。脚本无法证明对话中是否已经告知，AI 负责执行以上流程。
+This is a local tool explicitly run by the AI, not background error monitoring. EDA command execution does not automatically upload data. The script cannot verify whether the user was informed in the conversation; the AI is responsible for following these steps.
 
-## 首次准备
+## Initial setup
 
-- 已安装 Node.js >=20.17.0（与指令代理要求一致）。
-- 安装 [GitHub CLI](https://cli.github.com/)，由使用者完成一次登录：
+- Node.js >=20.17.0 is installed (the same requirement as the command proxy).
+- Install [GitHub CLI](https://cli.github.com/) and have the user sign in once:
 
 ```powershell
 gh auth login --hostname github.com --web
 gh auth status --hostname github.com
 ```
 
-使用 GitHub CLI 当前有效身份，环境中已配置的 `GH_TOKEN` / `GITHUB_TOKEN` 也可能影响该身份。需要换账号时由使用者通过 GitHub CLI 切换。浏览器或 Git 的登录状态不等于 GitHub CLI 已登录。
+The tool uses the currently active GitHub CLI identity. `GH_TOKEN` / `GITHUB_TOKEN`, if configured in the environment, may also affect which identity is used. To switch accounts, the user must switch accounts through GitHub CLI. Being signed in to a browser or Git does not mean GitHub CLI is signed in.
 
-工具不索取、读取输出或保存 GitHub 令牌；凭证由 GitHub CLI 管理。不要把令牌写入报告、插件源码或聊天。此功能不需要开启 EDA、连接指令代理或提供 `instanceId`。
+The tool does not request, print, or save GitHub tokens; GitHub CLI manages credentials. Do not put a token in the report, plugin source, or chat. This feature does not require EDA to be open, a connection to the command proxy, or an `instanceId`.
 
-## 报告格式
+## Report format
 
-所有字段都是字符串。必填：`title`、`pluginVersion`、`edaVersion`、`os`、`steps`、`expected`、`actual`。可选：`command`、`evidence`。不支持其他字段；不会静默丢弃未知字段。
+All fields are strings. Required: `title`, `pluginVersion`, `edaVersion`, `os`, `steps`, `expected`, `actual`. Optional: `command`, `evidence`. Other fields are not supported and will not be silently discarded.
 
 ```json
 {
@@ -45,25 +45,25 @@ gh auth status --hostname github.com
 }
 ```
 
-上例仅演示格式，禁止直接提交为真实问题。`evidence` 为正文文本，不会自动读取附件或文件路径。一个问题一条记录，避免重复提交同一已记录问题。
+The sample above demonstrates the format only. Do not submit it as a real issue. `evidence` is body text; attachments and file paths are not read automatically. Use one report per issue and avoid duplicate reports for an issue that has already been recorded.
 
-## 预览和提交
+## Preview and submit
 
-在包含 `bridge` 的插件仓库目录运行，`--file` 指向 AI 已生成的报告：
+Run these commands from the plugin repository directory containing `bridge`. The `--file` option points to the report created by the AI:
 
 ```powershell
 node bridge/report-issue.mjs preview --file "$env:TEMP\aicommand-issue.json"
 node bridge/report-issue.mjs submit --file "$env:TEMP\aicommand-issue.json"
 ```
 
-`preview` 只做本地格式校验和正文渲染，不联网。`submit` 会公开创建 Issue：先检查 GitHub CLI 登录，再提交，最后按返回编号读回并核对标题、正文和链接。所有调用固定到 `github.com/quhuii-lgtm/easyeda-aicommand`，不会采用当前目录的其他仓库。
+`preview` performs local format validation and renders the body without going online. `submit` publicly creates an Issue: it first checks GitHub CLI login, submits the report, then reads the created Issue back by number and checks its title, body, and link. Calls are fixed to `github.com/quhuii-lgtm/easyeda-aicommand`; they do not use another repository from the current directory.
 
-退出码为 0 表示该操作成功；非 0 时读取 JSON 错误结果。无自动登录、自动重试或后台重发。提交结果未知不等于未创建。
+Exit code 0 means the operation succeeded. For a non-zero exit code, read the JSON error result. There is no automatic login, retry, or background resubmission. An unknown submission result does not mean that no Issue was created.
 
-GitHub 网页表单位于仓库 `.github/ISSUE_TEMPLATE/bug_report.yml`，使用同一组信息字段。网页提交和 API 提交分别校验，网页表单不会代替本工具的输入校验。
+The GitHub web form is in `.github/ISSUE_TEMPLATE/bug_report.yml` in the repository and uses the same information fields. Web submissions and API submissions are validated separately; the web form does not replace this tool's input validation.
 
-## 验证边界
+## Verification limits
 
-本地模拟测试：`node test/issue-report-regression.mjs`。模拟测试不创建公开 Issue，也不能代替真实 GitHub 登录和联网验收。
+Local simulation: `node test/issue-report-regression.mjs`. The simulation does not create a public Issue and cannot replace verification using a real GitHub login and network connection.
 
-官方依据：[GitHub CLI 登录](https://cli.github.com/manual/gh_auth_login)、[GitHub CLI API](https://cli.github.com/manual/gh_api)、[创建 Issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)。
+Official references: [GitHub CLI login](https://cli.github.com/manual/gh_auth_login), [GitHub CLI API](https://cli.github.com/manual/gh_api), [Create an Issue](https://docs.github.com/en/rest/issues/issues#create-an-issue).

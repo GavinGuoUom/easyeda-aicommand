@@ -49,9 +49,38 @@ async function check(name, fn) {
 	catch (error) { console.error(`FAIL ${name}:`, error); process.exitCode = 1 }
 }
 
-await check('R1 deviceCreate marks symbolUuid required', async () => {
-	const parameter = libCommands.find(command => command.name === 'lib.deviceCreate').params.find(param => param.name === 'symbolUuid')
-	assert.equal(parameter.required, true)
+await check('R1 deviceCreate supports an existing symbol or a requested symbol type', async () => {
+	const parameters = libCommands.find(command => command.name === 'lib.deviceCreate').params
+	assert.equal(parameters.find(param => param.name === 'symbolUuid').required, false)
+	assert.equal(parameters.find(param => param.name === 'symbolType').required, false)
+})
+
+await check('R1b deviceCreate falls back to exact UUID search after get failure', async () => {
+	const previous = globalThis.eda
+	let searchedUuid = ''
+	let searchedName = ''
+	let searchArguments = []
+	globalThis.eda = {
+		lib_Device: {
+			create: async () => 'created-device-uuid',
+			get: async () => { throw new Error('project alias get unavailable') },
+			search: async (...args) => { searchArguments = args; searchedName = args[0]; searchedUuid = args[0] === 'MINE' ? 'created-device-uuid' : ''; return [{ uuid: 'created-device-uuid', name: 'MINE' }] },
+		},
+	}
+	try {
+		const command = libCommands.find(item => item.name === 'lib.deviceCreate')
+		const result = await command.handler({ libraryUuid: 'project', name: 'MINE', symbolUuid: 'symbol-id' })
+		assert.equal(searchedName, 'MINE', 'fallback searches by created device name rather than UUID')
+		assert.equal(searchedUuid, 'created-device-uuid')
+		assert.deepEqual(searchArguments, ['MINE', 'project', undefined, undefined, 20, 1], 'fallback search uses the documented filter and paging argument positions')
+		assert.equal(result.uuid, 'created-device-uuid')
+	}
+	finally {
+		if (previous === undefined)
+			delete globalThis.eda
+		else
+			globalThis.eda = previous
+	}
 })
 
 await check('R2 filled, empty object, absent object, and unknown fill readback', async () => {

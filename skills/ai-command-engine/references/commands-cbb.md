@@ -22,5 +22,9 @@ Library management, placement, and export for reusable modules (the official “
 ⚠️ Notes:
 
 - `cbb.openProject` and `cbb.openSymbolInEditor` switch the project/focus. To return to your project, activate it again with `editor.openDocument`.
-- `reimportWhenNameRepeated` defaults to true: a module with a repeated name is imported again instead of reusing the old instance. Watch net naming when placing the same module repeatedly across boards.
+- In newer SDKs, `reimportWhenNameRepeated` controls whether a repeated module name is imported again. The EDA 4.1.71 runtime SDK does not forward this option, so do not infer duplicate-name behavior or net isolation from its value.
 - Verify placement by reading back: after `cbb.placePcb`, audit nets with `pcb.listComponents` + `getComponentPads`.
+
+On 2026-10-12, an isolated sample on EDA 4.1.71 explicitly passed the source schematic-page UUID, read back three test points and one wire, and saved. The current runtime SDK looks up by page UUID; when given the parent schematic UUID and no page matches, it falls back to the first page. An earlier successful call with the parent UUID does not prove that it selected the requested page. An SDK `true` only confirms the call returned; inspect the actual contents.
+
+For native PCB transfer, `Reuse Block` names on components are matched against PCB templates. In a test project, matching the associated PCB copy's name to that value let one `pcb.importChanges` call and the host's “Apply Changes” action bring in placement, tracks, vias, the board outline, and copper pours. Preserve group and channel identifiers, then check the result after save and reopen. This evidence covers only the tested small sample; placing the schematic and PCB separately does not prove that they are associated.

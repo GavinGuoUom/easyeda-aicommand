@@ -8,8 +8,9 @@ const built = await build({
 		contents: `
 import { pcbCommands } from '../src/commands/pcb.ts'
 import { editorCommands } from '../src/commands/editor.ts'
+import { systemCommands } from '../src/commands/system.ts'
 import { executeCommand, registerCommand } from '../src/engine/registry.ts'
-export { pcbCommands, editorCommands, executeCommand, registerCommand }
+export { pcbCommands, editorCommands, systemCommands, executeCommand, registerCommand }
 `,
 		resolveDir: resolve(root, 'test'),
 		sourcefile: 'sdk-outcome-regression-entry.ts',
@@ -21,8 +22,8 @@ export { pcbCommands, editorCommands, executeCommand, registerCommand }
 	target: 'node24',
 })
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`
-const { pcbCommands, editorCommands, executeCommand, registerCommand } = await import(moduleUrl)
-for (const command of [...pcbCommands, ...editorCommands]) registerCommand(command)
+const { pcbCommands, editorCommands, systemCommands, executeCommand, registerCommand } = await import(moduleUrl)
+for (const command of [...pcbCommands, ...editorCommands, ...systemCommands]) registerCommand(command)
 let checks = 0
 
 let markerWrites = 0
@@ -92,6 +93,10 @@ async function check(name, fn) {
 }
 
 await withFakeTimeouts(async () => {
+	await check('unsupported system.eval is absent while task status commands remain', async () => {
+		assert.equal(systemCommands.some(command => command.name === 'system.eval'), false)
+		assert.deepEqual(systemCommands.map(command => command.name), ['task.get', 'task.list'])
+	})
 	await check('single-pour timeout is partial and blocks macro continuation', async () => {
 		const p = pour('pour-1', { rebuild: () => new Promise(() => {}) })
 		globalThis.eda = { pcb_PrimitivePour: { get: async () => p } }
@@ -224,7 +229,7 @@ await withFakeTimeouts(async () => {
 		} }
 		const result = await executeCommand({ cmd: 'editor.closeDocument', params: { uuid: 'doc-1' } })
 		assert.equal(result.ok, true)
-		assert.deepEqual(result.data, { tabId: 'doc-1@project-1', closed: true })
+		assert.deepEqual(result.data, { tabId: 'doc-1@project-1', closed: true, sdkResult: true })
 	})
 
 	await check('unknown close readback is partial and blocks macro continuation', async () => {
@@ -258,38 +263,83 @@ await withFakeTimeouts(async () => {
 		}
 	})
 
-	await check('closed:false is a failed command and cannot be hidden under ok:true', async () => {
+	await check('SDK false with a valid tree still containing the tab fails immediately without partial write protection', async () => {
+		let reads = 0
 		globalThis.eda = { dmt_EditorControl: {
 			closeDocument: async () => false,
-			getSplitScreenTree: async () => ({ id: 'editor-window-main', tabs: [{ tabId: 'doc-1@project-1' }] }),
+			getSplitScreenTree: async () => { reads++; return { id: 'editor-window-main', tabs: [{ tabId: 'doc-1@project-1' }] } },
 		} }
-		const result = await executeCommand({ cmd: 'editor.closeDocument', params: { tabId: 'doc-1@project-1' } })
+		const result = await executeCommand({ cmd: 'editor.closeDocument', params: { tabId: 'doc-1@project-1', _timeoutMs: 2000 } })
 		assert.equal(result.ok, false)
-		assert.equal(result.error.cause.result.closed, false)
+		assert.equal(result.error.cause.partial, false)
+		assert.deepEqual(result.error.cause.result, { tabId: 'doc-1@project-1', closed: false, sdkResult: false, treeContainsTab: true })
+		assert.equal(reads, 1)
 	})
 
-	await check('closed:true with a valid tree still containing the tab is partial and blocks macro continuation', async () => {
-		globalThis.eda = { dmt_EditorControl: {
-			closeDocument: async () => true,
-			getSplitScreenTree: async () => ({ id: 'editor-window-main', tabs: [{ tabId: 'doc-1@project-1' }] }),
-		} }
-		const result = await runMacro('editor.closeDocument', { tabId: 'doc-1@project-1' })
-		const failure = result.data.steps[0]
-		assert.equal(failure.ok, false)
-		assert.equal(failure.error.cause.partial, true)
-		assert.equal(markerWrites, 0)
-	})
-
-	await check('closed:false with a valid tree already missing the tab is contradictory partial and blocks macro continuation', async () => {
+	await check('SDK false with a valid tree already missing the tab satisfies the postcondition and macro continues', async () => {
+		markerWrites = 0
 		globalThis.eda = { dmt_EditorControl: {
 			closeDocument: async () => false,
 			getSplitScreenTree: async () => ({ id: 'editor-window-main', tabs: [] }),
 		} }
 		const result = await runMacro('editor.closeDocument', { tabId: 'doc-1@project-1' })
-		const failure = result.data.steps[0]
-		assert.equal(result.ok, false)
-		assert.equal(failure.error.cause.partial, true)
-		assert.equal(markerWrites, 0)
+		assert.equal(result.ok, true)
+		assert.deepEqual(result.data.steps[0].data, { tabId: 'doc-1@project-1', closed: true, sdkResult: false })
+		assert.equal(markerWrites, 1)
+	})
+
+	await check('SDK true waits for the tab to disappear and calls closeDocument once', async () => {
+		const startFakeNow = fakeNow
+		const realTimer = globalThis.setTimeout
+		let reads = 0
+		let closeCalls = 0
+		globalThis.setTimeout = (callback, delay, ...args) => {
+			if (delay >= 2000)
+				return realTimer(callback, delay, ...args)
+			setImmediate(() => { fakeNow += delay; callback(...args) })
+			return 0
+		}
+		globalThis.eda = { dmt_EditorControl: {
+			closeDocument: async () => { closeCalls++; return true },
+			getSplitScreenTree: async () => ++reads === 1
+				? { id: 'editor-window-main', tabs: [{ tabId: 'doc-1@project-1' }] }
+				: { id: 'editor-window-main', tabs: [] },
+		} }
+		try {
+			const result = await editorCommands.find(command => command.name === 'editor.closeDocument').handler({ tabId: 'doc-1@project-1', _timeoutMs: 2000 })
+			assert.deepEqual(result, { tabId: 'doc-1@project-1', closed: true, sdkResult: true })
+			assert.equal(reads, 2)
+			assert.equal(closeCalls, 1)
+		}
+		finally {
+			fakeNow = startFakeNow
+			globalThis.setTimeout = realTimer
+		}
+	})
+
+	await check('UUID lookup and SDK close duration consume the same handler-start budget', async () => {
+		const startFakeNow = fakeNow
+		let reads = 0
+		let closeCalls = 0
+		globalThis.eda = { dmt_EditorControl: {
+			getSplitScreenTree: async () => {
+				reads++
+				fakeNow = startFakeNow + 1200
+				return { id: 'editor-window-main', tabs: [{ tabId: 'doc-1@project-1' }] }
+			},
+			closeDocument: async () => { closeCalls++; fakeNow = startFakeNow + 2100; return true },
+		} }
+		try {
+			const result = await executeCommand({ cmd: 'editor.closeDocument', params: { uuid: 'doc-1', _timeoutMs: 2000 } })
+			assert.equal(result.ok, false)
+			assert.equal(result.error.cause.partial, true)
+			assert.equal(result.error.cause.result.closed, 'unknown')
+			assert.equal(reads, 1)
+			assert.equal(closeCalls, 1)
+		}
+		finally {
+			fakeNow = startFakeNow
+		}
 	})
 })
 

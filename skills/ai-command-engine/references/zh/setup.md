@@ -72,7 +72,7 @@ curl http://127.0.0.1:49720/help
 | PCB/封装 | **mil**（1mm ≈ 39.37mil） | +Y 向上 | 以板框为准 |
 
 - ⚠️ 两者相差 10 倍，混用会把图元放到十万八千里外。
-- 原理图网格吸附：坐标取 **10 的倍数**，否则 DRC 报"网络图元不在原理图格点上"。
+- 原理图网格吸附按当前图页设置；坐标单位为10mil，不把固定5或10倍数作为指令限制。格点是否合规由当前DRC规则判断。
 - **图纸尺寸查询**：原理图用 `schematic.getPageInfo`（返回 titleBlock 的 `width`/`height`，单位 10mil；A4 = 1170×825，A3 = 1630×1150 左右，以实际读取为准）；PCB 板框尺寸用 `pcb.getPrimitivesInRegion` 扫全板找 Region 图元换算，或截图比对。
 - 图框尺寸不是定值：先 `schematic.getPageInfo` 读 `width`/`height` 再放器件。
 - ⚠️ 矩形的"左上角"：原理图 +Y 向上，官方矩形锚点是**世界坐标左上点 (minX, maxY)**，即传入的 y 是矩形**上沿**，矩形向下（Y 减小方向）延伸 height。做布局换算时不要把屏幕坐标（向下为正）直接当世界坐标用；`listRects`/`checkRectOverlap`（0.9.4 起）返回归一化 `span:{x1,y1,x2,y2}`，一律用 span 计算。

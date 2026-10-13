@@ -49,8 +49,8 @@ Choose a command sequence by **what you want to do**, not by object type. **Run 
 
 ## E. Convert schematic to PCB
 
-1. Run schematic `runDrc` and clear all **fatal errors**. Since 0.10.104, a failed or uncertain import reports `partial` and stops the macro; do not retry automatically.
-2. Since 0.10.105, even if the SDK returns `true`, `pcb.importChanges` stops the macro with `partial:true,retryable:false,outcome:pending-verification`. The SDK response only means the call ended; the user may still need to click “Apply Changes” in EDA. Do not retry automatically. Handle any confirmation dialog, independently read back the expected components and nets, then continue.
+1. Run schematic DRC when the task calls for it and report the result. Ordinary import does not require clearing DRC first. A failed or uncertain import stops dependent work; do not retry automatically.
+2. The plugin reads the source schematic and checks component identity, footprint association, and pad nets on the target PCB. If the contents match, `pcb.importChanges` may return success, including when everything was already matched and no changes were needed. If the SDK returns `true` but the changes are not applied, only partly applied, or cannot be confirmed by readback, the result remains `pending-verification`/`unknown`; stop dependent writes and do not automatically retry. The host may still require the user to click “Apply Changes.” This content check still awaits installed-build verification; success does not establish persistence after save/reopen or complete module-layout acceptance.
 3. Reconcile pad nets with `pcb.listComponents` and `pcb.getComponentPads` for each component.
 4. Placement: use `pcb.groupBySchematicRegions` after `dryRun`, or `pcb.moveComponent`; then run `pcb.checkPlacement`.
 5. Routing: use `pcb.routeTrack` and `pcb.placeVia`; query `knowledge.widthForCurrent` first for high-current nets. Use `pcb.pourCopper` for a full-board ground pour.

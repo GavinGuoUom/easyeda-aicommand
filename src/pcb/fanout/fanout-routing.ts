@@ -12,6 +12,7 @@ export interface CircleObstacle extends ObstacleBase {
 	type: 'circle';
 	center: Point;
 	radius: number;
+	holeRadius?: number;
 }
 
 export interface SegmentObstacle extends ObstacleBase {
@@ -36,6 +37,8 @@ export interface RouteRequest {
 	net: string;
 	lineWidth: number;
 	viaDiameter: number;
+	viaHoleDiameter?: number;
+	viaHoleToHoleClearance?: number;
 	clearance: number;
 	maxEndOffset: number;
 	obstacles: CopperObstacle[];
@@ -71,8 +74,7 @@ const DIRECTIONS: Point[] = [
 ];
 
 const EPSILON = 1e-6;
-const MAX_ENDPOINT_RINGS = 8;
-const MAX_BEND_OFFSET_STEPS = 6;
+const SEARCH_TIME_LIMIT = Symbol('fanout search time limit');
 
 export interface Bounds {
 	minX: number;
@@ -323,6 +325,47 @@ function segmentIsClear(start: Point, end: Point, request: RouteRequest): boolea
 	return true;
 }
 
+const COLLINEAR_POINT_TOLERANCE = 1e-6;
+
+export function normalizeRoute(points: Point[], request: RouteRequest): { points: Point[]; safeToExecute: boolean } {
+	const normalized = [...points];
+	let safeToExecute = true;
+	let index = 1;
+	while (index < normalized.length - 1) {
+		request.checkBudget?.();
+		const start = normalized[index - 1];
+		const bend = normalized[index];
+		const end = normalized[index + 1];
+		const first = subtract(bend, start);
+		const second = subtract(end, bend);
+		const direct = subtract(end, start);
+		const directLength = Math.hypot(direct.x, direct.y);
+		const firstLength = Math.hypot(first.x, first.y);
+		const secondLength = Math.hypot(second.x, second.y);
+		const projection = directLength > COLLINEAR_POINT_TOLERANCE ? dot(first, direct) / (directLength * directLength) : -1;
+		const perpendicularDistance = directLength > COLLINEAR_POINT_TOLERANCE
+			? Math.abs(first.x * direct.y - first.y * direct.x) / directLength
+			: Number.POSITIVE_INFINITY;
+		const liesBetweenForwardEndpoints = projection > 0 && projection < 1 && dot(first, second) > 0;
+		if (firstLength <= COLLINEAR_POINT_TOLERANCE
+			|| secondLength <= COLLINEAR_POINT_TOLERANCE
+			|| perpendicularDistance > COLLINEAR_POINT_TOLERANCE
+			|| !liesBetweenForwardEndpoints) {
+			index++;
+			continue;
+		}
+		if (!segmentIsClear(start, end, request)) {
+			safeToExecute = false;
+			index++;
+			continue;
+		}
+		normalized.splice(index, 1);
+		if (index > 1)
+			index--;
+	}
+	return { points: normalized, safeToExecute };
+}
+
 function viaIsClear(end: Point, request: RouteRequest): boolean {
 	const radius = request.viaDiameter / 2;
 	if (!pointIsInsideAnyBoard(end, radius + request.clearance, request.boardPolygons, request.checkBudget))
@@ -331,6 +374,13 @@ function viaIsClear(end: Point, request: RouteRequest): boolean {
 		return false;
 	for (const obstacle of request.obstacles) {
 		request.checkBudget?.();
+		if (obstacle.type === 'circle'
+			&& request.viaHoleDiameter != null
+			&& request.viaHoleToHoleClearance != null
+			&& obstacle.holeRadius != null
+			&& distance(end, obstacle.center) + EPSILON < request.viaHoleDiameter / 2 + obstacle.holeRadius + request.viaHoleToHoleClearance) {
+			return false;
+		}
 		if (!isRelevant(obstacle, request.net))
 			continue;
 		if (obstacle.type === 'circle') {
@@ -351,13 +401,11 @@ function viaIsClear(end: Point, request: RouteRequest): boolean {
 	return true;
 }
 
-function pathIsClear(points: Point[], request: RouteRequest): boolean {
+function segmentsAreClear(points: Point[], request: RouteRequest, checkSegment: (start: Point, end: Point) => boolean): boolean {
 	request.checkBudget?.();
-	if (!viaIsClear(points[points.length - 1], request))
-		return false;
 	for (let i = 1; i < points.length; i++) {
 		request.checkBudget?.();
-		if (!segmentIsClear(points[i - 1], points[i], request))
+		if (!checkSegment(points[i - 1], points[i]))
 			return false;
 	}
 	return true;
@@ -406,13 +454,13 @@ function isOctilinear(start: Point, end: Point): boolean {
 	return dx <= EPSILON || dy <= EPSILON || Math.abs(dx - dy) <= EPSILON;
 }
 
-function routeCandidates(start: Point, end: Point, step: number, maxOffset: number, checkBudget?: () => void): Point[][] {
+function routeCandidates(start: Point, end: Point, step: number, maxOffset: number, checkBudget?: () => void, includeDirect = true): Point[][] {
 	const candidates: Point[][] = [];
 	checkBudget?.();
-	if (isOctilinear(start, end))
+	if (includeDirect && isOctilinear(start, end))
 		candidates.push([start, end]);
 	candidates.push(...twoSegmentPaths(start, end, checkBudget));
-	const offsetSteps = Math.max(1, Math.min(MAX_BEND_OFFSET_STEPS, Math.ceil(maxOffset / step)));
+	const offsetSteps = Math.max(1, Math.ceil(maxOffset / step));
 	for (let i = 1; i <= offsetSteps; i++) {
 		checkBudget?.();
 		const offset = Math.min(maxOffset, i * maxOffset / offsetSteps);
@@ -428,7 +476,7 @@ function routeCandidates(start: Point, end: Point, step: number, maxOffset: numb
 
 function endpointRings(desiredEnd: Point, step: number, maxOffset: number, checkBudget?: () => void): Array<{ end: Point; offset: number }> {
 	const result = [{ end: desiredEnd, offset: 0 }];
-	const ringCount = Math.min(MAX_ENDPOINT_RINGS, Math.ceil(maxOffset / step));
+	const ringCount = Math.ceil(maxOffset / step);
 	for (let ring = 1; ring <= ringCount; ring++) {
 		checkBudget?.();
 		const offset = Math.min(maxOffset, ring * maxOffset / ringCount);
@@ -442,27 +490,76 @@ function endpointRings(desiredEnd: Point, step: number, maxOffset: number, check
 
 export function planRouteDetailed(request: RouteRequest): DetailedRouteResult {
 	const step = Math.max(request.clearance, request.lineWidth, 1);
-	const deadline = Date.now() + (request.timeLimitMs ?? 120);
-	const maxCandidates = request.maxCandidates ?? 20000;
+	const deadline = request.timeLimitMs == null ? Number.POSITIVE_INFINITY : Date.now() + request.timeLimitMs;
+	const maxCandidates = request.maxCandidates ?? Number.POSITIVE_INFINITY;
 	let checkedCandidates = 0;
-	request.checkBudget?.();
-	for (const endpoint of endpointRings(request.desiredEnd, step, request.maxEndOffset, request.checkBudget)) {
-		let best: RouteResult | null = null;
+	let bestRoute: RouteResult | null = null;
+	const segmentClearCache = new Map<string, boolean>();
+	const checkSearchBudget = () => {
 		request.checkBudget?.();
-		for (const candidate of routeCandidates(request.start, endpoint.end, step, request.maxEndOffset, request.checkBudget)) {
-			request.checkBudget?.();
-			checkedCandidates++;
-			if (checkedCandidates > maxCandidates || Date.now() > deadline)
-				return { route: best, checkedCandidates, searchLimited: true, terminationReason: 'candidate-limit' };
-			const points = deduplicatePoints(candidate);
-			if (points.length < 2 || points.length > 4 || !pathIsClear(points, request))
-				continue;
-			const route = { points, endOffset: endpoint.offset, length: pathLength(points) };
-			if (!best || route.length < best.length || (Math.abs(route.length - best.length) <= EPSILON && route.points.length < best.points.length))
-				best = route;
+		if (Date.now() > deadline)
+			throw SEARCH_TIME_LIMIT;
+	};
+	const searchRequest = { ...request, checkBudget: checkSearchBudget };
+	const cachedSegmentIsClear = (start: Point, end: Point): boolean => {
+		const key = `${start.x},${start.y}>${end.x},${end.y}`;
+		const cached = segmentClearCache.get(key);
+		if (cached !== undefined) {
+			checkSearchBudget();
+			return cached;
 		}
-		if (best)
-			return { route: best, checkedCandidates, searchLimited: false, terminationReason: 'route-found' };
+		const clear = segmentIsClear(start, end, searchRequest);
+		segmentClearCache.set(key, clear);
+		return clear;
+	};
+	try {
+		checkSearchBudget();
+		for (const endpoint of endpointRings(request.desiredEnd, step, request.maxEndOffset, checkSearchBudget)) {
+			let best: RouteResult | null = null;
+			bestRoute = null;
+			checkSearchBudget();
+			if (!viaIsClear(endpoint.end, searchRequest))
+				continue;
+			const directCandidate = isOctilinear(request.start, endpoint.end);
+			const directPoints = directCandidate ? deduplicatePoints([request.start, endpoint.end]) : [];
+			const directTested = directPoints.length === 2;
+			if (directTested) {
+				if (checkedCandidates >= maxCandidates)
+					return { route: null, checkedCandidates, searchLimited: true, terminationReason: 'candidate-limit' };
+				checkedCandidates++;
+				if (segmentsAreClear(directPoints, searchRequest, cachedSegmentIsClear)) {
+					return { route: { points: directPoints, endOffset: endpoint.offset, length: pathLength(directPoints) }, checkedCandidates, searchLimited: false, terminationReason: 'route-found' };
+				}
+			}
+			checkSearchBudget();
+			if (checkedCandidates >= maxCandidates)
+				return { route: best, checkedCandidates, searchLimited: true, terminationReason: 'candidate-limit' };
+			for (const candidate of routeCandidates(request.start, endpoint.end, step, request.maxEndOffset, checkSearchBudget, !directTested)) {
+				checkSearchBudget();
+				if (checkedCandidates >= maxCandidates)
+					return { route: best, checkedCandidates, searchLimited: true, terminationReason: 'candidate-limit' };
+				const points = deduplicatePoints(candidate);
+				if (points.length < 2 || points.length > 4)
+					continue;
+				checkedCandidates++;
+				const candidateLength = pathLength(points);
+				if (best && !(candidateLength < best.length || (Math.abs(candidateLength - best.length) <= EPSILON && points.length < best.points.length)))
+					continue;
+				if (!segmentsAreClear(points, searchRequest, cachedSegmentIsClear))
+					continue;
+				const route = { points, endOffset: endpoint.offset, length: candidateLength };
+				if (!best || route.length < best.length || (Math.abs(route.length - best.length) <= EPSILON && route.points.length < best.points.length))
+					best = route;
+				bestRoute = best;
+			}
+			if (best)
+				return { route: best, checkedCandidates, searchLimited: false, terminationReason: 'route-found' };
+		}
+	}
+	catch (error) {
+		if (error === SEARCH_TIME_LIMIT)
+			return { route: bestRoute, checkedCandidates, searchLimited: true, terminationReason: 'candidate-limit' };
+		throw error;
 	}
 	return { route: null, checkedCandidates, searchLimited: false, terminationReason: 'candidate-search-exhausted' };
 }

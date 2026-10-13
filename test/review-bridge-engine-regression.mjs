@@ -102,6 +102,74 @@ async function checkPendingPartialProtection() {
 		throw new Error(`isolated proxy exited ${proxy.exitCode}: ${stderr.join('')}`)
 }
 
+async function checkConcurrentWriteQueue() {
+	const port = await reservePort()
+	const proxy = spawn(process.execPath, [path.join(ROOT, 'bridge', 'command-proxy.mjs')], {
+		env: { ...process.env, PORT: String(port), PROXY_IDLE_MS: '0', PROXY_CMD_TIMEOUT_MS: '10000' },
+		stdio: ['ignore', 'ignore', 'pipe'],
+	})
+	const stderr = []
+	proxy.stderr.on('data', data => stderr.push(data.toString()))
+	let ws
+	try {
+		await waitForHealth(port)
+		ws = new WebSocket(`ws://127.0.0.1:${port}/ws`)
+		await new Promise((resolve, reject) => ws.once('open', resolve).once('error', reject))
+		ws.send(JSON.stringify({ type: 'hello', extension: 'test-mock', version: 'test', instanceId: 'queue-instance' }))
+		const received = []
+		let releaseFirst
+		const first = new Promise(resolve => { releaseFirst = resolve })
+		let firstSeenResolve
+		const firstSeen = new Promise(resolve => { firstSeenResolve = resolve })
+		ws.on('message', raw => {
+			let message
+			try { message = JSON.parse(raw.toString()) }
+			catch { return }
+			if (message.type !== 'command')
+				return
+			const sequence = message.params?.sequence
+			received.push(sequence)
+			if (sequence === 0)
+				firstSeenResolve()
+			const respond = () => ws.send(JSON.stringify({ type: 'result', id: message.id, result: { ok: true, cmd: message.cmd, data: { sequence } } }))
+			if (sequence === 0)
+				void first.then(respond)
+			else
+				respond()
+		})
+		const post = async sequence => {
+			const response = await fetch(`http://127.0.0.1:${port}/command`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cmd: 'test.write', params: { sequence }, instanceId: 'queue-instance' }),
+			})
+			return response.json()
+		}
+		const requests = Array.from({ length: 65 }, (_, sequence) => post(sequence))
+		await firstSeen
+		await new Promise(resolve => setTimeout(resolve, 200))
+		releaseFirst()
+		const results = await Promise.all(requests)
+		check('more than 50 concurrent legal writes are accepted and kept FIFO', results.every((result, index) => result?.ok === true && result.data?.sequence === index) && JSON.stringify(received) === JSON.stringify(Array.from({ length: 65 }, (_, index) => index)), JSON.stringify({ accepted: results.filter(result => result?.ok === true).length, received: received.length }))
+	}
+	finally {
+		try { ws?.close() }
+		catch {}
+		const stopped = new Promise(resolve => {
+			if (proxy.exitCode !== null) {
+				resolve()
+				return
+			}
+			const timer = setTimeout(resolve, 2000)
+			proxy.once('close', () => { clearTimeout(timer); resolve() })
+		})
+		proxy.kill()
+		await stopped
+	}
+	if (proxy.exitCode !== 0 && proxy.exitCode !== null)
+		throw new Error(`isolated proxy exited ${proxy.exitCode}: ${stderr.join('')}`)
+}
+
 async function loadRegistry() {
 	const filename = path.join(ROOT, 'src', 'engine', 'registry.ts')
 	const result = await build({ entryPoints: [filename], bundle: true, platform: 'node', format: 'cjs', write: false })
@@ -239,6 +307,7 @@ async function main() {
 	await checkMacroPartialPropagation()
 	await checkBackupIdentityThrottle()
 	await checkPendingPartialProtection()
+	await checkConcurrentWriteQueue()
 	const failed = checks.filter(item => !item.passed)
 	console.log(`\nRegression: ${checks.length - failed.length}/${checks.length} passed${failed.length ? `; failed: ${failed.map(item => item.name).join(', ')}` : ''}`)
 	process.exitCode = failed.length ? 1 : 0

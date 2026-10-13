@@ -1,9 +1,9 @@
 import type { ICommandDef } from '../../engine/types';
 import type { GeometryHost } from '../geometryHost';
-import type { CopperObstacle, Point } from './fanout-routing';
+import type { CopperObstacle, Point, RouteRequest } from './fanout-routing';
 import { normalizeBoardOutlinePolylines } from '../boardOutline';
 import { createGeometryHost } from '../geometryHost';
-import { planRouteDetailed } from './fanout-routing';
+import { normalizeRoute, planRouteDetailed } from './fanout-routing';
 
 type Direction = 'auto' | '8directions' | 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';
 type LayerName = 'top' | 'bottom';
@@ -81,6 +81,23 @@ function finite(value: unknown): value is number {
 }
 function positive(value: unknown): value is number {
 	return finite(value) && value > 0;
+}
+type HoleToHoleRule = { status: 'verified'; clearanceMil: number } | { status: 'unverified'; reason: 'missing' | 'non-default' } | { status: 'invalid'; reason: string };
+function holeToHoleRule(rules: unknown): HoleToHoleRule {
+	const otherClearance = (rules as any)?.config?.Spacing?.['Other Spacing']?.otherClearance;
+	if (!otherClearance || typeof otherClearance !== 'object')
+		return { status: 'unverified', reason: 'missing' };
+	if (otherClearance.isSetDefault !== true)
+		return { status: 'unverified', reason: 'non-default' };
+	const unit = typeof otherClearance.unit === 'string' ? otherClearance.unit.trim().toLowerCase() : '';
+	const value = otherClearance.form?.hole2Hole;
+	if (!finite(value) || value < 0)
+		return { status: 'invalid', reason: '默认规则的 form.hole2Hole 必须是非负有限数值' };
+	if (unit === 'mil')
+		return { status: 'verified', clearanceMil: value };
+	if (unit === 'mm')
+		return { status: 'verified', clearanceMil: value * 1000 / 25.4 };
+	return { status: 'invalid', reason: `默认规则单位 ${unit || '(空)'} 不受支持` };
 }
 function requiredState<T>(obj: any, getter: string, label: string): T {
 	if (!obj || typeof obj[getter] !== 'function')
@@ -161,6 +178,24 @@ function rotate(p: Point, degrees: number, center: Point): Point {
 	const y = p.y - center.y;
 	return { x: center.x + x * c - y * s, y: center.y + x * s + y * c };
 }
+function normalizePadShapeType(type: string): string {
+	switch (type.toUpperCase()) {
+		case 'OVAL':
+		case 'OBLONG':
+			return 'OBLONG';
+		case 'RECT':
+		case 'RECTANGLE':
+			return 'RECTANGLE';
+		case 'NGON':
+		case 'REGULAR_POLYGON':
+			return 'REGULAR_POLYGON';
+		case 'POLYGON':
+		case 'POLYLINE_COMPLEX_POLYGON':
+			return 'POLYLINE_COMPLEX_POLYGON';
+		default:
+			return type.toUpperCase();
+	}
+}
 function polygonSource(source: unknown): Point[][] | undefined {
 	const sets = Array.isArray(source) && Array.isArray(source[0]) ? source as unknown[][] : [source as unknown[]];
 	const output: Point[][] = [];
@@ -208,7 +243,7 @@ function padPolygon(pad: PadInfo, layer?: number): Point[][] | undefined {
 	}
 	if (!Array.isArray(shape) || typeof shape[0] !== 'string')
 		return undefined;
-	const type = shape[0].toUpperCase();
+	const type = normalizePadShapeType(shape[0]);
 	const w = Number(shape[1]);
 	const h = Number(shape[2]);
 	if (type === 'POLYLINE_COMPLEX_POLYGON') {
@@ -270,7 +305,7 @@ function padApproximationMargin(pad: PadInfo): number {
 	const shape = Array.isArray(pad.shape) ? pad.shape : [];
 	if (typeof shape[0] !== 'string')
 		return 0;
-	const type = shape[0].toUpperCase();
+	const type = normalizePadShapeType(shape[0]);
 	const width = Number(shape[1]);
 	const height = Number(shape[2]);
 	if (!positive(width) || !positive(height))
@@ -376,7 +411,7 @@ function layerOf(obj: any, label: string): number {
 	return requiredState<number>(obj, 'getState_Layer', label);
 }
 
-async function collect(host: GeometryHost): Promise<Collected> {
+async function collect(host: GeometryHost, readViaHoleSizes: boolean): Promise<Collected> {
 	const sdk = host.sdk;
 	const [regularPads, components, lines, arcs, vias, fills, pours, poured, regions, layers, holeLines, polylines] = await Promise.all([
 		host.read('读取全部独立焊盘', () => sdk.pcb_PrimitivePad.getAll()),
@@ -509,7 +544,17 @@ async function collect(host: GeometryHost): Promise<Collected> {
 			warnings.push(`过孔 ${id} 外径无效`);
 			continue;
 		}
-		obstacles.push({ type: 'circle', center: { x, y }, radius: diameter / 2, net: '', copperLayers });
+		let holeRadius: number | undefined;
+		if (type === 0 && readViaHoleSizes) {
+			const holeDiameter = requiredState<number>(via, 'getState_HoleDiameter', `过孔 ${id}`);
+			if (!positive(holeDiameter)) {
+				complete = false;
+				warnings.push(`通孔 ${id} 的钻孔直径无效，无法检查孔间距`);
+				continue;
+			}
+			holeRadius = holeDiameter / 2;
+		}
+		obstacles.push({ type: 'circle', center: { x, y }, radius: diameter / 2, ...(holeRadius == null ? {} : { holeRadius }), net: '', copperLayers });
 	}
 	for (const item of [...(fills ?? []), ...(pours ?? [])]) {
 		const layer = layerOf(item, '铜填充');
@@ -663,8 +708,12 @@ function chosenDirections(direction: Direction): Point[] {
 		return ALL_DIRS;
 	return [DIRS[direction]];
 }
-function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, collected: Collected, baseline: Awaited<ReturnType<GeometryHost['getBaseline']>>, documentUuid: string, checkBudget: () => void) {
+function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, collected: Collected, baseline: Awaited<ReturnType<GeometryHost['getBaseline']>>, documentUuid: string, checkBudget: () => void, holeRule: HoleToHoleRule) {
 	const warnings = [...collected.warnings];
+	if (holeRule.status === 'unverified')
+		warnings.push(`板级通孔间距规则未核验（${holeRule.reason === 'missing' ? '规则缺失' : '当前值非默认'}）；保留显式 clearance 规划，现有孔间距未核验`);
+	else if (holeRule.status === 'invalid')
+		warnings.push(`已标记为默认的板级通孔间距规则错误：${holeRule.reason}；拒绝规划`);
 	if (dims.missing.length)
 		warnings.push(`缺少明确 mil 尺寸：${dims.missing.join(', ')}；当前未核实 DRC 规则默认字段，不能从规则猜值`);
 	let targets: PadInfo[] = [];
@@ -677,9 +726,10 @@ function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, colle
 	const groups: Array<Record<string, unknown>> = [];
 	const plannedPrimitives: PrimitivePlan[] = [];
 	const routingObstacles: LayerObstacle[] = [...collected.obstacles];
+	let unsafeRouteNormalization = false;
 	let searchLimited = false;
 	let checkedCandidates = 0;
-	if (!dims.missing.length && collected.complete && targets.length && !warnings.some(w => /不同网络|拒绝混网/.test(w))) {
+	if (!dims.missing.length && collected.complete && holeRule.status !== 'invalid' && targets.length && !warnings.some(w => /不同网络|拒绝混网/.test(w))) {
 		for (let index = 0; index < targets.length; index++) {
 			checkBudget();
 			const target = targets[index];
@@ -708,23 +758,30 @@ function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, colle
 				? rotate(dir, target.rotation, { x: 0, y: 0 })
 				: { x: dir.x, y: dir.y });
 			const expandedDirections = candidates.map(dir => ({ dir, start: target.position, desired: { x: target.position.x + dir.x * (dims.lineLength as number) - dir.y * stagger, y: target.position.y + dir.y * (dims.lineLength as number) + dir.x * stagger } }));
-			let best: { route: Point[]; endOffset: number; length: number; checked: number; limited: boolean; reason: string } | undefined;
+			let best: { route: Point[]; request: RouteRequest; endOffset: number; length: number; checked: number; limited: boolean; reason: string } | undefined;
 			let targetChecked = 0;
 			let targetLimited = false;
 			for (const option of expandedDirections) {
 				checkBudget();
-				const planned = planRouteDetailed({ start: option.start, desiredEnd: option.desired, net: '__fanout__', lineWidth: dims.lineWidth!, viaDiameter: dims.viaDiameter!, clearance: dims.clearance!, maxEndOffset: dims.lineLength!, obstacles: targetObstacles, boardPolygons: collected.board, keepoutPolygons: collected.keepouts, maxCandidates: 20000, timeLimitMs: Number.POSITIVE_INFINITY, checkBudget });
+				const routeRequest: RouteRequest = { start: option.start, desiredEnd: option.desired, net: '__fanout__', lineWidth: dims.lineWidth!, viaDiameter: dims.viaDiameter!, viaHoleDiameter: dims.holeDiameter!, ...(holeRule.status === 'verified' ? { viaHoleToHoleClearance: holeRule.clearanceMil } : {}), clearance: dims.clearance!, maxEndOffset: dims.lineLength!, obstacles: targetObstacles, boardPolygons: collected.board, keepoutPolygons: collected.keepouts, checkBudget };
+				const planned = planRouteDetailed(routeRequest);
 				checkedCandidates += planned.checkedCandidates;
 				searchLimited ||= planned.searchLimited;
 				targetChecked += planned.checkedCandidates;
 				targetLimited ||= planned.searchLimited;
 				if (planned.route && (!best || planned.route.length < best.length))
-					best = { route: planned.route.points, endOffset: planned.route.endOffset, length: planned.route.length, checked: planned.checkedCandidates, limited: planned.searchLimited, reason: planned.terminationReason };
+					best = { route: planned.route.points, request: routeRequest, endOffset: planned.route.endOffset, length: planned.route.length, checked: planned.checkedCandidates, limited: planned.searchLimited, reason: planned.terminationReason };
 			}
 			if (!best) {
 				groups.push({ targetId: target.id, net: target.net, layer, planned: false, checkedCandidates: targetChecked, searchLimited: targetLimited, terminationReason: targetLimited ? 'candidate-limit' : 'candidate-search-exhausted' });
 				continue;
 			}
+			const normalized = normalizeRoute(best.route, best.request);
+			best.route = normalized.points;
+			unsafeRouteNormalization ||= !normalized.safeToExecute;
+			best.length = 0;
+			for (let routeIndex = 1; routeIndex < best.route.length; routeIndex++)
+				best.length += Math.hypot(best.route[routeIndex].x - best.route[routeIndex - 1].x, best.route[routeIndex].y - best.route[routeIndex - 1].y);
 			groups.push({ targetId: target.id, net: target.net, layer, planned: true, via: best.route.at(-1), length: best.length, endOffset: best.endOffset, checkedCandidates: targetChecked, searchLimited: targetLimited, terminationReason: targetLimited ? 'route-found-after-candidate-limit' : best.reason });
 			for (let i = 1; i < best.route.length; i++) {
 				const primitive: PrimitivePlan = { type: 'line', start: best.route[i - 1], end: best.route[i], net: target.net, layer, lineWidth: dims.lineWidth!, targetId: target.id };
@@ -733,11 +790,13 @@ function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, colle
 			}
 			const via: PrimitivePlan = { type: 'via', center: best.route.at(-1), net: target.net, layer: 'all-copper', diameter: dims.viaDiameter!, holeDiameter: dims.holeDiameter!, targetId: target.id };
 			plannedPrimitives.push(via);
-			routingObstacles.push({ type: 'circle', center: via.center!, radius: dims.viaDiameter! / 2, net: '', copperLayers: collected.copperLayers });
+			routingObstacles.push({ type: 'circle', center: via.center!, radius: dims.viaDiameter! / 2, holeRadius: dims.holeDiameter! / 2, net: '', copperLayers: collected.copperLayers });
 		}
 	}
 	const failedTarget = targets.length === 0 || groups.length !== targets.length || groups.some(group => group.planned !== true);
-	const executable = collected.complete && dims.missing.length === 0 && targets.length > 0 && !failedTarget && !warnings.some(w => /混网|没有网络|必须显式|未形成完整|无法/.test(w));
+	if (unsafeRouteNormalization)
+		warnings.push('近共线路段合并后未通过障碍、板框或禁区复检，保留原折点但拒绝执行');
+	const executable = collected.complete && dims.missing.length === 0 && targets.length > 0 && !failedTarget && !unsafeRouteNormalization && !warnings.some(w => /混网|没有网络|必须显式|未形成完整|无法/.test(w));
 	return {
 		documentUuid,
 		operation: 'fanout',
@@ -748,7 +807,7 @@ function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, colle
 		groups,
 		plannedPrimitives,
 		executable,
-		coverage: { complete: collected.complete, pads: collected.pads.length, obstacles: collected.obstacles.length, boardPolygons: collected.board.length, keepoutPolygons: collected.keepouts.length, copperLayers: collected.copperLayers, searchLimited, checkedCandidates, sampling: 'ellipses, rounded rectangles and oblong pads use at most 10 degree steps with conservative outward chord-sagitta padding; unsupported curve polygons block execution' },
+		coverage: { complete: collected.complete, pads: collected.pads.length, obstacles: collected.obstacles.length, boardPolygons: collected.board.length, keepoutPolygons: collected.keepouts.length, copperLayers: collected.copperLayers, holeToHoleRule: holeRule.status === 'verified' ? { verified: true, clearanceMil: holeRule.clearanceMil } : { verified: false, status: holeRule.status }, searchLimited, checkedCandidates, sampling: 'ellipses, rounded rectangles and oblong pads use at most 10 degree steps with conservative outward chord-sagitta padding; unsupported curve polygons block execution' },
 		warnings: [...new Set(warnings)],
 		provenance: { algorithm: 'eext-pad-fanout/src/fanout-routing.ts', upstreamCommit: '7c88e571457e6d63463b7cb391e1e62bdbdd02d7', sdk: '@jlceda/pro-api-types 0.4.26', viaType: 'through-hole' },
 	};
@@ -756,9 +815,10 @@ function makePlan(input: FanoutInput, dims: ReturnType<typeof dimensions>, colle
 
 async function buildPlan(host: GeometryHost, rawInput: FanoutInput, baseline?: Awaited<ReturnType<GeometryHost['getBaseline']>>) {
 	const snapshot = baseline ?? await host.getBaseline();
-	const collected = await collect(host);
+	const holeRule = holeToHoleRule(snapshot.rules);
+	const collected = await collect(host, holeRule.status === 'verified');
 	const dims = dimensions(rawInput);
-	const plan = makePlan(rawInput, dims, collected, snapshot, host.documentUuid, () => host.checkBudget());
+	const plan = makePlan(rawInput, dims, collected, snapshot, host.documentUuid, () => host.checkBudget(), holeRule);
 	await host.assertBaseline(snapshot);
 	return plan;
 }
@@ -878,7 +938,7 @@ export const fanoutCommands: Array<ICommandDef> = [
 			{ name: 'viaDiameter', type: 'number', description: '过孔外径（mil）；当前未核实 DRC 规则字段，需要明确提供' },
 			{ name: 'holeDiameter', type: 'number', description: '过孔孔径（mil）；当前未核实 DRC 规则字段，需要明确提供' },
 			{ name: 'clearance', type: 'number', description: '安全间距（mil）；当前未核实 DRC 规则字段，需要明确提供' },
-			{ name: 'staggerLength', type: 'number', description: '相邻目标线长参差值（mil），默认 0' },
+			{ name: 'staggerLength', type: 'number', description: '按目标顺序沿出口垂线正负各偏移 staggerLength/2，mil，默认 0' },
 		],
 		returns: '扇出计划，含真实目标坐标、网络、层、线宽、过孔尺寸、搜索覆盖与 executable；不写入 PCB。',
 		example: { cmd: 'pcb.getFanoutPlan', params: { padIds: ['pad-id'], lineLength: 120, lineWidth: 8, viaDiameter: 24, holeDiameter: 12, clearance: 8 } },

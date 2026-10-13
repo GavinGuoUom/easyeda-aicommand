@@ -188,8 +188,8 @@ export const cbbCommands: Array<ICommandDef> = [
 		params: [
 			{ name: 'libraryUuid', type: 'string', required: true, description: '库 UUID' },
 			{ name: 'cbbUuid', type: 'string', required: true, description: '模块 UUID' },
-			{ name: 'x', type: 'number', required: true, description: '坐标 X（10mil 单位，需为 5 的倍数）' },
-			{ name: 'y', type: 'number', required: true, description: '坐标 Y（10mil 单位，需为 5 的倍数）' },
+			{ name: 'x', type: 'number', required: true, description: '坐标 X（10mil 单位）' },
+			{ name: 'y', type: 'number', required: true, description: '坐标 Y（10mil 单位）' },
 			{ name: 'rotation', type: 'number', required: false, description: '旋转角度，默认 0' },
 			{ name: 'mirror', type: 'boolean', required: false, description: '是否镜像，默认 false' },
 		],
@@ -215,16 +215,16 @@ export const cbbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'cbb.placeSchematicPage',
-		summary: '把复用模块的原理图图页内容铺进当前图页（uuid 是模块工程内图页的 UUID，先 cbb.openProject + editor.listTabs 获取）',
+		summary: '把复用模块的原理图页内容铺进当前图页；uuid 传来源图页 UUID，先核对该页所属父原理图。SDK 返回值只表示当前 host 对提交调用的响应，不代表读回或物理完成',
 		params: [
 			{ name: 'libraryUuid', type: 'string', required: true, description: 'CBB 工程所在库的 UUID' },
 			{ name: 'cbbUuid', type: 'string', required: true, description: 'CBB 工程 UUID' },
-			{ name: 'uuid', type: 'string', required: true, description: 'CBB 工程内原理图图页的 UUID' },
+			{ name: 'uuid', type: 'string', required: true, description: 'CBB 工程内来源原理图图页 UUID；先核对该页所属父原理图，不能用父 SCH UUID 代替' },
 			{ name: 'x', type: 'number', required: true, description: '放置坐标 X' },
 			{ name: 'y', type: 'number', required: true, description: '放置坐标 Y' },
-			{ name: 'reimportWhenNameRepeated', type: 'boolean', required: false, description: '重名模块时是否重新引入，默认 true' },
+			{ name: 'reimportWhenNameRepeated', type: 'boolean', required: false, description: '重名时请求重新引入，默认 true；旧 host 可能忽略该选项' },
 		],
-		returns: '{ placed }',
+		returns: '{ placed }（placed 是 SDK 对当前 host 提交调用的响应，不代表读回或物理完成）',
 		example: { cmd: 'cbb.placeSchematicPage', params: { libraryUuid: 'a', cbbUuid: 'b', uuid: 'c', x: 2000, y: 2000 } },
 		handler: async (params) => {
 			if (!params.libraryUuid || !params.cbbUuid || !params.uuid || params.x === undefined || params.y === undefined)
@@ -247,7 +247,7 @@ export const cbbCommands: Array<ICommandDef> = [
 			{ name: 'uuid', type: 'string', required: true, description: 'CBB 工程内 PCB 的 UUID' },
 			{ name: 'x', type: 'number', required: true, description: '放置坐标 X（PCB 单位 mil）' },
 			{ name: 'y', type: 'number', required: true, description: '放置坐标 Y（PCB 单位 mil）' },
-			{ name: 'reimportWhenNameRepeated', type: 'boolean', required: false, description: '重名模块时是否重新引入，默认 true' },
+			{ name: 'reimportWhenNameRepeated', type: 'boolean', required: false, description: '重名时请求重新引入，默认 true；旧 host 可能忽略该选项' },
 		],
 		returns: '{ placed }',
 		example: { cmd: 'cbb.placePcb', params: { libraryUuid: 'a', cbbUuid: 'b', uuid: 'c', x: 500, y: -500 } },

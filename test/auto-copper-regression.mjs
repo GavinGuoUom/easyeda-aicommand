@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
+import { runInNewContext } from 'node:vm';
 import { build } from 'esbuild';
 
 async function main() {
 	const root = resolve(import.meta.dirname, '..');
 	const built = await build({
 		stdin: {
-			contents: `import { autoCopperCommands } from '../src/commands/autoCopper.ts'; import { comparePolygonSource } from '../src/pcb/autoCopper/geometryReadback.ts'; export { autoCopperCommands, comparePolygonSource }`,
+			contents: `import { autoCopperCommands } from '../src/commands/autoCopper.ts'; import { comparePolygonSource } from '../src/pcb/autoCopper/geometryReadback.ts'; import namespace from '../src/pcb/autoCopper/namespace.ts'; export { autoCopperCommands, comparePolygonSource, namespace }`,
 			resolveDir: resolve(root, 'test'),
 			sourcefile: 'auto-copper-regression-entry.ts',
 		},
@@ -19,7 +21,25 @@ async function main() {
 		target: 'node24',
 	});
 	const moduleUrl = `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`;
-	const { autoCopperCommands, comparePolygonSource } = await import(moduleUrl);
+	const { autoCopperCommands, comparePolygonSource, namespace } = await import(moduleUrl);
+	const coreSource = readFileSync(resolve(root, 'src/pcb/autoCopper/upstream/core.js'), 'utf8');
+	const counterMarker = 'function countCoveredTargetContours(polygonPointsList, targetKeepInContours = []) {';
+	const counterStart = coreSource.indexOf(counterMarker);
+	assert.notEqual(counterStart, -1, 'production coverage counter must remain present');
+	const bodyStart = counterStart + counterMarker.length;
+	let bodyEnd = bodyStart;
+	let braceDepth = 1;
+	for (; bodyEnd < coreSource.length && braceDepth > 0; bodyEnd++) {
+		if (coreSource[bodyEnd] === '{')
+			braceDepth++;
+		else if (coreSource[bodyEnd] === '}')
+			braceDepth--;
+	}
+	assert.equal(braceDepth, 0, 'production coverage counter must be balanced');
+	const countCoveredTargetContours = runInNewContext(
+		`(function countCoveredTargetContours(polygonPointsList, targetKeepInContours = []) {${coreSource.slice(bodyStart, bodyEnd - 1)}})`,
+		{ polygonCoversContour: namespace.AutoCopperPour.polygonUtils.polygonCoversContour, roundCoordinate: namespace.AutoCopperPour.geometryUtils.roundCoordinate },
+	);
 	const command = name => autoCopperCommands.find(item => item.name === name);
 	const docHead = uuid => `${JSON.stringify({ type: 'DOCHEAD', ticket: 0 })}||${JSON.stringify({ docType: 'PCB', uuid, client: 'auto-copper-test' })}|`;
 	const rules = { config: { spacingMil: 8 } };
@@ -42,6 +62,9 @@ async function main() {
 	function line(id, x1, y1, x2, y2, width = 0.1, layer = 11, net = '') {
 		return { getState_PrimitiveId: () => id, getState_PrimitiveType: () => 'Line', getState_Layer: () => layer, getState_StartX: () => x1, getState_StartY: () => y1, getState_EndX: () => x2, getState_EndY: () => y2, getState_LineWidth: () => width, getState_Net: () => net };
 	}
+	function via(id, x, y, net = 'N1', diameter = 24) {
+		return { getState_PrimitiveId: () => id, getState_X: () => x, getState_Y: () => y, getState_Diameter: () => diameter, getState_Net: () => net, getState_ViaType: () => 0, getState_Layer: () => 12 };
+	}
 	function pour(id, net, source) {
 		return {
 			getState_PrimitiveId: () => id,
@@ -52,9 +75,11 @@ async function main() {
 			getState_ComplexPolygon: () => ({ getSource: () => source }),
 		};
 	}
-	function install({ pads = [pad('LONG-PAD-1')], components = [], vias = [], pours = [], traces = [], outline = true, outlinePolylines = [], rulesValue = rules, badPadCollection = false, fillReadbackNet = undefined, pourReadbackSource = undefined, pourReadbackNet = undefined, pourReadbackLayer = undefined, parentReadbackId = undefined, parentReadbackNet = undefined, parentReadbackLayer = undefined, parentReadbackSource = undefined, pouredConfig = {}, rebuildResult = true, createDelayMs = 0 } = {}) {
-		const state = { writes: [], deletions: 0, pads: [...pads], components: [...components], vias: [...vias], source: docHead('pcb-A'), rules: rulesValue, nextId: 1, pourGetCalls: new Map(), pours: new Map(pours.map(item => [item.getState_PrimitiveId(), item])), fills: new Map(), poured: [], rebuildResult, fillReadbackNet, pourReadbackSource, pourReadbackNet, pourReadbackLayer, parentReadbackId, parentReadbackNet, parentReadbackLayer, parentReadbackSource, pouredConfig, createDelayMs };
-		const outlineLines = outline ? [line('O1', 0, 0, 1000, 0), line('O2', 1000, 0, 1000, 1000), line('O3', 1000, 1000, 0, 1000), line('O4', 0, 1000, 0, 0)] : [];
+	function install({ pads = [pad('LONG-PAD-1')], components = [], vias = [], pours = [], traces = [], outline = true, outlineOffset = { x: 0, y: 0 }, outlinePolylines = [], rulesValue = rules, badPadCollection = false, fillReadbackNet = undefined, pourReadbackSource = undefined, pourReadbackNet = undefined, pourReadbackLayer = undefined, parentReadbackId = undefined, parentReadbackNet = undefined, parentReadbackLayer = undefined, parentReadbackSource = undefined, pouredConfig = {}, rebuildResult = true, rebuildResultUndefined = false, createDelayMs = 0 } = {}) {
+		const state = { writes: [], deletions: 0, pads: [...pads], components: [...components], vias: [...vias], source: docHead('pcb-A'), rules: rulesValue, nextId: 1, pourGetCalls: new Map(), pours: new Map(pours.map(item => [item.getState_PrimitiveId(), item])), fills: new Map(), poured: [], rebuildResult, rebuildResultUndefined, fillReadbackNet, pourReadbackSource, pourReadbackNet, pourReadbackLayer, parentReadbackId, parentReadbackNet, parentReadbackLayer, parentReadbackSource, pouredConfig, createDelayMs };
+		const x0 = outlineOffset.x;
+		const y0 = outlineOffset.y;
+		const outlineLines = outline ? [line('O1', x0, y0, x0 + 1000, y0), line('O2', x0 + 1000, y0, x0 + 1000, y0 + 1000), line('O3', x0 + 1000, y0 + 1000, x0, y0 + 1000), line('O4', x0, y0 + 1000, x0, y0)] : [];
 		const polygon = source => ({ getSource: () => source });
 		const sdk = {
 			dmt_SelectControl: { getCurrentDocumentInfo: async () => ({ uuid: 'pcb-A', documentType: 3 }) },
@@ -89,7 +114,7 @@ async function main() {
 							const item = { getState_PrimitiveId: () => `POURED-${id}`, getState_PourPrimitiveId: () => config.pourId ?? id, getState_PourFills: () => config.noFills ? [] : [region] };
 							state.poured.push(item);
 						}
-						return state.rebuildResult;
+						return state.rebuildResultUndefined ? undefined : state.rebuildResult;
 					} };
 					state.pours.set(id, obj);
 					state.source += `\n${JSON.stringify({ type: 'POUR', id, ticket: 1 })}||${JSON.stringify({ order: 1, netName: net, layerId: layer, name: `Auto Copper ${net}` })}|`;
@@ -211,6 +236,36 @@ async function main() {
 		assert.ok(Array.isArray(result.groups[0].resolved.clearance.polygonSources));
 		assert.equal(f.state.writes.length, 0);
 		assert.equal(result.provenance.commit, '98317b6b5941977a3ae90948a05295f9d8b1169f');
+	});
+
+	await test('24 mil via target at fractional-sensitive coordinates remains covered after clipping precision normalization', async () => {
+		const f = install({ pads: [], vias: [via('V24', 1000, -748)], outlineOffset: { x: 500, y: -1248 } });
+		const result = await plan(params({ targetIds: ['V24'], expansion: 30 }));
+		assert.equal(result.executable, true, JSON.stringify(result.coverage.unresolved));
+		assert.equal(result.targets[0].id, 'V24');
+		assert.equal(f.state.writes.length, 0);
+	});
+
+	await test('24 mil via coverage remains stable under fractional coordinate translation', async () => {
+		const shift = 0.0004;
+		const f = install({ pads: [], vias: [via('V24-SHIFTED', 1000 + shift, -748 - shift)], outlineOffset: { x: 500 + shift, y: -1248 - shift } });
+		const result = await plan(params({ targetIds: ['V24-SHIFTED'], expansion: 30 }));
+		assert.equal(result.executable, true, JSON.stringify(result.coverage.unresolved));
+		assert.equal(result.targets[0].id, 'V24-SHIFTED');
+		assert.equal(f.state.writes.length, 0);
+	});
+
+	await test('clipping that removes part of the target contour remains uncovered after precision normalization', async () => {
+		const polygonCoversContour = namespace.AutoCopperPour.polygonUtils.polygonCoversContour;
+		const roundCoordinate = namespace.AutoCopperPour.geometryUtils.roundCoordinate;
+		const targetContour = Array.from({ length: 12 }, (_, index) => {
+			const angle = index * Math.PI / 6;
+			return { x: 1000 + Math.cos(angle) * 12, y: -748 + Math.sin(angle) * 12 };
+		});
+		const completeRoundedRing = targetContour.map(point => ({ x: roundCoordinate(point.x), y: roundCoordinate(point.y) }));
+		const clippedRingMissingArc = [{ x: 1000, y: -748 }, { x: 1013, y: -748 }, { x: 1013, y: -735 }, { x: 1000, y: -735 }, { x: 1000, y: -748 }];
+		assert.equal(countCoveredTargetContours([completeRoundedRing], [targetContour], polygonCoversContour, roundCoordinate), 1);
+		assert.equal(countCoveredTargetContours([clippedRingMissingArc], [targetContour], polygonCoversContour, roundCoordinate), 0);
 	});
 
 	await test('polygon-only R rectangle closes the board and reports its raw source', async () => {
@@ -435,6 +490,21 @@ async function main() {
 		assert.deepEqual(error.cause.fillReadback.association.observedPouredIds, [{ id: 'POURED-POUR-1', pourId: 'OTHER-POUR' }]);
 		assert.deepEqual(f.state.writes, ['pour.create', 'pour.rebuild']);
 		assert.equal(error.cause.created[0].status, 'border-read-back; rebuild returned; fill pending');
+	});
+
+	await test('rebuild without a fill object retains the created border and reports fill as unverified', async () => {
+		for (const override of [{ rebuildResult: false }, { rebuildResultUndefined: true }]) {
+			const f = install(override);
+			const preview = await plan(params());
+			const error = await execute(preview).then(() => assert.fail('missing generated fill must reject'), caught => caught);
+			assert.equal(error.cause?.partial, true);
+			assert.deepEqual(error.cause.verifiedIds, []);
+			assert.equal(error.cause.created.length, 1);
+			assert.equal(error.cause.created[0].status, 'border-read-back; rebuild returned no fill object; fill unverified');
+			assert.match(error.message, /重建未返回实填充对象/);
+			assert.doesNotMatch(error.message, /返回 false|返回 undefined/);
+			assert.deepEqual(f.state.writes, ['pour.create', 'pour.rebuild']);
+		}
 	});
 
 	await test('post-rebuild parent ID, network and layer mismatches retain observed values', async () => {

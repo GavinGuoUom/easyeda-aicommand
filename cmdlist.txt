@@ -43,6 +43,8 @@ lib.symbolSearch
 lib.symbolUpdateSource
 library.getDeviceByLcsc
 library.searchDevice
+module.getContext
+module.getStatus
 pcb.addCustomLayer
 pcb.addNetToClass
 pcb.addNetToEqualLengthGroup
@@ -200,6 +202,8 @@ schematic.save
 schematic.setAttribute
 schematic.setPinNoConnect
 schematic.setWireNet
-system.eval
 task.get
 task.list
+schematic.getComponentUpdatePlan
+schematic.updateComponents
+lib.footprintGetSource

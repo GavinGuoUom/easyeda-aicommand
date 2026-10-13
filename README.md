@@ -47,6 +47,8 @@ Place components by JLC part number, read their actual pins, edit reference desi
 
 For an existing schematic, preview an organization plan for selected components or regions before rearranging them and rebuilding connections. This is suitable for repeated channels, MCU peripherals, interface modules, and other drawing tasks with clear connection relationships.
 
+For existing components, `schematic.getComponentUpdatePlan` previews footprint and property changes; `schematic.updateComponents` applies the complete plan and reads each result back. This supports in-place footprint changes and property patches while retaining the original schematic component. In an isolated EDA project, the v0.10.143 normal update path changed a connected resistor from 0402 to 0805, updated requested properties, and passed save/close/reopen checks with the component identity, position, symbol, and wires preserved. This session did not synchronize the change to PCB; use the normal PCB import workflow separately and inspect the resulting pads and nets.
+
 ### 5. Batch wiring, net labels, and connection checks
 
 Create direct pin-to-pin wires, short wires with net labels, or a mixture of both. Manage net-label names, mark pins as no-connect, query net members, and export netlists.
@@ -74,7 +76,7 @@ PCB DFM, SMT, and same-net spacing checks return 18, 7, and 1 check items respec
 
 ### 9. Pad fanout and local copper generation
 
-`pcb.getFanoutPlan` and `pcb.getAutoCopperPlan` first produce read-only plans. `pcb.fanout` and `pcb.autoCopper` execute the complete plans. Fanout length, track width, via outer diameter, drill diameter, and clearance must all be specified explicitly in mils. Supported geometry, conservative approximations, and rejection conditions are described in [Geometry command details](skills/ai-command-engine/references/commands-geometry.md). These geometry features have local regression and algorithm comparison results only; writes and save/reopen behavior have not been verified in a real EDA project.
+`pcb.getFanoutPlan` and `pcb.getAutoCopperPlan` first produce read-only plans. `pcb.fanout` and `pcb.autoCopper` execute the complete plans. Fanout length, track width, via outer diameter, drill diameter, and clearance must all be specified explicitly in mils. Supported geometry, conservative approximations, and rejection conditions are described in [Geometry command details](skills/ai-command-engine/references/commands-geometry.md). Historical isolated-project checks cover selected larger-MCU fanout samples; they do not establish a pass for every package shape, every board, or a complete MCU fanout workflow. The separate fill-readback path has also been verified on a specific copper area after save/close/reopen. These records are scoped to those tested objects and do not replace review of the current plan, geometry, or manufacturing output.
 
 ### 10. Pad expansion and net-name silkscreen text
 
@@ -82,7 +84,7 @@ Use `pcb.getPadExpansionPlan` / `pcb.expandPads` to plan and perform pad expansi
 
 ## Operation demonstrations
 
-Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not hands-on acceptance records for v0.10.116.
+Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not hands-on acceptance records for v0.10.143.
 
 ### Schematic: multi-pin MCU, supporting parts, short wires, and labels
 
@@ -104,27 +106,28 @@ The animation uses screenshots from real EDA operations; command descriptions ar
 
 The extension, proxy, and AI skill are installed separately. The proxy runs locally by default at `http://127.0.0.1:49720`. An optional issue-reporting tool can collect the information needed for a report and submit a GitHub Issue using the user’s authenticated local [GitHub CLI](https://cli.github.com/). The AI informs the user before submission. Issue reporting is never triggered automatically by an EDA command and does not upload project data in the background.
 
+Commands in the `module.*` namespace are a narrow proxy to the separate module-reuse extension. That companion extension must be installed independently; it is not bundled in or published as part of this extension package. Only the module operations exposed by the installed companion are available.
+
 ## Release status
 
-**v0.10.116 was formally released on 2026-10-11.** Local targeted regression and build checks passed. The installation check read back 218 commands and separately checked four removed entry points; this does not mean every command was tested. Ordinary native placement, component movement, and layout features remain available. Real EDA writes were not performed for this release, and not all features and scenarios were verified. A GitHub release does not mean the EDA marketplace has approved the extension. Historical marketplace error `103014` (“entry cannot be empty”) has not been rechecked. See the [v0.10.116 release notes](docs/releases/v0.10.116.md).
+**v0.10.143 is the formal release dated 2026-10-13.** In an isolated EDA project, normal in-place component updates passed for batch attribute changes and a real 0402-to-0805 footprint change; saving, closing, reopening, and readback confirmed the requested changes persisted while component identity, position, symbol, and wires remained. The stale footprint-name repair fallback branch was not triggered in this session and has regression evidence only. This release session did not synchronize the change to PCB; prior v0.10.138 manually confirmed PCB-import evidence remains historical and separate. Other commands and scenarios were not all exercised. The v0.10.116 extension was listed in the EDA marketplace as of 2026-10-12; v0.10.143 marketplace submission and review are pending. See the [v0.10.143 release notes](docs/releases/v0.10.143.md).
 
 The “little robot drawing a circuit board” shown on the page is the project logo. The marketplace icon file is `images/logo-marketplace.png`.
 
-<a id="v010116-下载与安装"></a>
+<a id="v010143-downloads-and-installation"></a>
 
-## v0.10.116 downloads and installation
+## v0.10.143 downloads and installation
 
-The plugin retains version `v0.10.116`. The English-first documentation and skill were added on 2026-10-13; the original tag and source archive remain unchanged:
+Download the formal v0.10.143 release files:
 
-- [Extension package: ai-command-engine_v0.10.116.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine_v0.10.116.eext)
-- [Companion skill package: ai-command-engine-skill_en-zh_v0.10.116.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_en-zh_v0.10.116.zip)
-- [English-first skill checksum: SHA256SUMS-docs-20261013.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS-docs-20261013.txt)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS.txt)
-- [v0.10.116 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip)
+- [Extension package: ai-command-engine_v0.10.143.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine_v0.10.143.eext)
+- [Companion skill package: ai-command-engine-skill_en-zh_v0.10.143.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine-skill_en-zh_v0.10.143.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/SHA256SUMS.txt)
+- [v0.10.143 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.143.zip)
 
-The English-first skill ZIP includes `SKILL.md` and English references, plus `SKILL_ZH.md` and `references/zh/` as the Chinese fallback. These are two documentation versions inside one installed skill; do not install the fallback as a second automatic skill. The original Chinese skill attachment remains available in the release. Verify the new ZIP with `SHA256SUMS-docs-20261013.txt`.
+The English-first skill ZIP includes `SKILL.md` and English references, plus `SKILL_ZH.md` and `references/zh/` as the Chinese fallback. These are two documentation versions inside one installed skill; do not install the fallback as a second automatic skill. Verify both release files with `SHA256SUMS.txt`.
 
-After extracting the skill ZIP, install the entire `ai-command-engine/` directory in your AI tool’s skill directory, keeping subdirectories such as `references/` and scripts; do not copy only `SKILL.md`. The original tagged source ZIP contains the original Chinese skill at `skills/ai-command-engine/`. Use the new skill ZIP or current main branch for the English-first edition. The proxy is not packaged separately. Download the source ZIP, then follow the [installation and usage guide](docs/QUICKSTART.md) to install Node.js dependencies and run the local proxy. The extension, proxy, and skill are separate installs; the extension marketplace will not install the proxy or skill for you.
+After extracting the skill ZIP, install the entire `ai-command-engine/` directory in your AI tool’s skill directory, keeping subdirectories such as `references/` and scripts; do not copy only `SKILL.md`. The proxy is not packaged separately. Download the source ZIP, then follow the [installation and usage guide](docs/QUICKSTART.md) to install Node.js dependencies and run the local proxy. The extension, proxy, and skill are separate installs; the extension marketplace will not install the proxy or skill for you.
 
 ## First use
 

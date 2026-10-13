@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | `project.getInfo` | 当前工程信息（名称+文档树 uuid） | 无 |
 | `project.getInfoOf` | 指定工程信息 | `projectUuid` |
-| `project.list` | 全部工程（`detail:true` 逐个查信息，较慢） | `detail?` |
+| `project.list` | 工程列表；可指定团队（`detail:true` 逐个查信息，较慢） | `teamUuid?`, `detail?` |
 | `project.create` | 新建工程 | `name`, `projectName?`（英文内部名）, `description?` |
 | `project.open` | 打开指定工程（切换当前工程）。⚠️ **当前工程有未保存修改时官方直接返回失败**（"工程打开失败"）——先 `schematic.save` 再切 | `projectUuid` |
 | `project.moveToFolder` | 移动工程到文件夹（留空=根目录） | `projectUuid`, `folderUuid?` |
@@ -23,6 +23,18 @@
 | `project.getDocumentSource` | 读当前激活文档源数据 JSON（只读整体分析，比逐个查图元快） | 无 |
 | `project.modifyTitleBlock` | 改标题栏（⚠️ data 键必须是图框已存在字段，先 getPageInfo 查 titleBlockData；Page Size/Symbol 不能接口切换） | `showTitleBlock?`, `data?` |
 
+## 按团队核对工程（0.10.117）
+
+`project.list` 的 `teamUuid` 为可选非空字符串，提供时原样传给 SDK；省略时沿用宿主默认查询范围。返回工程 UUID 数组；`detail:true` 时按顺序返回 `{ uuid, info }` 数组。
+
+2026-10-11 已在 4.1.71 宿主的 0.10.117 安装版取得指定团队 21 个工程及详情，并包含同团队已知工程对照。异常返回拒绝已通过本地模拟，未在宿主注入异常。
+
+宿主返回 undefined、null、非数组或含非字符串、空字符串项的列表时明确报错，不当作“没有工程”。工程 ID 按宿主字符串保留，不额外猜测格式。真实空数组仍返回 `[]`，但需用同团队已知工程作对照，不能只凭空列表认定此前导入未发生。此命令只读，不解除未知写入保护，也不自动重试导入。
+
+```json
+{"instanceId":"当前核实的窗口 ID","cmd":"project.list","params":{"teamUuid":"导入结果中记录的目标团队 UUID","detail":true}}
+```
+
 ## 板子（Board）与关联
 
 | 指令 | 说明 | 关键参数 |
@@ -30,7 +42,7 @@
 | `project.getBoardInfo` | 当前板子信息与原理图/PCB 关联状态；`pcb.importChanges` 报导入失败时用它排查游离 PCB | 无 |
 | `project.associateBoard` | 关联原理图+PCB 到板子（修复游离 PCB） | `schematicUuid`, `pcbUuid` |
 | `project.copyBoard` | 复制板子 | `boardName` |
-| `project.deleteBoard` | 删除板子 | `boardName` |
+| `project.deleteBoard` | 删除指定板子；官方返回失败时附带当前目标信息，不自动重试 | `boardName` |
 | `project.renameBoard` | 重命名板子（⚠️ 按名字匹配，重名会改错——先 getBoardInfo 确认） | `boardName`, `newName` |
 
 ## 原理图与图页

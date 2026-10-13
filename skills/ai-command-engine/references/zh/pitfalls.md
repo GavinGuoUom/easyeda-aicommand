@@ -57,7 +57,7 @@
 ## 6. 检查与导入
 
 - 原理图 DRC 4.1 只返回分类计数；`runDrcDetailed` 需 EDA v4.2+，4.1 只返回聚合（`aggregated:true`），**别假装支持或反复重试**。
-- 原理图 DRC 致命项清零后再导入。0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
+- `pcb.importChanges` 由插件读取来源原理图并核对目标PCB的器件身份、封装关联和焊盘网络；内容匹配时正常返回成功，允许原本已匹配而没有变化。SDK返回true但内容尚未应用、只应用部分变更或读取无法确认时，保留pending-verification/unknown并停止依赖写入，不自动重发。宿主仍可能要求应用修改；本次新增内容核对尚待安装实测，成功范围不包含保存持久性或成套模块布局验收。
 - `save` 无修改返回 false 是官方行为；`renameBoard` 前先 `project.getBoardInfo` 防重名误改。
 - `openDocument` 参数名是 `uuid`（不是 documentUuid），传错静默失败——调用后查返回 ok；偶发切页超时先重试或手动切页再复核。
 - `runDrcDetailed` 偶发超时一次后自恢复——先重试，勿判插件失效。
@@ -88,7 +88,7 @@
 ## 超时与调试（0.10.36~0.10.37 定论）
 
 - **超时≠取消**：代理/扩展超时只是放弃等待，指令内部可能仍在后台执行（EDA 官方 API 无取消机制）。重发前先用只读指令确认现场，避免重复写入。0.10.37 起全链路（客户端 300s / 代理 300s / 扩展 300s / 空闲退出 300s）统一，改代理脚本须重启代理才生效。
-- **system.eval 不可用**：EDA 扩展沙箱同时禁用 new Function 和 eval（0.10.36 实测），别再用它调试，提需求封正式指令。
+- `system.eval` 已移除，不再列为可用调试指令。需要的操作应使用实际支持的指令。
 
 ## 库指令假失败（0.10.38 实测）
 
@@ -112,7 +112,7 @@
 - 当前统一使用 `schematic.delete`：源码快照移除后核对源码与模型；内容比较仅忽略两层记录的 `header.ticket`，回放仍保留原 ticket，其余 header、data、记录数、有效记录与模型继续严格核对。0.10.85 隔离工程安装版经 save→close→open 后确认目标未复活。
 - 普通删除不自动保存；`persistenceVerified:false` 表示命令本身没有执行关闭重开验证，并不否定任务级独立验收。按任务另行 save→close→open 并重扫目标。0.10.86 候选移除旧实验入口；隔离工程安装版 0.10.85 仍显示该入口，日常操作统一用 `schematic.delete`。
 - 验证删除持久性不能只看即时读回，必须 **save → `editor.closeDocument` → `editor.openDocument` → 重扫源码**（close 是异步的，关掉后轮询页签列表确认真关了再开）。
-- `editor.closeDocument` 官方关闭异步生效（约 2 秒内页签消失）；脏文档会弹确认框 AI 点不了，返回 closed:false——**关前必须先 schematic.save**。
+- `editor.closeDocument` 在插件内读取页签状态，确认关闭后返回。需要保留修改时先保存；宿主的未保存确认框未处理或关闭结果未知时如实报错，不把保存关闭重开测试作为普通关闭的前提。
 
 ## TEXT 官方 API 层历史实测（0.10.55，EDA 4.1.60）
 

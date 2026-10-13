@@ -32,14 +32,16 @@ export const editorCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'editor.closeDocument',
-		summary: '关闭指定文档页签（官方 dmt_EditorControl.closeDocument）。用途：删除持久化对照测试（删→存→关→开→读回）、释放卡死的文档会话。**关闭前必须先 save**：脏文档可能弹「是否保存」对话框；关闭及页签树读回未确认时返回失败，读回未知会标记 partial 并阻止宏继续',
+		summary: '关闭指定文档页签（官方 dmt_EditorControl.closeDocument）。关闭及页签树读回未确认时返回失败；未保存文档可能显示确认对话框，读回未知会标记 partial 并阻止宏继续',
 		params: [
 			{ name: 'uuid', type: 'string', description: '文档 UUID（与 tabId 二选一）' },
 			{ name: 'tabId', type: 'string', description: '页签 ID（editor.listTabs / openDocument 返回；优先于 uuid）' },
 		],
-		returns: '{ tabId, closed, note? }（closed=false 为命令失败；页签树必须是有效结构且明确不含目标才能报告 closed=true）',
+		returns: '{ tabId, closed:true, sdkResult }（closed 只表示有效页签树确认目标已缺席；不证明文档已保存。SDK false 但目标已缺席也可报告关闭后状态已成立）',
 		example: { cmd: 'editor.closeDocument', params: { uuid: '5c96eb02cb6183a2' } },
 		handler: async (params) => {
+			const closeWaitBudgetMs = params._timeoutMs == null ? 290_000 : Math.max(1, Number(params._timeoutMs) || 1)
+			const closeDeadline = performance.now() + closeWaitBudgetMs
 			let tabId = params.tabId ? String(params.tabId) : undefined
 			const inspectTree = (tree: any, matches: (tabId: string) => boolean): { valid: boolean, found: boolean } => {
 				let found = false
@@ -74,7 +76,23 @@ export const editorCommands: Array<ICommandDef> = [
 				return { valid, found }
 			}
 			const readTree = async (stage: string): Promise<any> => {
-				const tree = await (eda.dmt_EditorControl as any).getSplitScreenTree()
+				const remaining = closeDeadline - performance.now()
+				if (remaining <= 0)
+					throw new Error(`${stage}读取页签树时命令预算已耗尽`)
+				let timer: ReturnType<typeof setTimeout> | undefined
+				let tree: any
+				try {
+					tree = await Promise.race([
+						(eda.dmt_EditorControl as any).getSplitScreenTree(),
+						new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${stage}读取页签树超出剩余命令预算`)), remaining) }),
+					])
+				}
+				finally {
+					if (timer)
+						clearTimeout(timer)
+				}
+				if (performance.now() >= closeDeadline)
+					throw new Error(`${stage}读取页签树时命令预算已耗尽`)
 				if (!tree || typeof tree !== 'object' || Array.isArray(tree))
 					throw new Error(`${stage}读取页签树失败：返回值不是有效对象`)
 				return tree
@@ -82,13 +100,14 @@ export const editorCommands: Array<ICommandDef> = [
 			if (!tabId && params.uuid) {
 				// 从页签树按文档 uuid 反查 tabId（页签 ID 形如 "<docUuid>@<projectUuid>"）
 				const tree = await readTree('关闭前')
-				const inspected = inspectTree(tree, candidate => candidate.startsWith(String(params.uuid)))
+				const matchesUuid = (candidate: string) => candidate === String(params.uuid) || candidate.startsWith(`${String(params.uuid)}@`)
+				const inspected = inspectTree(tree, matchesUuid)
 				if (!inspected.valid)
 					throw new Error('关闭前读取到非法页签树结构，已拒绝关闭')
 				tabId = undefined
 				const find = (node: any): string | undefined => {
 					if (Array.isArray(node?.tabs)) {
-						const hit = node.tabs.find((tab: any) => tab.tabId.startsWith(String(params.uuid)))
+						const hit = node.tabs.find((tab: any) => matchesUuid(tab.tabId))
 						if (hit)
 							return hit.tabId
 					}
@@ -102,13 +121,14 @@ export const editorCommands: Array<ICommandDef> = [
 					return undefined
 				}
 				tabId = find(tree)
-				tabId = tabId ?? String(params.uuid)
+				if (!tabId)
+					throw new Error(`页签树中不存在文档 ${String(params.uuid)}，已拒绝关闭`)
 			}
 			if (!tabId)
 				throw new Error('缺少参数 uuid / tabId')
-			let closed: boolean
+			let sdkResult: unknown
 			try {
-				closed = Boolean(await eda.dmt_EditorControl.closeDocument(tabId))
+				sdkResult = await eda.dmt_EditorControl.closeDocument(tabId)
 			}
 			catch (error) {
 				const message = error instanceof Error ? error.message : String(error)
@@ -116,14 +136,23 @@ export const editorCommands: Array<ICommandDef> = [
 					cause: { partial: true, retryable: false, phase: 'closeDocument', operationError: message, result: { tabId, closed: 'unknown' } },
 				})
 			}
-			// 读回页签列表验证确实关了——官方关闭是异步的，0.10.53 实测刚关完页签还在树里（1ms 后验证必误判），轮询最长 8s
-			let stillThere = true
-			for (let attempt = 0; attempt < 8; attempt++) {
+			if (performance.now() >= closeDeadline)
+				throw new Error('closeDocument 返回时命令预算已耗尽，关闭后状态未知', {
+					cause: { partial: true, retryable: false, phase: 'closeDocument.readback', result: { tabId, closed: 'unknown', sdkResult } },
+				})
+			if (sdkResult !== true && sdkResult !== false)
+				throw new Error(`官方 closeDocument 返回无效结果 ${String(sdkResult)}，无法确认关闭状态`, {
+					cause: { partial: true, retryable: false, phase: 'closeDocument', result: { tabId, closed: 'unknown', sdkResult } },
+				})
+			let stillThere: boolean
+			let firstRead = true
+			while (true) {
 				let tree: any
 				let inspected: { valid: boolean, found: boolean }
 				try {
 					tree = await readTree('关闭后')
-					inspected = inspectTree(tree, candidate => candidate === tabId || (!params.tabId && candidate.startsWith(String(params.uuid ?? ''))))
+					const matchesTarget = (candidate: string) => candidate === tabId || (!params.tabId && (candidate === String(params.uuid ?? '') || candidate.startsWith(`${String(params.uuid ?? '')}@`)))
+					inspected = inspectTree(tree, matchesTarget)
 				}
 				catch (error) {
 					const message = error instanceof Error ? error.message : String(error)
@@ -139,22 +168,19 @@ export const editorCommands: Array<ICommandDef> = [
 				}
 				stillThere = inspected.found
 				if (!stillThere)
-					break
-				await new Promise(resolve => setTimeout(resolve, 1000))
+					return { tabId, closed: true, sdkResult }
+				if (sdkResult === false && firstRead)
+					throw new Error(`官方 closeDocument 返回 false，且有效页签树确认目标 ${tabId} 仍存在`, {
+						cause: { partial: false, result: { tabId, closed: false, sdkResult: false, treeContainsTab: true } },
+					})
+				firstRead = false
+				const remainingMs = closeDeadline - performance.now()
+				if (remainingMs <= 0)
+					throw new Error(`官方 closeDocument 返回 true，但预算耗尽时有效页签树仍含 ${tabId}；无法确认关闭`, {
+						cause: { partial: true, retryable: false, phase: 'closeDocument.readback', result: { tabId, closed: 'unknown', sdkResult: true, treeContainsTab: true } },
+					})
+				await new Promise(resolve => setTimeout(resolve, Math.min(1000, remainingMs)))
 			}
-			if (!closed && !stillThere)
-				throw new Error(`官方 closeDocument 返回 false，但有效页签树已不含 ${tabId}；本次关闭结果矛盾且无法确认`, {
-					cause: { partial: true, retryable: false, phase: 'closeDocument.readback', result: { tabId, closed: false, treeContainsTab: false } },
-				})
-			if (!closed)
-				throw new Error(`官方未确认关闭页签 ${tabId}`, {
-					cause: { result: { tabId, closed: false, note: stillThere ? '页签仍在树中' : '树中已不存在，但官方调用返回 false，不能确认本次关闭' } },
-				})
-			if (!stillThere)
-				return { tabId, closed: true }
-			throw new Error(`官方返回已关闭但页签 ${tabId} 仍在树中——可能有未保存修改确认框，请在 EDA 里核对并手动关闭`, {
-				cause: { partial: true, retryable: false, phase: 'closeDocument.readback', result: { tabId, closed: false, note: '页签仍在有效页签树中' } },
-			})
 		},
 	},
 	{

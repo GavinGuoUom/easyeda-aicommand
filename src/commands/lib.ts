@@ -320,6 +320,26 @@ export const libCommands: Array<ICommandDef> = [
 		},
 	},
 	{
+		name: 'lib.footprintGetSource',
+		summary: '直接读取库封装文档源码，不打开编辑器或修改库',
+		params: [
+			{ name: 'footprintUuid', type: 'string', required: true, description: '封装 UUID' },
+			{ name: 'libraryUuid', type: 'string', required: false, description: '库 UUID，默认个人库' },
+		],
+		returns: '{ footprintUuid, libraryUuid, source }；保留宿主返回的原始源码格式',
+		example: { cmd: 'lib.footprintGetSource', params: { footprintUuid: 'xxx' } },
+		handler: async (params) => {
+			if (!params.footprintUuid)
+				throw new Error('缺少参数 footprintUuid');
+			const footprintUuid = String(params.footprintUuid);
+			const libraryUuid = await resolveLibraryUuid(params);
+			const source = await eda.lib_Footprint.getDocumentSource(footprintUuid, libraryUuid);
+			if (typeof source !== 'string' || !source.trim())
+				throw new Error('封装源码不可读取（官方返回空）');
+			return { footprintUuid, libraryUuid, source };
+		},
+	},
+	{
 		name: 'lib.footprintUpdateSource',
 		summary: '把封装文档源码写回库（documentSource 来源见文件头注释的官方流程）',
 		params: [
@@ -466,8 +486,11 @@ export const libCommands: Array<ICommandDef> = [
 		params: [
 			{ name: 'libraryUuid', type: 'string', required: false, description: '库 UUID，默认个人库' },
 			{ name: 'name', type: 'string', required: true, description: '器件名称' },
-			{ name: 'symbolUuid', type: 'string', required: true, description: '必填：要绑定的符号 UUID（不新建符号时必须提供）' },
+			{ name: 'symbolUuid', type: 'string', required: false, description: '已有符号 UUID；与 symbolType 二选一，提供时绑定已有符号' },
+			{ name: 'symbolLibraryUuid', type: 'string', required: false, description: '符号所在库 UUID，默认同 libraryUuid' },
+			{ name: 'symbolType', type: 'number', required: false, description: '新建符号时使用的符号类型；仅在未提供 symbolUuid 时生效' },
 			{ name: 'footprintUuid', type: 'string', required: false, description: '要绑定的封装 UUID' },
+			{ name: 'footprintLibraryUuid', type: 'string', required: false, description: '封装所在库 UUID，默认同 libraryUuid' },
 			{ name: 'model3DUuid', type: 'string', required: false, description: '要绑定的 3D 模型 UUID' },
 			{ name: 'model3DLibraryUuid', type: 'string', required: false, description: '3D 模型所在库 UUID，默认同器件库' },
 			{ name: 'classification', type: 'array', required: false, description: '分类（默认 [] 不分类）' },
@@ -479,12 +502,18 @@ export const libCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.name)
 				throw new Error('缺少参数 name')
-			if (!params.symbolUuid)
-				throw new Error('缺少参数 symbolUuid（官方要求：不新建符号就必须指定符号关联，否则无法创建器件）')
+			if (!params.symbolUuid && params.symbolType === undefined)
+				throw new Error('缺少参数 symbolUuid 或 symbolType：提供已有符号，或指定新建符号类型')
 			const libraryUuid = await resolveLibraryUuid(params)
-			const association: any = { symbolUuid: String(params.symbolUuid) }
-			if (params.footprintUuid)
-				association.footprintUuid = String(params.footprintUuid)
+			const association: any = params.symbolUuid
+				? { symbol: { uuid: String(params.symbolUuid), libraryUuid: params.symbolLibraryUuid ? String(params.symbolLibraryUuid) : libraryUuid } }
+				: { symbolType: Number(params.symbolType) }
+			if (params.footprintUuid) {
+				association.footprint = {
+					uuid: String(params.footprintUuid),
+					libraryUuid: params.footprintLibraryUuid ? String(params.footprintLibraryUuid) : libraryUuid,
+				}
+			}
 			if (params.model3DUuid) {
 				association.model3D = {
 					uuid: String(params.model3DUuid),
@@ -501,10 +530,27 @@ export const libCommands: Array<ICommandDef> = [
 			)
 			if (!deviceUuid)
 				throw new Error('创建器件失败：官方返回空（可能重名、无权限或关联的符号/封装无效）')
-			const item = await eda.lib_Device.get(deviceUuid, libraryUuid)
-			if (!item)
-				throw new Error(`器件已创建（uuid=${deviceUuid}）但读回失败：官方返回空`)
+		let item: any = null
+		let getError: unknown
+		try {
+			item = await eda.lib_Device.get(deviceUuid, libraryUuid)
+		}
+		catch (error) {
+			getError = error
+		}
+		if (item)
 			return item
+		try {
+			const rows = await eda.lib_Device.search(String(params.name), libraryUuid, undefined, undefined, 20, 1)
+			const matches = Array.isArray(rows) ? rows.filter((row: any) => row?.uuid === deviceUuid) : []
+			if (matches.length === 1)
+				return matches[0]
+			throw new Error(`按创建 UUID 精确查询到 ${matches.length} 条记录`)
+		}
+		catch (searchError) {
+			const detail = getError ? String((getError as any)?.message ?? getError) : '官方 get 返回空'
+			throw new Error(`器件已创建（uuid=${deviceUuid}）但无法读回；get=${detail}；UUID 查询=${String((searchError as any)?.message ?? searchError)}`)
+		}
 		},
 	},
 	{

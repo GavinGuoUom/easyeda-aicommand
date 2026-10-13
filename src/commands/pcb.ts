@@ -9,6 +9,7 @@ import { widthForCurrent } from '../knowledge/rules'
 import { blobToBase64, fileToResult } from './util'
 import { beginTask, failTask, finishTask, taskProgress } from '../engine/tasks'
 import { parseSourceLog, resolveRecords } from '../pcb/sourcelog'
+import { importAndVerifyChanges } from '../engine/pcbImport'
 
 /** 0.10.42：给无保护 await 加超时（官方偶发永不 resolve，曾致整批删除挂死 300s 无结果） */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -611,65 +612,13 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.importChanges',
-		summary: '请求将原理图变更导入 PCB（SDK true 仅表示导入请求返回，应用完成状态未知；可能弹出确认框。所有 SDK 结果均标 partial 并停止后续依赖；不得自动重试，需读回 PCB 验收）',
+		summary: '将当前 Board 关联或指定原理图的多页变更导入 PCB；按组件身份、位号、封装映射和逐引脚网络读回核验，内容不符或未知时阻止后续依赖',
 		params: [
 			{ name: 'schematicUuid', type: 'string', description: '原理图 UUID，默认同 Board 关联的原理图' },
 		],
-		returns: '不返回成功值；SDK true 抛出 partial=true,retryable=false，cause 标记 sdkResult=true、outcome=pending-verification、importRequested=true、contentsVerified=false、completionVerified=false；可能需要 UI 确认，禁止自动重试并须读回验收',
+		returns: '{ imported, sdkResult, outcome, importRequested, contentsVerified, completionVerified, verificationScope, persistenceVerified:false, documentUuid, schematicUuid, managedComponents, checkedComponents, pcbOnlyPreserved, differences }；核验范围只含器件身份、位号、封装关联和焊盘网络，不覆盖设计规则、保存、布局布线或铺铜',
 		example: { cmd: 'pcb.importChanges' },
-		handler: async (params) => {
-			const IMPORT_TIMEOUT_MS = 280_000
-			const FOCUS_TIMEOUT_MS = 5_000
-			const withCleanTimeout = <T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> => new Promise<T>((resolve, reject) => {
-				const timer = setTimeout(() => reject(new Error(`${label}超时（>${timeoutMs}ms）；原调用可能仍在后台执行`)), timeoutMs)
-				Promise.resolve(operation).then(
-					value => { clearTimeout(timer); resolve(value) },
-					error => { clearTimeout(timer); reject(error) },
-				)
-			})
-			const focusPcbUuid = async (label: string): Promise<string> => {
-				const getInfo = (eda as any).dmt_SelectControl?.getCurrentDocumentInfo
-				if (typeof getInfo !== 'function')
-					throw new Error('dmt_SelectControl.getCurrentDocumentInfo 不存在，无法核对目标 PCB')
-				const focus = await withCleanTimeout(Promise.resolve().then(() => getInfo.call((eda as any).dmt_SelectControl)), FOCUS_TIMEOUT_MS, label)
-				if (focus?.documentType !== 3 || typeof focus?.uuid !== 'string' || !focus.uuid.trim())
-					throw new Error(`${label}未返回有效 PCB 身份（documentType=${focus?.documentType ?? '未知'}, uuid=${focus?.uuid ?? '无'}）`)
-				return focus.uuid
-			}
-			const beforeUuid = await focusPcbUuid('导入前读取焦点 PCB')
-			const requestedUuid = typeof params.__docUuid === 'string' && params.__docUuid.trim() ? params.__docUuid : undefined
-			if (requestedUuid && beforeUuid !== requestedUuid)
-				throw new Error(`导入前焦点 PCB 与请求目标不符（请求=${requestedUuid}, 当前=${beforeUuid}）`)
-			const failPartial = (message: string, details: Record<string, unknown>, original?: unknown): never => {
-				const error = original instanceof Error ? original : new Error(message)
-				;(error as any).cause = { partial: true, retryable: false, documentUuid: beforeUuid, contentsVerified: false, ...details }
-				if (!original)
-					error.message = message
-				throw error
-			}
-			let imported: unknown
-			try {
-				const operation = Promise.resolve().then(() => eda.pcb_Document.importChanges(
-					params.schematicUuid ? String(params.schematicUuid) : undefined,
-				))
-				imported = await withCleanTimeout(operation, IMPORT_TIMEOUT_MS, 'pcb.importChanges')
-			}
-			catch (error) {
-				return failPartial(`pcb.importChanges 返回异常或超时；目标 PCB=${beforeUuid}，原调用可能仍在后台执行，不要自动重试`, { sdkResult: 'unknown', outcome: 'unknown', importRequested: true, completionVerified: false, operationError: String((error as any)?.message ?? error) }, error)
-			}
-			let afterUuid: string
-			try {
-				afterUuid = await focusPcbUuid('导入后复核焦点 PCB')
-			}
-			catch (error) {
-				return failPartial(`pcb.importChanges 已调用，但写后文档身份无法确认；目标 PCB=${beforeUuid}，不要自动重试`, { sdkResult: imported === undefined ? 'undefined' : imported, outcome: imported === true ? 'pending-verification' : imported === false ? 'sdk-false' : 'undefined', importRequested: true, contentsVerified: false, completionVerified: false, writeAfterIdentityError: String((error as any)?.message ?? error) }, error)
-			}
-			if (afterUuid !== beforeUuid)
-				return failPartial(`pcb.importChanges 返回后焦点已从目标 PCB ${beforeUuid} 切换到 ${afterUuid}；不要自动重试`, { sdkResult: imported === undefined ? 'undefined' : imported, outcome: imported === true ? 'pending-verification' : imported === false ? 'sdk-false' : 'undefined', importRequested: true, contentsVerified: false, completionVerified: false, afterDocumentUuid: afterUuid })
-			if (imported !== true)
-				return failPartial(`pcb.importChanges 未返回严格 true（${String(imported)}）；目标 PCB=${beforeUuid}，不要自动重试`, { sdkResult: imported === undefined ? 'undefined' : imported, outcome: imported === false ? 'sdk-false' : 'undefined', importRequested: true, contentsVerified: false, completionVerified: false, afterDocumentUuid: afterUuid })
-			return failPartial(`pcb.importChanges SDK 返回 true，但仅能确认请求已发出；应用完成状态未知，目标 PCB=${beforeUuid}，不要自动重试`, { sdkResult: true, outcome: 'pending-verification', importRequested: true, contentsVerified: false, completionVerified: false, afterDocumentUuid: afterUuid })
-		},
+		handler: async (params) => importAndVerifyChanges(eda as any, params),
 	},
 	{
 		name: 'pcb.drawOutline',
@@ -731,7 +680,7 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.delete',
-		summary: '删除 PCB 图元（器件 / 走线 / 过孔 / 铺铜 / 板框(Region) / 文字等，按 primitiveId，可批量）；先识别类型再删，删后读回验证，杜绝假成功。0.10.23 加固（与 schematic.delete 同套机制）：逐项 8s 超时熔断、连续 3 失败熔断整批、batchSize 分批（默认 10，批间停 300ms）、全局时间预算 100s（耗尽停开新项、累积结果照常返回）、unprocessed 清单可续删',
+		summary: '删除 PCB 图元（器件 / 走线 / 过孔 / 铺铜 / 板框(Region) / 文字等，按 primitiveId，可批量）；先识别类型再删，删后读回验证，杜绝假成功。按 batchSize 分批（默认 10，批间停 300ms）；确认某项仍存在时记录失败并继续，写入结果未知、超时或读回失败时停止后续删除；全局时间预算 100s（耗尽停开新项、累积结果照常返回），unprocessed 清单可续删',
 		params: [
 			{ name: 'primitiveIds', type: 'string[]', required: true, description: '要删除的图元 ID 列表' },
 			{ name: 'batchSize', type: 'number', description: '分批大小，默认 10：每批之间停 300ms 并记录分批进度。大批删除建议保持默认多次调用，不要一次调大硬跑' },
@@ -776,27 +725,27 @@ export const pcbCommands: Array<ICommandDef> = [
 				{ type: 'arc', list: () => eda.pcb_PrimitiveArc.getAllPrimitiveId(), del: list => eda.pcb_PrimitiveArc.delete(list) },
 			]
 			const detectType = async (id: string): Promise<(typeof kinds)[number] | undefined> => {
+				let enumerationFailed: unknown
 				for (const kind of kinds) {
 					try {
 						if ((await kind.list()).includes(id))
 							return kind
 					}
-					catch {
-						// 查询失败则尝试下一种类型
+					catch (error) {
+						// 若没有任何类型命中，枚举失败必须保留为未知，不能当作对象不存在。
+						enumerationFailed ??= error
 					}
 				}
+				if (enumerationFailed)
+					throw new Error(`图元类型读回未知：清单枚举失败（${String((enumerationFailed as any)?.message ?? enumerationFailed)}）`)
 				return undefined
 			}
 			const deleted: Array<string> = []
 			const failed: Array<string> = []
 			const deletedBy: Record<string, string> = {}
-			// 0.10.23 加固（照抄 pruneFloatingLabels 0.10.12 / schematic.delete 0.10.23 成熟机制）：
-			//  ① 逐项 8s Promise.race 超时熔断；② 连续 3 项失败熔断整批；
-			//  ③ 分批执行（batchSize 默认 10，批间停 300ms），unprocessed 可再次调用续删；
-			//  ④ 全局时间预算 100s，耗尽即停开新项，已累积结果照常返回；
-			//  ⑤ 每项成败一律以删后读回为准，不信 delete 布尔返回值（原有机制保留）。
+			// 逐项超时停止后续删除；只有读回确认仍存在的项目归为已知未删除并可继续。
+			// 分批和全局预算用于控制批次间隔及长任务收尾；每项是否删除仍以读回为准。
 			const PER_ITEM_TIMEOUT_MS = 8000
-			const MAX_CONSECUTIVE_FAILS = 3
 			const GLOBAL_BUDGET_MS = 100000 // 扩展侧该指令超时已放宽到 140s，留 40s 余量给收尾与传输
 			const batchSize = Math.max(1, Number(params.batchSize) || 10)
 			const startedAt = Date.now()
@@ -804,14 +753,14 @@ export const pcbCommands: Array<ICommandDef> = [
 			const attempted = new Set<string>()
 			const diagnostics: Array<string> = []
 			const failReason = new Map<string, string>() // 0.10.41：记录每项失败原因，终扫对账排除「从不存在」的 ID
-			let consecutiveFails = 0
 			let circuitBroken = false
 			let budgetExhausted = false
+			class ConfirmedNotDeletedError extends Error {}
 			const deleteOne = async (id: string): Promise<void> => {
 				const kind = await detectType(id)
 				if (!kind)
-					throw new Error('图元不存在或类型暂不支持（各类型清单均未命中）')
-				await kind.del([id])
+					throw new ConfirmedNotDeletedError('图元在完整类型清单中不存在，未调用删除接口')
+				const sdkDeleted = await kind.del([id])
 				// 删后读回验证：还能查到就是假成功。
 				// 官方 get() 有缓存延迟，需等待并重试，否则会误报失败
 				let stillThere = true
@@ -822,7 +771,7 @@ export const pcbCommands: Array<ICommandDef> = [
 						break
 				}
 				if (stillThere)
-					throw new Error('删后读回验证仍在（假成功）')
+					throw new ConfirmedNotDeletedError(sdkDeleted === false ? '官方返回 false，且删后读回确认图元仍在' : '删后读回确认图元仍在（未删除）')
 				deletedBy[id] = kind.type
 			}
 			for (let bi = 0; bi < ids.length; bi += batchSize) {
@@ -849,17 +798,15 @@ export const pcbCommands: Array<ICommandDef> = [
 						])
 						deleted.push(id)
 						bDeleted++
-						consecutiveFails = 0
 					}
 					catch (e: any) {
 						failReason.set(id, String(e?.message ?? e))
 						failed.push(id)
 						bFailed++
-						consecutiveFails++
 						diagnostics.push(`${id}: ${String(e?.message ?? e)}`)
-						if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
+						if (!(e instanceof ConfirmedNotDeletedError)) {
 							circuitBroken = true
-							diagnostics.push(`⚠️ 连续 ${MAX_CONSECUTIVE_FAILS} 项失败（均以读回确认为准），熔断整批——会话可能已损坏，建议【不保存重开页面】后再分批重试`)
+							diagnostics.push('⚠️ 删除结果未知（SDK 异常、单项超时或读回失败），停止后续删除；请用只读清单核对现场后再决定下一步')
 						}
 					}
 				}
@@ -875,15 +822,16 @@ export const pcbCommands: Array<ICommandDef> = [
 					taskProgress(task, { stage: 'final-sweep' })
 					await new Promise(resolve => setTimeout(resolve, 1500))
 					const alive = new Set<string>()
+					let finalSweepComplete = true
 					// 0.10.42：终扫枚举整体 20s 超时（旧版无保护，官方挂起时整批无返回）
 					await withTimeout(Promise.all(kinds.map(async (k) => {
 						try {
 							for (const id of await k.list())
 								alive.add(id)
 						}
-						catch { /* 单类清单失败不阻断 */ }
+						catch { finalSweepComplete = false }
 					})), 20000, '终扫枚举')
-					for (const id of [...failed]) {
+					for (const id of finalSweepComplete ? [...failed] : []) {
 						if ((failReason.get(id) ?? '').includes('不存在'))
 							continue // 0.10.41：从不存在的 ID 不参与对账（终扫必然查不到会误挪 deleted），保持 failed
 						if (!alive.has(id)) {
@@ -892,6 +840,8 @@ export const pcbCommands: Array<ICommandDef> = [
 							reconciled.push({ id, note: '超时返回但后台已删除，经终扫确认' })
 						}
 					}
+					if (!finalSweepComplete)
+						diagnostics.push('终扫清单不完整，保留失败项未作删除结论')
 					if (reconciled.length)
 						diagnostics.push(`终扫对账：${reconciled.length} 个原报失败的 ID 已确认被后台删除（挪入 deleted）：${reconciled.map(r => r.id).join('、')}`)
 				}

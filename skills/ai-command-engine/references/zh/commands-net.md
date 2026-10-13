@@ -46,7 +46,3 @@
 | `schematic.exportBom` | 导 BOM（xlsx/csv，base64） | `fileName?`, `fileType?` |
 | `schematic.exportPng` | 导原理图 PNG（单边最大 4096px） | `fileName?`, `width?`/`height?` |
 | `schematic.listNets` | 原理图全部网络（`detail:true` 带导线明细） | `detail?` |
-
-## 调试
-
-- `system.eval`：扩展上下文执行任意 JS（全局 `eda` 可用、支持 await）。**正常操作禁用**，仅排障；沙箱可能禁 eval（见 pitfalls §8）。

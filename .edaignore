@@ -24,5 +24,7 @@ debug.log
 /bridge/lane-log-error.txt
 /bridge/proxy-restart.log
 __pycache__/
+
 *.tsbuildinfo
 /images/logo.png
+/skills/ai-command-engine/tests/

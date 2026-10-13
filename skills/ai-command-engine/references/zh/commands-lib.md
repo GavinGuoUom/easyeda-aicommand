@@ -1,4 +1,4 @@
-# 符号/封装/器件库管理指令（lib.*，0.10.34 共 22 条）
+# 符号/封装/器件库管理指令（lib.*）
 
 > 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
 
@@ -14,11 +14,16 @@
 | `lib.symbolUpdateSource` | 符号文档源码写回库 | `symbolUuid`, `documentSource` |
 | `lib.symbolSearch` / `symbolGet` / `symbolCopy` / `symbolModify` / `symbolDelete` | 同构五件套 | search: 无必填；get/delete: `symbolUuid`；copy: +`targetLibraryUuid` |
 | `lib.footprintCreate` / `footprintUpdateSource` / `footprintSearch` / `footprintGet` / `footprintCopy` / `footprintModify` / `footprintDelete` | 封装同构七件套 | 同上（uuid 名为 footprintUuid） |
-| `lib.deviceCreate` | **组装器件**：已有符号+封装(+3D) 绑成完整器件（不绑符号无法创建） | `name`, `symbolUuid`（必填）；`footprintUuid?`、`model3DUuid?`、`property?`（designator/addIntoBom/addIntoPcb/manufacturer/supplier 等） |
+| `lib.footprintGetSource` | 直接读取库封装原始源码，用于封装内容分析或格式问题定位；不打开编辑器、不修改库 | `footprintUuid`，`libraryUuid?`；返回 `{footprintUuid,libraryUuid,source}` |
+| `lib.deviceCreate` | 组装库器件：绑定已有符号，或新建空符号，再关联封装及3D | `name`；复用符号传`symbolUuid`，新建符号传`symbolType`；`symbolLibraryUuid?`、`footprintUuid?`、`footprintLibraryUuid?`、`model3DUuid?`、`property?` |
 | `lib.deviceSearch` / `deviceGet` / `deviceGetByLcscIds` / `deviceCopy` / `deviceModify` / `deviceDelete` | 器件六件套 | get/delete: `deviceUuid`；copy: +`targetLibraryUuid` |
 | `lib.symbolOpenInEditor` / `lib.footprintOpenInEditor` | 在符号/封装编辑器中打开库元件（编辑内容用；打开后配合 project.getDocumentSource 读源码） | `symbolUuid*`/`footprintUuid*`，`libraryUuid?` |
 
 特例：
+
+- `lib.deviceCreate` 用于把符号和封装绑定成库器件。跨库时分别提供 `symbolLibraryUuid` 和 `footprintLibraryUuid`，省略时使用创建器件的 `libraryUuid`。例如 `{"libraryUuid":"目标库UUID","name":"测试电阻","symbolUuid":"符号UUID","symbolLibraryUuid":"符号库UUID","footprintUuid":"封装UUID","footprintLibraryUuid":"封装库UUID"}`。
+- 新建普通空符号可传`symbolType:2`，此时无需`symbolUuid`。135包含这一SDK支持的分支，工程库实机结果待验证。
+- 创建后优先`get`读回；工程库不支持该查询时，按名称搜索并匹配创建返回的UUID读回，不会再次创建。134已证明跨库资源可以进入工程，但旧版末尾`get`会误报；135适配后的完整回执待实测。
 
 - `lib.deviceGetByLcscIds`：`lcscIds` 支持单值或数组批量查（如 "C1523" 或 ["C1523","C17168"]）；`allowMultiMatch?` 同 C 号多匹配时全返回。⚠️ 私有化部署环境不可用。
 - `lib.deviceModify` 支持改绑：`symbolUuid`/`footprintUuid` 换绑，`property` 改 designator/manufacturer/supplier 等。

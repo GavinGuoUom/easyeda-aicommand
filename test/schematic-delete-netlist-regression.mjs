@@ -23,7 +23,9 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(built.outputFiles[0
 const { schematicCommands, executeCommand, registerCommand } = await import(moduleUrl)
 const handler = name => schematicCommands.find(command => command.name === name).handler
 const command = handler('schematic.delete')
+const pruneFloatingLabels = handler('schematic.pruneFloatingLabels')
 const getNetlist = handler('schematic.getNetlist')
+const linkWire = handler('schematic.linkWire')
 
 async function withTestTimers(fn) {
 	const original = globalThis.setTimeout
@@ -256,6 +258,15 @@ await withTestTimers(async () => {
 		assert.equal(partial.outcomeBy['wire-stuck'], 'stillExists')
 		assert.match(partial.failedNote, /wire-stuck/)
 		assert.equal(state.deleteCalls, 1)
+	}
+	// Confirmed per-item failures do not suppress later independent delete requests.
+	{
+		const ids = ['wire-stuck-1', 'wire-stuck-2', 'wire-stuck-3', 'wire-stuck-4']
+		const state = makeEda({ wires: ids, persistDelete: false })
+		const error = await capturePartial({ primitiveIds: ids })
+		assert.equal(error.cause.result.failed.length, ids.length)
+		assert.equal(state.deleteCalls, ids.length, 'every confirmed-present target is attempted')
+		assert.deepEqual(ids.map(id => error.cause.result.outcomeBy[id]), ids.map(() => 'stillExists'))
 	}
 	// A pre-write enumeration failure remains unknown and does not claim an uncertain write.
 	{
@@ -566,16 +577,140 @@ await withTestTimers(async () => {
 		assert.equal(markerWrites, 0, 'macro must not execute a later write after cascade uncertainty')
 		assert.equal(state.deleteCalls, 1)
 	}
-	// getNetlist defaults to the explicit Protel2 enum and preserves caller-supplied values.
+	// getNetlist defaults to Protel2 and passes every SDK enum format through without a static blacklist.
 	{
 		const received = []
 		globalThis.eda = { sch_Netlist: { getNetlist: async (...args) => { received.push(args); return 'net' } } }
 		const defaultResult = await getNetlist({}, {})
 		const explicitResult = await getNetlist({ netlistType: 'PADS' }, {})
+		await getNetlist({ netlistType: 'JLCEDA' }, {})
+		await getNetlist({ netlistType: 'EasyEDA' }, {})
 		assert.equal(received[0][0], 'Protel2')
 		assert.equal(received[1][0], 'PADS')
+		assert.equal(received[2][0], 'JLCEDA')
+		assert.equal(received[3][0], 'EasyEDA')
 		assert.equal(defaultResult.netlistType, 'Protel2')
 		assert.equal(explicitResult.netlistType, 'PADS')
+	}
+	// Unknown post-delete readback locks every later write, including an explicitly enabled source rewrite.
+	{
+		const labelSource = '{"type":"ATTR","id":"float-unknown"}||{"key":"_NETLABEL_","value":"SIG","parentId":"$$root","x":10,"y":-20}'
+		let wireDeleteCalls = 0
+		let sourceWrites = 0
+		let failedRead = false
+		globalThis.eda = {
+			sys_FileManager: {
+				getDocumentSource: async () => {
+					if (wireDeleteCalls && !failedRead) {
+						failedRead = true
+						throw new Error('mock readback failure')
+					}
+					return labelSource
+				},
+				setDocumentSource: async () => { sourceWrites++; return true },
+			},
+			sch_PrimitiveComponent: { getAllPrimitiveId: async () => [] },
+			sch_PrimitiveWire: {
+				getAll: async () => [],
+				getAllPrimitiveId: async () => [],
+				create: async () => ({ getState_PrimitiveId: () => 'temporary-wire' }),
+				delete: async () => { wireDeleteCalls++; return true },
+			},
+			sch_PrimitiveText: { getAllPrimitiveId: async () => [] },
+			sch_PrimitiveRectangle: { getAllPrimitiveId: async () => [] },
+			sch_PrimitiveAttribute: {
+				getAll: async () => [],
+				getAllPrimitiveId: async () => [],
+				get: async () => ({}),
+				delete: async () => true,
+				modify: async () => true,
+			},
+		}
+		const result = await pruneFloatingLabels({ allowSourceRewrite: true }, {})
+		assert.equal(failedRead, true, 'the fixture must fail the post-delete verification read')
+		assert.deepEqual(result.failed, ['float-unknown'])
+		assert.equal(sourceWrites, 0, 'unknown readback must block the optional source rewrite even after reads recover')
+	}
+	// A timed-out pending create cannot resume into modify/delete after source reads recover.
+	{
+		const labelSource = '{"type":"ATTR","id":"float-timeout"}||{"key":"_NETLABEL_","value":"SIG","parentId":"$$root","x":10,"y":-20}'
+		let createCalls = 0
+		let modifyCalls = 0
+		let wireDeleteCalls = 0
+		let sourceWrites = 0
+		let resolveCreate
+		globalThis.eda = {
+			sys_FileManager: {
+				getDocumentSource: async () => labelSource,
+				setDocumentSource: async () => { sourceWrites++; return true },
+			},
+			sch_PrimitiveComponent: { getAllPrimitiveId: async () => [] },
+			sch_PrimitiveWire: {
+				getAll: async () => [],
+				getAllPrimitiveId: async () => [],
+				create: async () => {
+					createCalls++
+					return new Promise(resolve => { resolveCreate = () => resolve({ getState_PrimitiveId: () => 'temporary-wire' }) })
+				},
+				delete: async () => { wireDeleteCalls++; return true },
+			},
+			sch_PrimitiveText: { getAllPrimitiveId: async () => [] },
+			sch_PrimitiveRectangle: { getAllPrimitiveId: async () => [] },
+			sch_PrimitiveAttribute: {
+				getAll: async () => [],
+				getAllPrimitiveId: async () => [],
+				get: async () => ({}),
+				delete: async () => true,
+				modify: async () => { modifyCalls++; return true },
+			},
+		}
+		globalThis.__forceDeleteItemTimeout = () => createCalls > 0
+		const result = await pruneFloatingLabels({ allowSourceRewrite: true }, {})
+		globalThis.__forceDeleteItemTimeout = undefined
+		assert.deepEqual(result.failed, ['float-timeout'])
+		assert.equal(sourceWrites, 0, 'timeout must block the optional source rewrite')
+		assert.equal(createCalls, 1)
+		resolveCreate()
+		await new Promise(resolve => setImmediate(resolve))
+		assert.equal(modifyCalls, 0, 'the late create resolution must stop before attribute modification')
+		assert.equal(wireDeleteCalls, 0, 'the late create resolution must stop before wire deletion')
+		assert.equal(sourceWrites, 0)
+	}
+	// linkWire searches beyond eight 15-unit offsets when actual pin obstacles occupy the earlier layers.
+	{
+		const extraPins = Array.from({ length: 8 }, (_, index) => ({
+			getState_PinNumber: () => String(index + 1),
+			getState_X: () => 50,
+			getState_Y: () => -30 - index * 15,
+			getState_Rotation: () => 0,
+			getState_PinLength: () => 10,
+			getState_NoConnected: () => false,
+		}))
+		const pinsById = {
+			U1: [{ getState_PinNumber: () => '1', getState_X: () => 0, getState_Y: () => 0, getState_Rotation: () => 0, getState_PinLength: () => 10, getState_NoConnected: () => false }],
+			U2: [{ getState_PinNumber: () => '1', getState_X: () => 100, getState_Y: () => 0, getState_Rotation: () => 0, getState_PinLength: () => 10, getState_NoConnected: () => false }],
+			R1: extraPins,
+		}
+		const components = Object.entries(pinsById).map(([designator]) => ({
+			getState_PrimitiveId: () => designator,
+			getState_Designator: () => designator,
+			getState_X: () => 0,
+			getState_Y: () => 0,
+		}))
+		const created = []
+		globalThis.eda = {
+			sch_PrimitiveComponent: {
+				getAll: async () => components,
+				getAllPinsByPrimitiveId: async id => pinsById[id] ?? [],
+			},
+			sch_PrimitiveWire: {
+				getAll: async () => [],
+				create: async line => { created.push(line); return { getState_PrimitiveId: () => `new-${created.length}` } },
+			},
+		}
+		const result = await linkWire({ pins: ['U1.1', 'U2.1'] }, {})
+		assert.equal(result.route[1][1], -150, 'the ninth candidate clears all eight occupied layers')
+		assert.equal(created.length, 3)
 	}
 })
 

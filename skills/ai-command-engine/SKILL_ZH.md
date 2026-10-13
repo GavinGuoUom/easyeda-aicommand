@@ -7,7 +7,22 @@ description: 通过简易 JSON 指令操作嘉立创 EDA 专业版（EasyEDA Pro
 
 [English](SKILL.md) | 中文备用
 
-0.10.116 起移除工程内布局要求与短标记功能，停止开发。旧工程已有属性和标记不会自动删除。
+## 开发首要要求（必须遵守）
+
+开发、修改和审查插件指令时，必须先遵守本节，再执行后文流程。
+
+- 先实现功能并跑通正常使用流程，再审查安全性和限制是否必要。
+- 不得让额外限制或开发检查阻挡功能实现。
+- 指令必须完成它承诺的操作，并由插件自己检查结果。
+- 不得把开发记录、测试步骤和验收过程变成普通使用的前置条件。
+- 不得因开发方便、历史问题或宿主行为差异增加无用限制。
+- 遇到宿主行为差异，必须完善插件适配，不能靠增加限制代替修复。
+- 可由插件完成的检查，必须在插件内完成，不得转嫁给使用者。
+- 只保留防止改错工程、错误连接、重复写入和明确运行错误的必要检查。
+- 新增限制必须说明它防止的具体错误，并优先通过插件内部处理解决。
+- 结果能确认时，必须明确返回成功或失败，不得一律返回待验证。
+- 结果确实无法确认时，必须说明原因并停止依赖该结果的操作，不得自动重试未知写入。
+- 交付前必须检查正常使用流程能够完成，不能只以代码编译通过作为完成依据。
 
 本技能可独立安装，不依赖作者本机的其他技能或调试网关。首次装机见仓库 README；连接细节见 setup。
 
@@ -17,19 +32,13 @@ HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `ed
 
 少数边界行为先查参考页：`project.copyPcb` 缺省归属和结果未确认处理见[工程/板子说明](references/zh/commands-project.md)；PCB 层别名与 `modifyPour` 优先级 读回、停止规则见[PCB 说明](references/zh/commands-pcb.md)。`modifyPour` 0.10.89 已通过本地模拟及隔离工程的0/1优先级、部分失败停止和保存重开验证；任意顺序值仍受宿主限制。
 
-0.10.93 本地候选新增焊盘扇出与自动局部铜皮计划/执行命令；扇出五项尺寸必须明确输入，曲线几何有明确覆盖边界。接口、输入规则、几何覆盖和失败处理见[几何命令说明](references/zh/commands-geometry.md)。安装宿主验收状态以更新记录为准。
-
-0.10.97 矩形板框读取、扇出创建和保存重开已在隔离工程通过。0.10.98 单环反向边框读回已实测通过，实际填充校验仍有 SDK 对象适配错误。0.10.99 候选改用关联父边框核对网络/层，并从填充路径对象读取 getSource()；新增 `pcb.getPourFillReadback` 只读核对已有填充。2026-10-10 已在隔离工程通过现有铜皮的实填充读回及保存关闭重开核对，DRC为0错误/0警告。本次未在0.10.99重新创建铜皮，详见[几何命令说明](references/zh/commands-geometry.md)。
-
-`modifyComponent` 系统属性读回已在 0.10.94 隔离宿主保存重开验证；0.10.95 确认图页资源接口返回空数组。0.10.96 候选将 `placeDevice` 核验改用完整工程导出，并让只读 `getPlacementResourcesDiagnostic` 补充目标资源摘要；2026-10-10 已在 0.10.96 隔离宿主通过既有 TP2 诊断、新 TP3 放置及保存关闭重开检查；此结果仅覆盖已测器件。参数、结果和验证范围见[原理图命令](references/zh/commands-schematic.md)。
-
 ## 新手必读（首次操作前读一遍，熟悉后跳过）
 
 - **连接**：`GET /health` 自检（不通按 setup.md §1a 启动；通但无实例按 §1b 检查）→ `GET /connections` 核对工程身份；发指令 `POST /command`，顶层为 `cmd`+`instanceId`+可选 `params`，不能以 `/select` 代替请求路由；拿不准先 `GET /help?cmd=<名>`。→ [setup.md](references/zh/setup.md) §1~5
 - **被拒「已被用户暂停」**：该实例被用户在 EDA「AI Command」菜单点了「断开指令代理」——指令未发往任何窗口（工程安全）。**不要自行想办法重连**（旧模块重放/外部恢复会被代理口令校验拒绝）；请用户点菜单「连接指令代理」恢复（0.10.69 起，恢复需口令，只有菜单点击能解除）。`/connections` 里该实例 `paused:true`；全部实例暂停且断开后，代理空闲 300 秒自动退出。
-- **坐标**：原理图 10mil/格（A4≈1170×825，取 10 倍数）；PCB 是 mil（1mm≈39.37）。差 10 倍，混用放飞。→ [setup.md](references/zh/setup.md) §6
+- **坐标**：原理图 10mil/格（A4≈1170×825，按当前图页栅格对齐）；PCB 是 mil（1mm≈39.37）。差 10 倍，混用放飞。→ [setup.md](references/zh/setup.md) §6
 - **激活**：`schematic.*`/`pcb.*` 前先 `editor.openDocument {"uuid":...}`（uuid 来自 project.getInfo）。→ [setup.md](references/zh/setup.md) §7
-- **守则**：先查再画、**每条指令带顶层 instanceId**（先 GET /connections 查、勿缓存）；批量优先；画完必读回（有假成功）；常 save、大改前备份；0 致命才 importChanges；超时≠取消（有 taskId 则查进度并只读核实，不能盲目重发或自动解除写保护）；**视觉验收用 schematic.exportPng**（后台窗口 editor.screenshot 截的是缓存帧，连截字节相同=没重绘，pitfalls K9~K10）。
+- **守则**：先查再画、**每条指令带顶层 instanceId**（先 GET /connections 查、勿缓存）；批量优先；画完必读回（有假成功）；常 save、大改前备份；超时≠取消（有 taskId 则查进度并只读核实，不能盲目重发或自动解除写保护）；**视觉验收用 schematic.exportPng**（后台窗口 editor.screenshot 截的是缓存帧，连截字节相同=没重绘，pitfalls K9~K10）。
 
 ## 按任务选指令（速查，先看这里）
 
@@ -46,7 +55,29 @@ HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `ed
 | 转 PCB | `pcb.importChanges`（0 致命才导，弹窗用户点） |
 | 出生产资料 | `pcb.exportGerber`/`exportPickPlace` + `schematic.exportBom` |
 
+## MCU 与密脚器件扇出
+
+用于把已放置器件的焊盘引到器件外侧，并生成同网络短线和通孔，方便后续换层与整板布线。
+当用户要求“MCU 扇出”“密脚引出”或“焊盘引线加过孔”时使用。
+流程为：选目标 PCB 和器件/焊盘 → `pcb.getFanoutPlan` 规划 → 将返回的完整 `data` 作为 `pcb.fanout` 的 `params.plan` 执行 → `pcb.runDrc` 检查 → `pcb.save` 保存。
+执行后的逐项读回由插件完成；整板网络连接继续使用布线命令。
+目标选择、尺寸参数和请求示例见[扇出作用与用法](references/zh/commands-geometry.md#焊盘扇出)。
+
+## 局部铜皮、焊盘外扩与网络文字丝印
+
+| 需求 | 作用与调用流程 |
+| --- | --- |
+| 增加局部铜面积、连接或散热 | `pcb.getAutoCopperPlan` → `pcb.autoCopper`；`pour` 按板规则重建覆铜，`fill` 生成固定铜填充 |
+| 焊盘周围禁止铺铜、禁止填充或阻焊外扩 | `pcb.getPadExpansionPlan` → `pcb.expandPads`；不改变原焊盘铜尺寸 |
+| 给焊盘、测试点或接口标注网名 | `pcb.getNetSilkscreenPlan` → `pcb.generateNetSilkscreen`；生成可编辑文字 |
+
+通常在器件位置确定后使用；铜皮用于局部布线，外扩用于工艺处理，文字用于丝印整理。
+执行时把规划响应的完整 `data` 原样放入 `params.plan`，插件完成新图元读回。
+完成后检查结果并保存；具体目标、参数与示例直接读取[几何命令说明](references/zh/commands-geometry.md)。
+
 ## 指令分级（0.10.61）
+
+原位换封装与批量属性更新使用 `schematic.getComponentUpdatePlan` → `schematic.updateComponents`，适合改封装尺寸、整理器件资料及模块实例属性。批量属性与原位封装的分步路径已有实机证据；138原位封装与批量属性实际写入已保存重开，PCB经原生确认后的同步也已核验；142已通过默认配置核对，封装与属性写入已保存重开；143已取得批量属性及真实0402→0805更新的成功回执，保存重开通过；旧名兜底修正分支本轮未触发。作用、目标和调用示例直接见[原理图命令页](references/zh/commands-schematic.md#原位换封装与批量更新属性)。
 
 **✅ 推荐**
 批量类 `buildBlock`/`autoLayout`/`batchWire`/`macro`（一次提交多条，带进度心跳）；语义接网 `labelWire`/`linkWire`；只读体检 `structuralAudit`/`list*`/`get*`/`runDrc*`（只读不改图，探路/验收随便跑）；PCB `checkPlacement`/`routeTrack`/`pourCopper`/`runDrc`；修复类一律先 `dryRun`。
@@ -68,28 +99,18 @@ HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `ed
 | 网络类/差分对/生产导出 | [commands-net.md](references/zh/commands-net.md) |
 | 工程/板子/图页 | [commands-project.md](references/zh/commands-project.md) |
 | 复用模块 | [commands-cbb.md](references/zh/commands-cbb.md) |
+| 独立模块复用插件 RPC | [commands-module.md](references/zh/commands-module.md) |
 | 自建库+工程内选料 | [commands-lib.md](references/zh/commands-lib.md) |
 | 知识库/SMT 物料 | [commands-knowledge.md](references/zh/commands-knowledge.md) |
 | **低频指令附录（32 条，参数用 /help 在线查）** | [commands-misc.md](references/zh/commands-misc.md) |
 
 ## 其他文件
 
+独立模块复用通过`module.*`转发到已安装的模块复用扩展。0.1.10保存后的复用路径已通过小样本；0.1.13已实测通过独立放置、内部网映射、引用对齐、未手动保存连续两实例保留，以及SCH/PCB保存重开。两实例证据限3器件模板。MCU功能区已提取为原生文件，恢复后20器件、82真实焊盘、203段走线、40个过孔及资源引用通过核对和保存重开。MCU在主工程的网络映射、引用对齐及PCB导入仍待验证。通用自动提取、替换与完整R1–R8尚未完成；旧unknown记录保留，不重发。0.1.14的CBB PCB检索与改网名样式保留已通过MCU实测及SCH保存重开。MCU完整布局布线复用仍待通道与自定义封装关联修复验证。
+
 - [tasks.md](references/zh/tasks.md) — **按需求选指令速查**（我要做什么 → 指令序列，先看这里）
 - [setup.md](references/zh/setup.md) — 连接/坐标/激活全文（新手区引用的详情）+ 超时心跳 + 编辑器操作/截图
 - [workflow.md](references/zh/workflow.md) — 标准流程 + 工作守则全文
 - [pitfalls.md](references/zh/pitfalls.md) — ⚠️ 踩坑实录，出问题时先查它
-- [issue-reporting.md](references/zh/issue-reporting.md) — 插件问题记录、预览和可选提交流程
 
 单条指令参数拿不准 → `GET /help?cmd=<名>` 在线查。
-
-0.10.100 起移除原理图自动连线命令。原理图使用 drawWire、batchWire、labelWire、linkWire 或 buildBlock 按明确连接关系绘制。PCB 自动布线不受影响。
-
-## 独立安装与配套文件
-
-本技能可单独安装。获取 [v0.10.116 配套技能包](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_v0.10.116.zip)，解压后将完整的 `ai-command-engine/` 目录安装到 AI 工具的技能目录，保留 `references/` 和 `scripts/`，不要只复制 `SKILL.md`。也可从 [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip) 的 `skills/ai-command-engine/` 目录获取。
-
-扩展、代理和技能分别安装；扩展包不会替使用者安装本地代理或技能。首次安装代理、启用扩展和核对连接目标见仓库[安装指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md)。
-
-## 插件问题上报
-
-遇到实际插件问题时，按[问题上报说明](references/zh/issue-reporting.md)收集并脱敏必要信息。使用者可选择 GitHub CLI 作为提交身份；告知使用者将公开提交的仓库、标题、正文和证据后再执行提交。创建结果未知时先检查 GitHub，不要重复提交。此流程不会由 EDA 指令自动触发，也不会扫描或上传整个工程。

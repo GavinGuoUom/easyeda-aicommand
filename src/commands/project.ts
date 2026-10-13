@@ -127,18 +127,40 @@ export const projectCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'project.list',
-		summary: '列出全部工程（uuid 列表；detail=true 时逐个查信息，较慢）',
+		summary: '列出全部工程（可按 teamUuid 筛选；detail=true 时逐个查信息，较慢）',
 		params: [
+			{ name: 'teamUuid', type: 'string', description: '可选团队 UUID；省略时按官方默认范围列出' },
 			{ name: 'detail', type: 'boolean', description: '是否返回每个工程的详细信息，默认 false' },
 		],
 		returns: '工程 uuid 列表，或 [{ uuid, info }]',
 		example: { cmd: 'project.list' },
 		handler: async (params) => {
-			const uuids = await eda.dmt_Project.getAllProjectsUuid()
+			let teamUuid: string | undefined
+			if (params.teamUuid !== undefined) {
+				if (typeof params.teamUuid !== 'string' || params.teamUuid.length === 0)
+					throw new Error('teamUuid 必须是非空字符串')
+				teamUuid = params.teamUuid
+			}
+			const result: unknown = teamUuid === undefined
+				? await eda.dmt_Project.getAllProjectsUuid()
+				: await eda.dmt_Project.getAllProjectsUuid(teamUuid)
+			if (result === undefined)
+				throw new Error('project.list SDK 返回类型无效：收到 undefined，期望 string[]')
+			if (result === null)
+				throw new Error('project.list SDK 返回类型无效：收到 null，期望 string[]')
+			if (!Array.isArray(result))
+				throw new Error(`project.list SDK 返回类型无效：收到 ${typeof result}，期望 string[]`)
+			for (let index = 0; index < result.length; index++) {
+				if (typeof result[index] !== 'string')
+					throw new Error(`project.list SDK 返回类型无效：string[] 第 ${index} 项是 ${typeof result[index]}，期望 string`)
+				if (result[index].length === 0)
+					throw new Error(`project.list SDK 返回数据无效：第 ${index} 项 uuid 为空`)
+			}
+			const uuids = result as string[]
 			if (!params.detail)
-				return uuids ?? []
+				return uuids
 			const out: Array<{ uuid: string, info: unknown }> = []
-			for (const uuid of uuids ?? [])
+			for (const uuid of uuids)
 				out.push({ uuid, info: await eda.dmt_Project.getProjectInfo(uuid) })
 			return out
 		},
@@ -680,7 +702,7 @@ export const projectCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'project.deleteBoard',
-		summary: '删除板子（Board）。返回 deleted:false 时会附带诊断信息（0.10.63）：常见原因是板子下有未关闭的文档页签/存在关联文档引用，可先手动关闭页签重试，仍失败请用户在 EDA 界面删除',
+		summary: '删除指定板子（Board）；官方接口返回失败时，附带当前工程中的目标板信息，不自动重试删除',
 		params: [
 			{ name: 'boardName', type: 'string', required: true, description: '板子名' },
 		],
@@ -693,7 +715,7 @@ export const projectCommands: Array<ICommandDef> = [
 			const deleted = await eda.dmt_Board.deleteBoard(boardName)
 			if (deleted)
 				return { deleted: true }
-			// 0.10.63：删不掉（实测空板也返回 false，如 某多页工程 Schematic8）——给诊断而不是干巴巴一个 false
+			// 官方返回 false 时读取当前实际状态，不把历史故障或猜测当作本次原因。
 			let diagnostics: Record<string, any> | undefined
 			try {
 				const info: any = await eda.dmt_Project.getCurrentProjectInfo()
@@ -721,9 +743,7 @@ export const projectCommands: Array<ICommandDef> = [
 					boards: boards.map(b => b.name),
 					target: target ?? '未在工程文档树中找到该板',
 					likelyCauses: target
-						? ['板子下有未关闭的文档页签（先 editor.listTabs 确认并手动关闭对应页签后重试）',
-							'板子存在关联文档引用（schematic/pcb 非空，先删关联文档）',
-							'官方 deleteBoard 对部分板子（实测含空板）恒返回 false——请用户在 EDA 界面左侧工程面板手动删除']
+						? ['官方删除接口返回 false，目标板仍存在；具体失败原因尚未由接口提供']
 						: ['板名不存在（注意大小写/空格；可先 project.getInfo 核对板名清单）'],
 				}
 			}

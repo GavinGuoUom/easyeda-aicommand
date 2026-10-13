@@ -488,7 +488,7 @@ function uprightContentBBox(component: ISourcePcbComponent, geometry: Map<string
  * 0.10.32 差异：① rowLimit 收紧到板框可用宽度 availWidth（组少时 √总面积≈组宽会提前换行、横向大片浪费）；
  * ② 布局估算盒经 uprightContentBBox 归 0 姿态（见上）；③ 返回 rowLimit 供出口闸报错诊断。
  */
-function planLayoutOfficial(groups: Array<IPlannedGroup>, geometry: Map<string, IBBox>, attrRecords: ReturnType<typeof effectiveRecordsByType>, originX: number, originBottomY: number, groupGap: number, obstacles: Array<{ designator: string, bbox: IBBox }> = [], availWidth: number = Infinity): { rowLimit: number } {
+function planLayoutOfficial(groups: Array<IPlannedGroup>, geometry: Map<string, IBBox>, attrRecords: ReturnType<typeof effectiveRecordsByType>, originX: number, originBottomY: number, groupGap: number, obstacles: Array<{ designator: string, bbox: IBBox }> = [], availWidth: number = Infinity, boardMaxY?: number): { rowLimit: number } {
 	const componentGap = 10
 	const rowGap = 15
 	const margin = 15
@@ -600,12 +600,27 @@ function planLayoutOfficial(groups: Array<IPlannedGroup>, geometry: Map<string, 
 		const rowWidth = Math.min(rowLimit, availWidth)
 		const blockers = new Set<string>()
 		let placedOk = false
-		for (let attempt = 0; attempt < 200 && !placedOk; attempt += 1) {
+		const obstacleTop = Math.max(originBottomY, ...obstacles.map(o => o.bbox.maxY))
+		const searchTop = Number.isFinite(boardMaxY) ? boardMaxY! : obstacleTop + height + groupGap
+		if (!Number.isFinite(searchTop))
+			throw new Error(`无法为 ${group.name} 计算有限的避障搜索范围（板框或既有器件坐标无效）`)
+		let previousPosition: { x: number, y: number } | undefined
+		while (!placedOk) {
+			if (groupY + height > searchTop)
+				break
 			if (groupX > originX && (groupX - originX) + width > rowWidth) {
+				const nextY = groupY + Math.max(shelfRowHeight, height) + groupGap
+				if (nextY <= groupY)
+					break
 				groupX = originX
-				groupY += Math.max(shelfRowHeight, height) + groupGap
+				groupY = nextY
 				shelfRowHeight = 0
+				if (groupY + height > searchTop)
+					break
 			}
+			if (previousPosition?.x === groupX && previousPosition.y === groupY)
+				break
+			previousPosition = { x: groupX, y: groupY }
 			placeGroupAt(groupX, groupY)
 			const hit = hitsObstacle(group.bbox)
 			if (!hit) {
@@ -613,10 +628,13 @@ function planLayoutOfficial(groups: Array<IPlannedGroup>, geometry: Map<string, 
 				break
 			}
 			blockers.add(hit.designator)
-			groupX = hit.bbox.maxX + groupGap // 向右让开障碍物，下轮重新校验（必要时换行）
+			const nextX = hit.bbox.maxX + groupGap // 向右让开障碍物，下轮重新校验（必要时换行）
+			if (nextX <= groupX)
+				break
+			groupX = nextX
 		}
 		if (!placedOk)
-			group.blockedBy = [...blockers]
+			throw new Error(`布局避让失败：${group.name} 在板框和全部障碍物范围内没有可用位置${blockers.size ? `（受阻于 ${[...blockers].join('、')}）` : ''}`)
 		else if (blockers.size)
 			group.avoidedObstacles = [...blockers]
 		groupX = group.bbox.maxX + groupGap
@@ -680,7 +698,7 @@ function createGeneratedId(): string {
 export const pcbGroupingCommands: Array<ICommandDef> = [
 	{
 		name: 'pcb.groupBySchematicRegions',
-		summary: '【宏·0.10.22】按原理图 RECT 功能区框把 PCB 器件聚合分组：读全部原理图页区框（pageUuid 可限定），器件按归属判定（位号文本位置优先、多框取面积最小）分组；0.10.29 起布局引擎忠实移植官方 eext-pcb-component-grouping 原版（组内前缀分行：行按器件数升序再 U>R>C>L>D>Q，从组底向上排，贪心避让 componentGap 10/rowGap 15/margin 15/标签区 70；组间货架横排 rowLimit=max(最宽组,√总估算面积) 组缝 120，从原点向右向上铺），与官方唯一差异是排完校验出板框即报错不写（出口闸，绝不静默摆出板外）。写入走文档源码 append-only 补丁（移动器件坐标双字段同改；组边框+组名文本生成 spg_ 前缀文档层图元，重复执行先墓碑清场），五步管线：版本化备份（代理落盘 backups/<工程>/<时间戳>.txt 保留最近 5 份，代理不可用回退 sys_Storage 单槽）→ setDocumentSource → 回读逐器件比对（容差 0.001）→ 失败整份恢复 → 全过才保存。dryRun 默认 true 只返回分组预览，确认后 dryRun:false 才动PCB。⚠️ 调用前焦点须在 PCB（文档守卫），执行中会短暂切换焦点读原理图页，结束后回到 PCB',
+		summary: '按原理图区框将 PCB 器件分组布局；插件处理既有器件避让、板框检查、备份和读回。dryRun 默认 true 预览，明确要求修改时传 false 执行；无法放入板内时明确失败',
 		params: [
 			{ name: 'pageUuid', type: 'string', description: '只读取这一张原理图页的区框（留空为全部图页）' },
 			{ name: 'dryRun', type: 'boolean', description: '默认 true：只返回分组预览（每组器件清单/计划摆放区/未分组清单），不写入' },
@@ -818,7 +836,7 @@ export const pcbGroupingCommands: Array<ICommandDef> = [
 				designator: component.designator ?? component.id,
 				bbox: obstacleMeasured.get(component.id) ?? geometry.get(component.id) ?? fallbackBBox(component),
 			}))
-			const layoutDiag = planLayoutOfficial(groups, geometry, attrRecords, originX, originBottomY, groupGap, obstacles, boardBox.maxX - originX)
+			const layoutDiag = planLayoutOfficial(groups, geometry, attrRecords, originX, originBottomY, groupGap, obstacles, boardBox.maxX - originX, boardBox.maxY)
 			// 出口闸（与官方的行为差异之一）：任何组出板框即报错，绝不写入
 			const overflow = groups
 				.filter(group => group.bbox.maxX > boardBox.maxX || group.bbox.maxY > boardBox.maxY)
@@ -839,12 +857,12 @@ export const pcbGroupingCommands: Array<ICommandDef> = [
 					+ '请增大板框、减少每组器件、调小 groupGap，或改 origin；本次未写入任何改动',
 				)
 			}
-			// 出口闸之二：200 次尝试仍绕不开既有器件的组，如实报错不写入
+			// 出口闸之二：按障碍物范围和板框搜索后仍无可用位置的组，如实报错不写入
 			const blocked = groups.filter(group => group.blockedBy?.length)
 			if (blocked.length) {
 				throw new Error(
-					`摆不下：${blocked.length} 个组被既有器件挡住（${blocked.map(group => `${group.name} ← ${group.blockedBy!.join('、')}`).join('；')}）。`
-					+ '请拆小区框、挪走挡路的既有器件，或调整 origin/groupGap；本次未写入任何改动',
+					`摆不下：根据障碍物范围和板框搜索后，${blocked.length} 个组仍没有可用位置（${blocked.map(group => `${group.name} ← ${group.blockedBy!.join('、')}`).join('；')}）。`
+					+ '请调整区框、既有器件位置或摆放起点；本次未写入任何改动',
 				)
 			}
 

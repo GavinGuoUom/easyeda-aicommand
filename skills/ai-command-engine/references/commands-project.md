@@ -14,7 +14,7 @@ If the SDK call to `project.importFile` returns empty, throws, or provides no va
 | --- | --- | --- |
 | `project.getInfo` | Current project info (name + document-tree UUID) | None |
 | `project.getInfoOf` | Info for a specified project | `projectUuid` |
-| `project.list` | List all projects (`detail:true` reads each project's info and is slower) | `detail?` |
+| `project.list` | List projects; may be scoped to a team (`detail:true` reads each project's info and is slower) | `teamUuid?`, `detail?` |
 | `project.create` | Create a project | `name`, `projectName?` (English internal name), `description?` |
 | `project.open` | Open/switch to a project. ⚠️ The official API fails directly when the current project has unsaved changes (“工程打开失败” / project open failed); run `schematic.save` before switching. | `projectUuid` |
 | `project.moveToFolder` | Move a project to a folder (empty means root) | `projectUuid`, `folderUuid?` |
@@ -22,6 +22,18 @@ If the SDK call to `project.importFile` returns empty, throws, or provides no va
 | `project.importFile` | Import an external file as a new project (since 0.10.35; `.PcbDoc`/`.SchDoc`/`.epro` etc. infer `fileType`; if omitted, automatically use the current team and create a New Project) | `base64`, `fileName`, `fileType?`, `newProjectName?` |
 | `project.getDocumentSource` | Read JSON source data for the active document (read-only; faster for whole-document analysis than querying primitives one by one) | None |
 | `project.modifyTitleBlock` | Modify title block (⚠️ `data` keys must exist in the current frame; read `titleBlockData` using `getPageInfo` first. Page Size/Symbol cannot be changed through the API.) | `showTitleBlock?`, `data?` |
+
+## Verify projects by team (0.10.117)
+
+`project.list` accepts an optional non-empty string `teamUuid`. When supplied, it is passed unchanged to the SDK; when omitted, the host's default query scope is used. The result is an array of project UUID strings. With `detail:true`, the result is an ordered array of `{ uuid, info }` objects.
+
+On 2026-10-11, the installed 0.10.117 build on EDA 4.1.71 returned 21 projects and their details for a specified team, with a known project from that team used as a comparison. Rejection of malformed responses passed local simulation; no exception was injected into the host.
+
+The command explicitly errors if the host returns `undefined`, `null`, a non-array, or an array containing a non-string or empty-string item; it does not treat these as “no projects.” Preserve project IDs as host strings and do not infer their format. A real empty array still returns `[]`; compare it with a known project in the same team before concluding that a prior import did not occur. This command is read-only; it does not clear protection for an uncertain write and does not automatically retry an import.
+
+```json
+{"instanceId":"verified window ID","cmd":"project.list","params":{"teamUuid":"target team UUID recorded in the import result","detail":true}}
+```
 
 ## Boards and associations
 

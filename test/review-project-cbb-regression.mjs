@@ -272,7 +272,26 @@ await withImmediateTimers(async () => {
 			check(calls === 1 && searches === 0, `R5：${kind} 官方 UUID 成功路径只调用一次且不搜索`)
 		}
 	}
-
+	{
+		const placement = cbbCommands.find(command => command.name === 'cbb.placeSymbol')
+		let coordinates
+		globalThis.eda = { sch_PrimitiveComponent: { createCbbSymbol: async (_identity, x, y) => {
+			coordinates = [x, y]
+			return { getState_PrimitiveId: () => 'symbol-1', getState_Designator: () => 'CBB1' }
+		} } }
+		const result = await cbbHandler('cbb.placeSymbol')({ libraryUuid: 'library-1', cbbUuid: 'cbb-1', x: 2001.25, y: 1998.75 })
+		check(result.primitiveId === 'symbol-1' && JSON.stringify(coordinates) === JSON.stringify([2001.25, 1998.75]) && !placement.params.some(param => /5 的倍数/.test(param.description)), 'cbb.placeSymbol passes SDK coordinates unchanged and documents no unsupported multiple-of-five rule')
+	}
+	{
+		const placement = cbbCommands.find(command => command.name === 'cbb.placeSchematicPage')
+		let sdkIdentity
+		globalThis.eda = { sch_PrimitiveComponent: { placeCbbSchematicPage: async identity => { sdkIdentity = identity; return true } } }
+		const result = await placement.handler({ libraryUuid: 'library-1', cbbUuid: 'cbb-1', uuid: 'source-page-1', x: 100, y: 200 })
+		const uuidDescription = placement.params.find(param => param.name === 'uuid').description
+		check(sdkIdentity.uuid === 'source-page-1' && result.placed === true, 'cbb.placeSchematicPage forwards the confirmed source page UUID unchanged and exposes the SDK return')
+		check(/来源原理图图页 UUID/.test(uuidDescription) && /父原理图/.test(uuidDescription) && !/不是下属图页 UUID/.test(uuidDescription), 'cbb.placeSchematicPage documents parent ownership without prohibiting page UUIDs')
+		check(/当前 host/.test(placement.summary) && /不代表读回或物理完成/.test(placement.summary) && /不代表读回或物理完成/.test(placement.returns), 'cbb.placeSchematicPage documents SDK submission separately from readback and physical completion')
+	}
 	const oldObject = { name: 'duplicate-name', uuid: 'old-module' }
 	const otherWindowObject = { name: 'duplicate-name', uuid: 'other-window-module' }
 	for (const kind of ['create', 'copy']) {

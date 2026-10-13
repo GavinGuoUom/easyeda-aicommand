@@ -1,0 +1,3017 @@
+{
+  "input": {
+    "componentId": "ie0",
+    "direction": "auto",
+    "lineLength": 80,
+    "lineWidth": 5,
+    "viaDiameter": 14,
+    "holeDiameter": 7,
+    "clearance": 4
+  },
+  "outline": {
+    "maxX": 2755.9055,
+    "minY": -1968.5039
+  },
+  "pads": [
+    {
+      "id": "ie0ie6",
+      "componentId": "ie0",
+      "number": "1",
+      "net": "U1_P001",
+      "x": 551.2,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie7",
+      "componentId": "ie0",
+      "number": "2",
+      "net": "U1_P002",
+      "x": 570.9,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie8",
+      "componentId": "ie0",
+      "number": "3",
+      "net": "U1_P003",
+      "x": 590.6,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie9",
+      "componentId": "ie0",
+      "number": "4",
+      "net": "U1_P004",
+      "x": 610.2,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie10",
+      "componentId": "ie0",
+      "number": "5",
+      "net": "U1_P005",
+      "x": 629.9,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie11",
+      "componentId": "ie0",
+      "number": "6",
+      "net": "U1_P006",
+      "x": 649.6,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie12",
+      "componentId": "ie0",
+      "number": "7",
+      "net": "U1_P007",
+      "x": 669.3,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie13",
+      "componentId": "ie0",
+      "number": "8",
+      "net": "U1_P008",
+      "x": 689.0,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie14",
+      "componentId": "ie0",
+      "number": "9",
+      "net": "U1_P009",
+      "x": 708.7,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie15",
+      "componentId": "ie0",
+      "number": "10",
+      "net": "U1_P010",
+      "x": 728.3,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie16",
+      "componentId": "ie0",
+      "number": "11",
+      "net": "U1_P011",
+      "x": 748.0,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie17",
+      "componentId": "ie0",
+      "number": "12",
+      "net": "U1_P012",
+      "x": 767.7,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie18",
+      "componentId": "ie0",
+      "number": "13",
+      "net": "U1_P013",
+      "x": 787.4,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie19",
+      "componentId": "ie0",
+      "number": "14",
+      "net": "U1_P014",
+      "x": 807.1,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie20",
+      "componentId": "ie0",
+      "number": "15",
+      "net": "U1_P015",
+      "x": 826.8,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie21",
+      "componentId": "ie0",
+      "number": "16",
+      "net": "U1_P016",
+      "x": 846.5,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie22",
+      "componentId": "ie0",
+      "number": "17",
+      "net": "U1_P017",
+      "x": 866.1,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie23",
+      "componentId": "ie0",
+      "number": "18",
+      "net": "U1_P018",
+      "x": 885.8,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie24",
+      "componentId": "ie0",
+      "number": "19",
+      "net": "U1_P019",
+      "x": 905.5,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie25",
+      "componentId": "ie0",
+      "number": "20",
+      "net": "U1_P020",
+      "x": 925.2,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie26",
+      "componentId": "ie0",
+      "number": "21",
+      "net": "U1_P021",
+      "x": 944.9,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie27",
+      "componentId": "ie0",
+      "number": "22",
+      "net": "U1_P022",
+      "x": 964.6,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie28",
+      "componentId": "ie0",
+      "number": "23",
+      "net": "U1_P023",
+      "x": 984.3,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie29",
+      "componentId": "ie0",
+      "number": "24",
+      "net": "U1_P024",
+      "x": 1003.9,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie30",
+      "componentId": "ie0",
+      "number": "25",
+      "net": "U1_P025",
+      "x": 1023.6,
+      "y": -1281.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie31",
+      "componentId": "ie0",
+      "number": "26",
+      "net": "U1_P026",
+      "x": 1084.6,
+      "y": -1220.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie32",
+      "componentId": "ie0",
+      "number": "27",
+      "net": "U1_P027",
+      "x": 1084.6,
+      "y": -1200.8,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie33",
+      "componentId": "ie0",
+      "number": "28",
+      "net": "U1_P028",
+      "x": 1084.6,
+      "y": -1181.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie34",
+      "componentId": "ie0",
+      "number": "29",
+      "net": "U1_P029",
+      "x": 1084.6,
+      "y": -1161.4,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie35",
+      "componentId": "ie0",
+      "number": "30",
+      "net": "U1_P030",
+      "x": 1084.6,
+      "y": -1141.7,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie36",
+      "componentId": "ie0",
+      "number": "31",
+      "net": "U1_P031",
+      "x": 1084.6,
+      "y": -1122.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie37",
+      "componentId": "ie0",
+      "number": "32",
+      "net": "U1_P032",
+      "x": 1084.6,
+      "y": -1102.4,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie38",
+      "componentId": "ie0",
+      "number": "33",
+      "net": "U1_P033",
+      "x": 1084.6,
+      "y": -1082.7,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie39",
+      "componentId": "ie0",
+      "number": "34",
+      "net": "U1_P034",
+      "x": 1084.6,
+      "y": -1063.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie40",
+      "componentId": "ie0",
+      "number": "35",
+      "net": "U1_P035",
+      "x": 1084.6,
+      "y": -1043.3,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie41",
+      "componentId": "ie0",
+      "number": "36",
+      "net": "U1_P036",
+      "x": 1084.6,
+      "y": -1023.6,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie42",
+      "componentId": "ie0",
+      "number": "37",
+      "net": "U1_P037",
+      "x": 1084.6,
+      "y": -1003.9,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie43",
+      "componentId": "ie0",
+      "number": "38",
+      "net": "U1_P038",
+      "x": 1084.6,
+      "y": -984.3,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie44",
+      "componentId": "ie0",
+      "number": "39",
+      "net": "U1_P039",
+      "x": 1084.6,
+      "y": -964.6,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie45",
+      "componentId": "ie0",
+      "number": "40",
+      "net": "U1_P040",
+      "x": 1084.6,
+      "y": -944.9,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie46",
+      "componentId": "ie0",
+      "number": "41",
+      "net": "U1_P041",
+      "x": 1084.6,
+      "y": -925.2,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie47",
+      "componentId": "ie0",
+      "number": "42",
+      "net": "U1_P042",
+      "x": 1084.6,
+      "y": -905.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie48",
+      "componentId": "ie0",
+      "number": "43",
+      "net": "U1_P043",
+      "x": 1084.6,
+      "y": -885.8,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie49",
+      "componentId": "ie0",
+      "number": "44",
+      "net": "U1_P044",
+      "x": 1084.6,
+      "y": -866.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie50",
+      "componentId": "ie0",
+      "number": "45",
+      "net": "U1_P045",
+      "x": 1084.6,
+      "y": -846.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie51",
+      "componentId": "ie0",
+      "number": "46",
+      "net": "U1_P046",
+      "x": 1084.6,
+      "y": -826.8,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie52",
+      "componentId": "ie0",
+      "number": "47",
+      "net": "U1_P047",
+      "x": 1084.6,
+      "y": -807.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie53",
+      "componentId": "ie0",
+      "number": "48",
+      "net": "U1_P048",
+      "x": 1084.6,
+      "y": -787.4,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie54",
+      "componentId": "ie0",
+      "number": "49",
+      "net": "U1_P049",
+      "x": 1084.6,
+      "y": -767.7,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie55",
+      "componentId": "ie0",
+      "number": "50",
+      "net": "U1_P050",
+      "x": 1084.6,
+      "y": -748.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie56",
+      "componentId": "ie0",
+      "number": "51",
+      "net": "U1_P051",
+      "x": 1023.6,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie57",
+      "componentId": "ie0",
+      "number": "52",
+      "net": "U1_P052",
+      "x": 1003.9,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie58",
+      "componentId": "ie0",
+      "number": "53",
+      "net": "U1_P053",
+      "x": 984.3,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie59",
+      "componentId": "ie0",
+      "number": "54",
+      "net": "U1_P054",
+      "x": 964.6,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie60",
+      "componentId": "ie0",
+      "number": "55",
+      "net": "U1_P055",
+      "x": 944.9,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie61",
+      "componentId": "ie0",
+      "number": "56",
+      "net": "U1_P056",
+      "x": 925.2,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie62",
+      "componentId": "ie0",
+      "number": "57",
+      "net": "U1_P057",
+      "x": 905.5,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie63",
+      "componentId": "ie0",
+      "number": "58",
+      "net": "U1_P058",
+      "x": 885.8,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie64",
+      "componentId": "ie0",
+      "number": "59",
+      "net": "U1_P059",
+      "x": 866.1,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie65",
+      "componentId": "ie0",
+      "number": "60",
+      "net": "U1_P060",
+      "x": 846.5,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie66",
+      "componentId": "ie0",
+      "number": "61",
+      "net": "U1_P061",
+      "x": 826.8,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie67",
+      "componentId": "ie0",
+      "number": "62",
+      "net": "U1_P062",
+      "x": 807.1,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie68",
+      "componentId": "ie0",
+      "number": "63",
+      "net": "U1_P063",
+      "x": 787.4,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie69",
+      "componentId": "ie0",
+      "number": "64",
+      "net": "U1_P064",
+      "x": 767.7,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie70",
+      "componentId": "ie0",
+      "number": "65",
+      "net": "U1_P065",
+      "x": 748.0,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie71",
+      "componentId": "ie0",
+      "number": "66",
+      "net": "U1_P066",
+      "x": 728.3,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie72",
+      "componentId": "ie0",
+      "number": "67",
+      "net": "U1_P067",
+      "x": 708.7,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie73",
+      "componentId": "ie0",
+      "number": "68",
+      "net": "U1_P068",
+      "x": 689.0,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie74",
+      "componentId": "ie0",
+      "number": "69",
+      "net": "U1_P069",
+      "x": 669.3,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie75",
+      "componentId": "ie0",
+      "number": "70",
+      "net": "U1_P070",
+      "x": 649.6,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie76",
+      "componentId": "ie0",
+      "number": "71",
+      "net": "U1_P071",
+      "x": 629.9,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie77",
+      "componentId": "ie0",
+      "number": "72",
+      "net": "U1_P072",
+      "x": 610.2,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie78",
+      "componentId": "ie0",
+      "number": "73",
+      "net": "U1_P073",
+      "x": 590.6,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie79",
+      "componentId": "ie0",
+      "number": "74",
+      "net": "U1_P074",
+      "x": 570.9,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie80",
+      "componentId": "ie0",
+      "number": "75",
+      "net": "U1_P075",
+      "x": 551.2,
+      "y": -687.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie0ie81",
+      "componentId": "ie0",
+      "number": "76",
+      "net": "U1_P076",
+      "x": 490.2,
+      "y": -748.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie82",
+      "componentId": "ie0",
+      "number": "77",
+      "net": "U1_P077",
+      "x": 490.2,
+      "y": -767.7,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie83",
+      "componentId": "ie0",
+      "number": "78",
+      "net": "U1_P078",
+      "x": 490.2,
+      "y": -787.4,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie84",
+      "componentId": "ie0",
+      "number": "79",
+      "net": "U1_P079",
+      "x": 490.2,
+      "y": -807.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie85",
+      "componentId": "ie0",
+      "number": "80",
+      "net": "U1_P080",
+      "x": 490.2,
+      "y": -826.8,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie86",
+      "componentId": "ie0",
+      "number": "81",
+      "net": "U1_P081",
+      "x": 490.2,
+      "y": -846.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie87",
+      "componentId": "ie0",
+      "number": "82",
+      "net": "U1_P082",
+      "x": 490.2,
+      "y": -866.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie88",
+      "componentId": "ie0",
+      "number": "83",
+      "net": "U1_P083",
+      "x": 490.2,
+      "y": -885.8,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie89",
+      "componentId": "ie0",
+      "number": "84",
+      "net": "U1_P084",
+      "x": 490.2,
+      "y": -905.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie90",
+      "componentId": "ie0",
+      "number": "85",
+      "net": "U1_P085",
+      "x": 490.2,
+      "y": -925.2,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie91",
+      "componentId": "ie0",
+      "number": "86",
+      "net": "U1_P086",
+      "x": 490.2,
+      "y": -944.9,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie92",
+      "componentId": "ie0",
+      "number": "87",
+      "net": "U1_P087",
+      "x": 490.2,
+      "y": -964.6,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie93",
+      "componentId": "ie0",
+      "number": "88",
+      "net": "U1_P088",
+      "x": 490.2,
+      "y": -984.3,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie94",
+      "componentId": "ie0",
+      "number": "89",
+      "net": "U1_P089",
+      "x": 490.2,
+      "y": -1003.9,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie95",
+      "componentId": "ie0",
+      "number": "90",
+      "net": "U1_P090",
+      "x": 490.2,
+      "y": -1023.6,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie96",
+      "componentId": "ie0",
+      "number": "91",
+      "net": "U1_P091",
+      "x": 490.2,
+      "y": -1043.3,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie97",
+      "componentId": "ie0",
+      "number": "92",
+      "net": "U1_P092",
+      "x": 490.2,
+      "y": -1063.0,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie98",
+      "componentId": "ie0",
+      "number": "93",
+      "net": "U1_P093",
+      "x": 490.2,
+      "y": -1082.7,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie99",
+      "componentId": "ie0",
+      "number": "94",
+      "net": "U1_P094",
+      "x": 490.2,
+      "y": -1102.4,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie100",
+      "componentId": "ie0",
+      "number": "95",
+      "net": "U1_P095",
+      "x": 490.2,
+      "y": -1122.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie101",
+      "componentId": "ie0",
+      "number": "96",
+      "net": "U1_P096",
+      "x": 490.2,
+      "y": -1141.7,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie102",
+      "componentId": "ie0",
+      "number": "97",
+      "net": "U1_P097",
+      "x": 490.2,
+      "y": -1161.4,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie103",
+      "componentId": "ie0",
+      "number": "98",
+      "net": "U1_P098",
+      "x": 490.2,
+      "y": -1181.1,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie104",
+      "componentId": "ie0",
+      "number": "99",
+      "net": "U1_P099",
+      "x": 490.2,
+      "y": -1200.8,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie0ie105",
+      "componentId": "ie0",
+      "number": "100",
+      "net": "U1_P100",
+      "x": 490.2,
+      "y": -1220.5,
+      "layer": 1,
+      "rotation": 0.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie6",
+      "componentId": "ie5",
+      "number": "1",
+      "net": "U2_P001",
+      "x": 1671.3,
+      "y": -1220.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie7",
+      "componentId": "ie5",
+      "number": "2",
+      "net": "U2_P002",
+      "x": 1671.3,
+      "y": -1200.8,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie8",
+      "componentId": "ie5",
+      "number": "3",
+      "net": "U2_P003",
+      "x": 1671.3,
+      "y": -1181.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie9",
+      "componentId": "ie5",
+      "number": "4",
+      "net": "U2_P004",
+      "x": 1671.3,
+      "y": -1161.4,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie10",
+      "componentId": "ie5",
+      "number": "5",
+      "net": "U2_P005",
+      "x": 1671.3,
+      "y": -1141.7,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie11",
+      "componentId": "ie5",
+      "number": "6",
+      "net": "U2_P006",
+      "x": 1671.3,
+      "y": -1122.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie12",
+      "componentId": "ie5",
+      "number": "7",
+      "net": "U2_P007",
+      "x": 1671.3,
+      "y": -1102.4,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie13",
+      "componentId": "ie5",
+      "number": "8",
+      "net": "U2_P008",
+      "x": 1671.3,
+      "y": -1082.7,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie14",
+      "componentId": "ie5",
+      "number": "9",
+      "net": "U2_P009",
+      "x": 1671.3,
+      "y": -1063.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie15",
+      "componentId": "ie5",
+      "number": "10",
+      "net": "U2_P010",
+      "x": 1671.3,
+      "y": -1043.3,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie16",
+      "componentId": "ie5",
+      "number": "11",
+      "net": "U2_P011",
+      "x": 1671.3,
+      "y": -1023.6,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie17",
+      "componentId": "ie5",
+      "number": "12",
+      "net": "U2_P012",
+      "x": 1671.3,
+      "y": -1003.9,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie18",
+      "componentId": "ie5",
+      "number": "13",
+      "net": "U2_P013",
+      "x": 1671.3,
+      "y": -984.3,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie19",
+      "componentId": "ie5",
+      "number": "14",
+      "net": "U2_P014",
+      "x": 1671.3,
+      "y": -964.6,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie20",
+      "componentId": "ie5",
+      "number": "15",
+      "net": "U2_P015",
+      "x": 1671.3,
+      "y": -944.9,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie21",
+      "componentId": "ie5",
+      "number": "16",
+      "net": "U2_P016",
+      "x": 1671.3,
+      "y": -925.2,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie22",
+      "componentId": "ie5",
+      "number": "17",
+      "net": "U2_P017",
+      "x": 1671.3,
+      "y": -905.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie23",
+      "componentId": "ie5",
+      "number": "18",
+      "net": "U2_P018",
+      "x": 1671.3,
+      "y": -885.8,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie24",
+      "componentId": "ie5",
+      "number": "19",
+      "net": "U2_P019",
+      "x": 1671.3,
+      "y": -866.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie25",
+      "componentId": "ie5",
+      "number": "20",
+      "net": "U2_P020",
+      "x": 1671.3,
+      "y": -846.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie26",
+      "componentId": "ie5",
+      "number": "21",
+      "net": "U2_P021",
+      "x": 1671.3,
+      "y": -826.8,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie27",
+      "componentId": "ie5",
+      "number": "22",
+      "net": "U2_P022",
+      "x": 1671.3,
+      "y": -807.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie28",
+      "componentId": "ie5",
+      "number": "23",
+      "net": "U2_P023",
+      "x": 1671.3,
+      "y": -787.4,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie29",
+      "componentId": "ie5",
+      "number": "24",
+      "net": "U2_P024",
+      "x": 1671.3,
+      "y": -767.7,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie30",
+      "componentId": "ie5",
+      "number": "25",
+      "net": "U2_P025",
+      "x": 1671.3,
+      "y": -748.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie31",
+      "componentId": "ie5",
+      "number": "26",
+      "net": "U2_P026",
+      "x": 1732.3,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie32",
+      "componentId": "ie5",
+      "number": "27",
+      "net": "U2_P027",
+      "x": 1752.0,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie33",
+      "componentId": "ie5",
+      "number": "28",
+      "net": "U2_P028",
+      "x": 1771.7,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie34",
+      "componentId": "ie5",
+      "number": "29",
+      "net": "U2_P029",
+      "x": 1791.3,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie35",
+      "componentId": "ie5",
+      "number": "30",
+      "net": "U2_P030",
+      "x": 1811.0,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie36",
+      "componentId": "ie5",
+      "number": "31",
+      "net": "U2_P031",
+      "x": 1830.7,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie37",
+      "componentId": "ie5",
+      "number": "32",
+      "net": "U2_P032",
+      "x": 1850.4,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie38",
+      "componentId": "ie5",
+      "number": "33",
+      "net": "U2_P033",
+      "x": 1870.1,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie39",
+      "componentId": "ie5",
+      "number": "34",
+      "net": "U2_P034",
+      "x": 1889.8,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie40",
+      "componentId": "ie5",
+      "number": "35",
+      "net": "U2_P035",
+      "x": 1909.4,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie41",
+      "componentId": "ie5",
+      "number": "36",
+      "net": "U2_P036",
+      "x": 1929.1,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie42",
+      "componentId": "ie5",
+      "number": "37",
+      "net": "U2_P037",
+      "x": 1948.8,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie43",
+      "componentId": "ie5",
+      "number": "38",
+      "net": "U2_P038",
+      "x": 1968.5,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie44",
+      "componentId": "ie5",
+      "number": "39",
+      "net": "U2_P039",
+      "x": 1988.2,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie45",
+      "componentId": "ie5",
+      "number": "40",
+      "net": "U2_P040",
+      "x": 2007.9,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie46",
+      "componentId": "ie5",
+      "number": "41",
+      "net": "U2_P041",
+      "x": 2027.6,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie47",
+      "componentId": "ie5",
+      "number": "42",
+      "net": "U2_P042",
+      "x": 2047.2,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie48",
+      "componentId": "ie5",
+      "number": "43",
+      "net": "U2_P043",
+      "x": 2066.9,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie49",
+      "componentId": "ie5",
+      "number": "44",
+      "net": "U2_P044",
+      "x": 2086.6,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie50",
+      "componentId": "ie5",
+      "number": "45",
+      "net": "U2_P045",
+      "x": 2106.3,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie51",
+      "componentId": "ie5",
+      "number": "46",
+      "net": "U2_P046",
+      "x": 2126.0,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie52",
+      "componentId": "ie5",
+      "number": "47",
+      "net": "U2_P047",
+      "x": 2145.7,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie53",
+      "componentId": "ie5",
+      "number": "48",
+      "net": "U2_P048",
+      "x": 2165.4,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie54",
+      "componentId": "ie5",
+      "number": "49",
+      "net": "U2_P049",
+      "x": 2185.0,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie55",
+      "componentId": "ie5",
+      "number": "50",
+      "net": "U2_P050",
+      "x": 2204.7,
+      "y": -687.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie56",
+      "componentId": "ie5",
+      "number": "51",
+      "net": "U2_P051",
+      "x": 2265.7,
+      "y": -748.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie57",
+      "componentId": "ie5",
+      "number": "52",
+      "net": "U2_P052",
+      "x": 2265.7,
+      "y": -767.7,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie58",
+      "componentId": "ie5",
+      "number": "53",
+      "net": "U2_P053",
+      "x": 2265.7,
+      "y": -787.4,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie59",
+      "componentId": "ie5",
+      "number": "54",
+      "net": "U2_P054",
+      "x": 2265.7,
+      "y": -807.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie60",
+      "componentId": "ie5",
+      "number": "55",
+      "net": "U2_P055",
+      "x": 2265.7,
+      "y": -826.8,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie61",
+      "componentId": "ie5",
+      "number": "56",
+      "net": "U2_P056",
+      "x": 2265.7,
+      "y": -846.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie62",
+      "componentId": "ie5",
+      "number": "57",
+      "net": "U2_P057",
+      "x": 2265.7,
+      "y": -866.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie63",
+      "componentId": "ie5",
+      "number": "58",
+      "net": "U2_P058",
+      "x": 2265.7,
+      "y": -885.8,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie64",
+      "componentId": "ie5",
+      "number": "59",
+      "net": "U2_P059",
+      "x": 2265.7,
+      "y": -905.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie65",
+      "componentId": "ie5",
+      "number": "60",
+      "net": "U2_P060",
+      "x": 2265.7,
+      "y": -925.2,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie66",
+      "componentId": "ie5",
+      "number": "61",
+      "net": "U2_P061",
+      "x": 2265.7,
+      "y": -944.9,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie67",
+      "componentId": "ie5",
+      "number": "62",
+      "net": "U2_P062",
+      "x": 2265.7,
+      "y": -964.6,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie68",
+      "componentId": "ie5",
+      "number": "63",
+      "net": "U2_P063",
+      "x": 2265.7,
+      "y": -984.3,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie69",
+      "componentId": "ie5",
+      "number": "64",
+      "net": "U2_P064",
+      "x": 2265.7,
+      "y": -1003.9,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie70",
+      "componentId": "ie5",
+      "number": "65",
+      "net": "U2_P065",
+      "x": 2265.7,
+      "y": -1023.6,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie71",
+      "componentId": "ie5",
+      "number": "66",
+      "net": "U2_P066",
+      "x": 2265.7,
+      "y": -1043.3,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie72",
+      "componentId": "ie5",
+      "number": "67",
+      "net": "U2_P067",
+      "x": 2265.7,
+      "y": -1063.0,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie73",
+      "componentId": "ie5",
+      "number": "68",
+      "net": "U2_P068",
+      "x": 2265.7,
+      "y": -1082.7,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie74",
+      "componentId": "ie5",
+      "number": "69",
+      "net": "U2_P069",
+      "x": 2265.7,
+      "y": -1102.4,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie75",
+      "componentId": "ie5",
+      "number": "70",
+      "net": "U2_P070",
+      "x": 2265.7,
+      "y": -1122.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie76",
+      "componentId": "ie5",
+      "number": "71",
+      "net": "U2_P071",
+      "x": 2265.7,
+      "y": -1141.7,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie77",
+      "componentId": "ie5",
+      "number": "72",
+      "net": "U2_P072",
+      "x": 2265.7,
+      "y": -1161.4,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie78",
+      "componentId": "ie5",
+      "number": "73",
+      "net": "U2_P073",
+      "x": 2265.7,
+      "y": -1181.1,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie79",
+      "componentId": "ie5",
+      "number": "74",
+      "net": "U2_P074",
+      "x": 2265.7,
+      "y": -1200.8,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie80",
+      "componentId": "ie5",
+      "number": "75",
+      "net": "U2_P075",
+      "x": 2265.7,
+      "y": -1220.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        11.8,
+        63
+      ]
+    },
+    {
+      "id": "ie5ie81",
+      "componentId": "ie5",
+      "number": "76",
+      "net": "U2_P076",
+      "x": 2204.7,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie82",
+      "componentId": "ie5",
+      "number": "77",
+      "net": "U2_P077",
+      "x": 2185.0,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie83",
+      "componentId": "ie5",
+      "number": "78",
+      "net": "U2_P078",
+      "x": 2165.4,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie84",
+      "componentId": "ie5",
+      "number": "79",
+      "net": "U2_P079",
+      "x": 2145.7,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie85",
+      "componentId": "ie5",
+      "number": "80",
+      "net": "U2_P080",
+      "x": 2126.0,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie86",
+      "componentId": "ie5",
+      "number": "81",
+      "net": "U2_P081",
+      "x": 2106.3,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie87",
+      "componentId": "ie5",
+      "number": "82",
+      "net": "U2_P082",
+      "x": 2086.6,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie88",
+      "componentId": "ie5",
+      "number": "83",
+      "net": "U2_P083",
+      "x": 2066.9,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie89",
+      "componentId": "ie5",
+      "number": "84",
+      "net": "U2_P084",
+      "x": 2047.2,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie90",
+      "componentId": "ie5",
+      "number": "85",
+      "net": "U2_P085",
+      "x": 2027.6,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie91",
+      "componentId": "ie5",
+      "number": "86",
+      "net": "U2_P086",
+      "x": 2007.9,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie92",
+      "componentId": "ie5",
+      "number": "87",
+      "net": "U2_P087",
+      "x": 1988.2,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie93",
+      "componentId": "ie5",
+      "number": "88",
+      "net": "U2_P088",
+      "x": 1968.5,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie94",
+      "componentId": "ie5",
+      "number": "89",
+      "net": "U2_P089",
+      "x": 1948.8,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie95",
+      "componentId": "ie5",
+      "number": "90",
+      "net": "U2_P090",
+      "x": 1929.1,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie96",
+      "componentId": "ie5",
+      "number": "91",
+      "net": "U2_P091",
+      "x": 1909.4,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie97",
+      "componentId": "ie5",
+      "number": "92",
+      "net": "U2_P092",
+      "x": 1889.8,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie98",
+      "componentId": "ie5",
+      "number": "93",
+      "net": "U2_P093",
+      "x": 1870.1,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie99",
+      "componentId": "ie5",
+      "number": "94",
+      "net": "U2_P094",
+      "x": 1850.4,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie100",
+      "componentId": "ie5",
+      "number": "95",
+      "net": "U2_P095",
+      "x": 1830.7,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie101",
+      "componentId": "ie5",
+      "number": "96",
+      "net": "U2_P096",
+      "x": 1811.0,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie102",
+      "componentId": "ie5",
+      "number": "97",
+      "net": "U2_P097",
+      "x": 1791.3,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie103",
+      "componentId": "ie5",
+      "number": "98",
+      "net": "U2_P098",
+      "x": 1771.7,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie104",
+      "componentId": "ie5",
+      "number": "99",
+      "net": "U2_P099",
+      "x": 1752.0,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    },
+    {
+      "id": "ie5ie105",
+      "componentId": "ie5",
+      "number": "100",
+      "net": "U2_P100",
+      "x": 1732.3,
+      "y": -1281.5,
+      "layer": 2,
+      "rotation": 90.0,
+      "shape": [
+        "OVAL",
+        63,
+        11.8
+      ]
+    }
+  ]
+}

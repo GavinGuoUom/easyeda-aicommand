@@ -1,0 +1,67 @@
+{
+  "netlist": {
+    "version": "2.0.0",
+    "components": {
+      "gge1": {
+        "props": {
+          "Convert to PCB": "yes",
+          "Unique ID": "gge1",
+          "Channel ID": "$1I2",
+          "Designator": "TP1",
+          "Footprint": "f8df6f1a8162dfdb"
+        },
+        "pinInfoMap": {
+          "1": {
+            "number": "1",
+            "net": ""
+          }
+        }
+      },
+      "test94-tp2": {
+        "props": {
+          "Convert to PCB": "yes",
+          "Unique ID": "test94-tp2",
+          "Channel ID": "$1I3",
+          "Designator": "TP2",
+          "Footprint": "f8df6f1a8162dfdb"
+        },
+        "pinInfoMap": {
+          "1": {
+            "number": "1",
+            "net": ""
+          }
+        }
+      },
+      "test96-tp3": {
+        "props": {
+          "Convert to PCB": "yes",
+          "Unique ID": "test96-tp3",
+          "Channel ID": "$1I4",
+          "Designator": "TP3",
+          "Footprint": "f8df6f1a8162dfdb"
+        },
+        "pinInfoMap": {
+          "1": {
+            "number": "1",
+            "net": "TEST96_GEOMETRY"
+          }
+        }
+      }
+    }
+  },
+  "pcbSource": [
+    "{\"type\":\"DOCHEAD\"}||{\"docType\":\"PCB\",\"client\":\"test\",\"uuid\":\"pcb-test-document\"}|",
+    "{\"type\":\"COMPONENT\",\"ticket\":154,\"id\":\"3fa65b9cbdc2714b\"}||{\"partitionId\":\"\",\"groupId\":\"1\",\"layerId\":1,\"x\":212.8425,\"y\":-906.5433,\"angle\":0,\"attrs\":{\"Add into BOM\":\"no\",\"Reuse Block\":\"Schematic1_1\",\"Group ID\":\"1\",\"Channel ID\":\"$1I2\",\"Unique ID\":\"gge1\",\"DeviceName\":\"{\\\"name\\\":\\\"Test-Point\\\",\\\"source\\\":\\\"\\\",\\\"uuid\\\":\\\"39b0f003a147d09a\\\"}\"},\"locked\":false,\"zIndex\":-1,\"pinSwap\":false,\"pinSwapInfo\":{\"3fa65b9cbdc2714be2\":{\"pinClass\":\"\",\"differentialPairClass\":\"\"}},\"footprintPrimitives\":true}|",
+    "{\"type\":\"ATTR\",\"ticket\":155,\"id\":\"3fa65b9cbdc2714bee1\"}||{\"partitionId\":\"\",\"groupID\":0,\"parentId\":\"3fa65b9cbdc2714b\",\"layerId\":3,\"x\":203,\"y\":-891.7008,\"key\":\"Designator\",\"value\":\"TP1\",\"keyVisible\":false,\"valueVisible\":true,\"fontFamily\":\"default\",\"fontSize\":45,\"strokeWidth\":6,\"bold\":0,\"italic\":0,\"origin\":\"LEFT_BOTTOM\",\"angle\":0,\"reverse\":false,\"expansion\":0,\"mirror\":false,\"locked\":false,\"zIndex\":-1,\"specialColor\":null}|",
+    "{\"type\":\"ATTR\",\"ticket\":156,\"id\":\"3fa65b9cbdc2714be1\"}||{\"partitionId\":\"\",\"groupID\":0,\"parentId\":\"3fa65b9cbdc2714b\",\"layerId\":3,\"x\":null,\"y\":null,\"key\":\"Device\",\"value\":\"39b0f003a147d09a\",\"keyVisible\":false,\"valueVisible\":false,\"fontFamily\":\"default\",\"fontSize\":45,\"strokeWidth\":6,\"bold\":0,\"italic\":0,\"origin\":\"LEFT_BOTTOM\",\"angle\":0,\"reverse\":false,\"expansion\":0,\"mirror\":false,\"locked\":false,\"zIndex\":-1,\"specialColor\":null}|",
+    "{\"type\":\"PAD_NET\",\"ticket\":157,\"id\":\"[\\\"PAD_NET\\\",\\\"3fa65b9cbdc2714b\\\",\\\"1\\\",\\\"e2\\\"]\"}||{\"partitionId\":\"\",\"padNet\":\"\",\"padLen\":null,\"propagationDelay\":null,\"attrsMap\":{}}|",
+    "{\"type\":\"COMPONENT\",\"ticket\":158,\"id\":\"f631a0e5d0e4ac5f\"}||{\"partitionId\":\"\",\"groupId\":\"1\",\"layerId\":1,\"x\":252.2125,\"y\":-906.5433,\"angle\":0,\"attrs\":{\"Add into BOM\":\"no\",\"Reuse Block\":\"Schematic1_1\",\"Group ID\":\"1\",\"Channel ID\":\"$1I3\",\"Unique ID\":\"test94-tp2\",\"Manufacturer\":\"\",\"Manufacturer Part\":\"\",\"Supplier\":\"\",\"Supplier Part\":\"\",\"DeviceName\":\"{\\\"name\\\":\\\"Test-Point\\\",\\\"source\\\":\\\"\\\",\\\"uuid\\\":\\\"39b0f003a147d09a\\\"}\"},\"locked\":false,\"zIndex\":-1,\"pinSwap\":false,\"pinSwapInfo\":{\"f631a0e5d0e4ac5fe2\":{\"pinClass\":\"\",\"differentialPairClass\":\"\"}},\"footprintPrimitives\":true}|",
+    "{\"type\":\"ATTR\",\"ticket\":159,\"id\":\"f631a0e5d0e4ac5fee1\"}||{\"partitionId\":\"\",\"groupID\":0,\"parentId\":\"f631a0e5d0e4ac5f\",\"layerId\":3,\"x\":242.37,\"y\":-891.7008,\"key\":\"Designator\",\"value\":\"TP2\",\"keyVisible\":false,\"valueVisible\":true,\"fontFamily\":\"default\",\"fontSize\":45,\"strokeWidth\":6,\"bold\":0,\"italic\":0,\"origin\":\"LEFT_BOTTOM\",\"angle\":0,\"reverse\":false,\"expansion\":0,\"mirror\":false,\"locked\":false,\"zIndex\":-1,\"specialColor\":null}|",
+    "{\"type\":\"ATTR\",\"ticket\":160,\"id\":\"f631a0e5d0e4ac5fe1\"}||{\"partitionId\":\"\",\"groupID\":0,\"parentId\":\"f631a0e5d0e4ac5f\",\"layerId\":3,\"x\":null,\"y\":null,\"key\":\"Device\",\"value\":\"39b0f003a147d09a\",\"keyVisible\":false,\"valueVisible\":false,\"fontFamily\":\"default\",\"fontSize\":45,\"strokeWidth\":6,\"bold\":0,\"italic\":0,\"origin\":\"LEFT_BOTTOM\",\"angle\":0,\"reverse\":false,\"expansion\":0,\"mirror\":false,\"locked\":false,\"zIndex\":-1,\"specialColor\":null}|",
+    "{\"type\":\"PAD_NET\",\"ticket\":161,\"id\":\"[\\\"PAD_NET\\\",\\\"f631a0e5d0e4ac5f\\\",\\\"1\\\",\\\"e2\\\"]\"}||{\"partitionId\":\"\",\"padNet\":\"\",\"padLen\":null,\"propagationDelay\":null,\"attrsMap\":{}}|",
+    "{\"type\":\"COMPONENT\",\"ticket\":162,\"id\":\"f5f9acd53a741c2a\"}||{\"partitionId\":\"\",\"groupId\":\"1\",\"layerId\":1,\"x\":291.5825,\"y\":-906.5433,\"angle\":0,\"attrs\":{\"Add into BOM\":\"no\",\"Reuse Block\":\"Schematic1_1\",\"Group ID\":\"1\",\"Channel ID\":\"$1I4\",\"Unique ID\":\"test96-tp3\",\"Manufacturer\":\"\",\"Manufacturer Part\":\"\",\"Supplier\":\"\",\"Supplier Part\":\"\",\"DeviceName\":\"{\\\"name\\\":\\\"Test-Point\\\",\\\"source\\\":\\\"\\\",\\\"uuid\\\":\\\"39b0f003a147d09a\\\"}\"},\"locked\":false,\"zIndex\":-1,\"pinSwap\":false,\"pinSwapInfo\":{\"f5f9acd53a741c2ae2\":{\"pinClass\":\"\",\"differentialPairClass\":\"\"}},\"footprintPrimitives\":true}|",
+    "{\"type\":\"ATTR\",\"ticket\":163,\"id\":\"f5f9acd53a741c2aee1\"}||{\"partitionId\":\"\",\"groupID\":0,\"parentId\":\"f5f9acd53a741c2a\",\"layerId\":3,\"x\":281.74,\"y\":-891.7008,\"key\":\"Designator\",\"value\":\"TP3\",\"keyVisible\":false,\"valueVisible\":true,\"fontFamily\":\"default\",\"fontSize\":45,\"strokeWidth\":6,\"bold\":0,\"italic\":0,\"origin\":\"LEFT_BOTTOM\",\"angle\":0,\"reverse\":false,\"expansion\":0,\"mirror\":false,\"locked\":false,\"zIndex\":-1,\"specialColor\":null}|",
+    "{\"type\":\"ATTR\",\"ticket\":164,\"id\":\"f5f9acd53a741c2ae1\"}||{\"partitionId\":\"\",\"groupID\":0,\"parentId\":\"f5f9acd53a741c2a\",\"layerId\":3,\"x\":null,\"y\":null,\"key\":\"Device\",\"value\":\"39b0f003a147d09a\",\"keyVisible\":false,\"valueVisible\":false,\"fontFamily\":\"default\",\"fontSize\":45,\"strokeWidth\":6,\"bold\":0,\"italic\":0,\"origin\":\"LEFT_BOTTOM\",\"angle\":0,\"reverse\":false,\"expansion\":0,\"mirror\":false,\"locked\":false,\"zIndex\":-1,\"specialColor\":null}|",
+    "{\"type\":\"PAD_NET\",\"ticket\":165,\"id\":\"[\\\"PAD_NET\\\",\\\"f5f9acd53a741c2a\\\",\\\"1\\\",\\\"e2\\\"]\"}||{\"partitionId\":\"\",\"padNet\":\"TEST96_GEOMETRY\",\"padLen\":null,\"propagationDelay\":null,\"attrsMap\":{}}|"
+  ]
+}

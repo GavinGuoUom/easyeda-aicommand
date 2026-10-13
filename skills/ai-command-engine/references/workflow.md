@@ -45,8 +45,8 @@ Adapted from the [official schematic placement and net lead skill](https://githu
 
 ## Convert a schematic to PCB
 
-1. Clear schematic DRC to 0 fatal errors first.
-2. Since 0.10.105, even if the SDK returns `true`, `pcb.importChanges` stops the macro with `partial:true,retryable:false,outcome:pending-verification`. The SDK response only means the call ended; the user may still need to click “Apply Changes” in EDA. Do not retry automatically. Handle any confirmation dialog, independently read back the expected components and nets, then continue.
+1. Run schematic DRC when the task calls for it and report the result. Ordinary import does not require clearing DRC first.
+2. The plugin reads the source schematic and checks component identity, footprint association, and pad nets on the target PCB. If the contents match, `pcb.importChanges` may return success, including when everything was already matched and no changes were needed. If the SDK returns `true` but the changes are not applied, only partly applied, or cannot be confirmed by readback, the result remains `pending-verification`/`unknown`; stop dependent writes and do not automatically retry. The host may still require the user to click “Apply Changes.” This content check still awaits installed-build verification; success does not establish persistence after save/reopen or complete module-layout acceptance.
 3. After import, compare pad nets with the netlist using `listComponents` and `getComponentPads` for each component.
 4. Placement: move individual components with `moveComponent`; group functional blocks with `groupBySchematicRegions` after checking `dryRun`. ⚠️ DRC does not detect body/silkscreen crowding. After placement, run `checkPlacement`; add `margin` (10–30 mil) for components with large bodies, such as connectors and inductors.
 5. Routing: use `routeTrack`; for high-current nets, query `knowledge.widthForCurrent` first. Use `placeVia` and `pourCopper` for a full-board ground pour. For large jobs, use the autorouting workflow; lock power nets first (see appendix ⑦ in commands-pcb.md).
@@ -63,7 +63,7 @@ Save at each stage. Before a destructive operation, verify the target ID and kee
 3. **Batch with `macro`:** combine more than two steps into one macro.
 4. **Always read back after drawing:** audit wires with `listWires`, nets with `exportNetlist`, and PCB nets with `getComponentPads` item by item. Do not assume success.
 5. **Save at each stage.**
-6. **Always finish with DRC** and report it truthfully. `pcb.importChanges` is allowed only after 0 fatal schematic errors.
+6. **Run DRC when required and report it truthfully.** DRC reports design issues; it is not an extra prerequisite for ordinary import commands.
 7. **Do not blindly retry:** read `error.message` and `suggestion`, correct the request, then send it. After the same command fails three times consecutively, stop and choose another approach.
 8. **Check the knowledge base first for engineering guidance:** query `knowledge.query` for impedance, length matching, or current capacity, then follow its `constraints` and `guidance`.
 9. **Handle extension development separately:** use this plugin's commands for ordinary drawing. Native API debugging is not part of this skill's installation workflow. The 49620 gateway once used by the author is not included in this repository; do not assume the user has it or run code through it.

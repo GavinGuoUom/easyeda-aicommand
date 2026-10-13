@@ -3201,9 +3201,8 @@ export function createCopperCore(namespace, clipping, mathSdk) {
 				function countCoveredTargetContours(polygonPointsList, targetKeepInContours = []) {
 					let coveredCount = 0;
 					for (const contour of targetKeepInContours) {
-						if (polygonPointsList.some(points => polygonCoversContour(points, contour))) {
-							coveredCount += 1;
-						}
+						const validationContour = contour.map(({ x, y }) => ({ x: roundCoordinate(x), y: roundCoordinate(y) }));
+						if (polygonPointsList.some(points => polygonCoversContour(points, validationContour))) coveredCount++;
 					}
 
 					return coveredCount;

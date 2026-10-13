@@ -20,7 +20,7 @@
 - `pcb.checkPlacement` 对任意角度矩形、椭圆（含圆形）、胶囊形焊盘计算保守外包盒；NGON 使用外接圆包围盒。包围盒保留小数。遇到不支持的形状或无效焊盘数据时跳过该整器件，列入 `skippedUnsupported` 并返回 `complete:false`；无焊盘器件列入 `skippedNoPads`，同样不算完整检查。
 - **groupBySchematicRegions**：读全图页区框（`pageUuid` 限定），按位号文本位置归属、多框取面积最小；组内位号前缀分行（U>R>C>L>D>Q>其他）；组间货架 packing 强制收进板框，摆不下报错并附诊断（板框宽高、可用宽、rowLimit、各组 bbox）。布局引擎是官方原版移植（X86 主板验证）：组按估算面积升序货架横排（rowLimit=min(官方值,可用宽)，组缝 120），贪心避让 gap 10/15，R/C/L 强制 angle=0。避让既有器件（实测 bbox 作 obstacles，绕不开记 `blockedBy` 出口闸报错）。测量链三级（封装源码→实测→兜底），placements 带 `measured/measureSource`（fallback 项宽高可能有偏差）。组边框+组名生成 `spg_` 前缀文档层（layerId=13），重复执行先清场，实跑后源码回读核销。**五步管线**：版本化备份（`backups/<工程>/<时间戳>.txt` 留 5 份）→写源码→回读比对（容差 0.001）→失败整份恢复→全过才保存。**dryRun 默认 true**。⚠️ 调用前焦点在 PCB，执行中短暂切焦点读原理图再切回。（0.10.55 起为唯一自动布局指令，autoPlace 已删除。）
 - **sourceRollback**：`list:true` 列备份；否则恢复（默认最近或按 `backupId`），恢复前校验 pcbUuid 匹配，恢复后回读+保存。
-- **pcb.delete**：同 schematic.delete 加固（识别类型+删后读回+8s 熔断+连 3 败熔断+batchSize 10+预算 100s+终扫对账+sessionHealth 探针+taskId 查进度）。
+- **pcb.delete**：插件按类型顺序删除并读回。已确认仍存在的失败项记入结果后继续处理其他目标；写入超时或读回未知时停止后续写入。批量参数不表示操作数量上限。
 
 ## ② 布线
 
@@ -79,7 +79,7 @@
 
 下单检查参数、铜厚输入与图纸对照、结果完整性和覆盖限制见[嘉立创下单检查说明](commands-dfm.md)。0.10.92 铜厚参数已通过本地及实机命令对照，菜单定位与导出对话框待实机验收。
 
-- 导入前先确认原理图 DRC 为 0 致命。0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
+- `pcb.importChanges` 由插件读取来源原理图并核对目标PCB的器件身份、封装关联和焊盘网络；内容匹配时正常返回成功，允许原本已匹配而没有变化。SDK返回true但内容尚未应用、只应用部分变更或读取无法确认时，保留pending-verification/unknown并停止依赖写入，不自动重发。宿主仍可能要求应用修改；本次新增内容核对尚待安装实测，成功范围不包含保存持久性或成套模块布局验收。
 - 导入后 `listComponents`+逐器件 `getComponentPads` 比对焊盘网络与网表。
 - `runDrcDetailed` 偶发超时一次后自恢复——先重试，勿判插件失效。`editor.openDocument` 切页偶发超时同理。
 - `project.renameBoard` 按名字匹配，重名会改错——改名前先 `project.getBoardInfo`。

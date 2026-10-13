@@ -7,9 +7,26 @@ description: Operate, inspect, and verify EasyEDA Pro schematics, PCBs, and proj
 
 [Chinese fallback version](SKILL_ZH.md)
 
+## Development requirements
+
+When developing, modifying, or reviewing plugin commands, follow these requirements before the operating workflow below:
+
+- Implement the feature and make its normal workflow work before reviewing whether safeguards and limits are necessary.
+- Do not let extra restrictions or development checks block feature implementation.
+- A command must perform the operation it promises, and the plugin must check the result itself.
+- Do not turn development notes, test steps, or acceptance procedures into prerequisites for ordinary use.
+- Do not add unnecessary restrictions for development convenience, historical issues, or host behavior differences.
+- Adapt the plugin to host behavior differences; do not substitute new restrictions for a fix.
+- Checks that the plugin can perform must stay inside the plugin instead of being delegated to the user.
+- Keep only checks needed to prevent changing the wrong project, incorrect connections, duplicate writes, or clear runtime errors.
+- For every new restriction, state the specific error it prevents and prefer handling it inside the plugin.
+- When a result can be confirmed, report success or failure clearly instead of always returning “pending verification.”
+- When a result truly cannot be confirmed, explain why and stop dependent operations; do not automatically retry an uncertain write.
+- Before delivery, verify that the normal workflow completes; a successful build alone is not sufficient.
+
 Starting with 0.10.116, project layout requirements and short-marker features were removed and are no longer developed. Existing properties and markers in old projects are not removed automatically.
 
-This skill can be installed on its own. It does not depend on other skills or a debugging gateway on the author's machine. For first-time setup, see the repository README; for connection details, see [setup](references/setup.md).
+This skill can be installed on its own. It does not depend on other skills or a debugging gateway on the author's machine. To use it, the AI Command Engine extension must be installed and enabled in EDA with “Allow external interaction” checked, and the `bridge/command-proxy.mjs` proxy must be running. The proxy is started manually by default; automatic launch requires prior registration of the local URL scheme. See [setup](references/setup.md) for first-time setup.
 
 Send JSON over HTTP to `http://localhost:49720` to operate EasyEDA Pro. Do not invent `eda.*` APIs.
 
@@ -18,8 +35,6 @@ JLC ordering checks are available through `pcb.runDfm`, `pcb.runSmtDfm`, and `pc
 For less common behavior, consult the reference first: see [project/board guidance](references/commands-project.md) for the default ownership and uncertain-result handling of `project.copyPcb`; see [PCB guidance](references/commands-pcb.md) for PCB layer aliases, `modifyPour` readback priority, and stop rules. `modifyPour` 0.10.89 passed local simulation and isolated-project checks for priority values 0/1, stopping on partial failure, and save/reopen. Arbitrary order values remain constrained by the host.
 
 The 0.10.93 local candidate added commands to fan out pads and plan/execute local copper pours. The five fanout dimensions must be entered explicitly, and curve geometry has explicit coverage limits. See [geometry commands](references/commands-geometry.md) for interface, input rules, geometry coverage, and failure handling. Host acceptance status is recorded in the change log.
-
-Rectangular board-outline readback, fanout creation, and save/reopen passed in an isolated project in 0.10.97. A reversed single-loop outline passed readback in 0.10.98, but actual fill validation still hit an SDK object-adaptation error. The 0.10.99 candidate checks the net and layer through the associated parent outline and reads `getSource()` from fill-path objects; it added read-only `pcb.getPourFillReadback` to check existing fills. On 2026-10-10, an existing pour passed actual-fill readback and save/close/reopen checks in an isolated project, with DRC reporting 0 errors and 0 warnings. This did not recreate a pour in 0.10.99; see [geometry commands](references/commands-geometry.md).
 
 `modifyComponent` system-property readback passed save/reopen validation in an isolated host in 0.10.94. In 0.10.95, the page-resource API was confirmed to return an empty array. The 0.10.96 candidate changed `placeDevice` verification to use a full-project export and added `getPlacementResourcesDiagnostic` as a read-only summary of target resources. On 2026-10-10, existing TP2 diagnostics, new TP3 placement, and save/close/reopen checks passed in an isolated host running 0.10.96. This result applies only to the tested components. See [schematic commands](references/commands-schematic.md) for parameters, results, and verification scope.
 
@@ -57,7 +72,13 @@ Sending one mutation at a time (`placeDevice`, `drawWire`, `labelWire`, or a sin
 **🔴 Risky (misuse can cause damage)**
 If a real `autoLayout` run partially fails to move objects, first inspect `error.cause.moved` and verify the current state. The command does not roll back automatically; recover under control using a backup. There is no general undo API, and UI undo is not guaranteed to work. Repair commands without `dryRun` can, for example, remove a label that must then be redrawn. `delete` has no undo, so back up first. `importFile` overwrites and cannot be rolled back. `groupBySchematicRegions` cannot be rolled back without a backup. If `importChanges` runs with nonzero DRC errors, it will sync those errors to the PCB. Changing a designator can misalign it, and the host may normalize it again.
 
-## Command references (10 files, by object)
+For in-place footprint replacement and bulk property updates, use `schematic.getComponentUpdatePlan` → `schematic.updateComponents`. The staged workflow and in-place footprint/property updates have host evidence: version 138 passed save/reopen after in-place footprint and bulk-property writes, and the PCB synchronization was checked after native confirmation; version 142 passed default-configuration checks and save/reopen after footprint/property writes; version 143 returned success for bulk-property changes and a real 0402-to-0805 update, then passed save/reopen. The legacy-name fallback branch was not exercised in this run. See [schematic commands](references/commands-schematic.md) for scope, targets, and examples.
+
+For MCU or fine-pitch device fanout, select the target PCB and pads, call `pcb.getFanoutPlan`, pass its complete `data` unchanged as `params.plan` to `pcb.fanout`, then run `pcb.runDrc` and save with `pcb.save`. The plugin reads back each created item; use routing commands for board-wide connectivity. See [geometry commands](references/commands-geometry.md#pad-fanout) for target selection, dimensions, and examples.
+
+For local copper, pad expansion, or net-name silkscreen text, use the planning command first, then pass its complete `data` unchanged as `params.plan` to the execution command: `pcb.getAutoCopperPlan` → `pcb.autoCopper`, `pcb.getPadExpansionPlan` → `pcb.expandPads`, or `pcb.getNetSilkscreenPlan` → `pcb.generateNetSilkscreen`. Local copper serves local routing; pad expansion adds copper/clearance or mask treatment without changing the original pad size; net silkscreen commands create editable text. Use these after component placement, read back the result, and save. See [geometry commands](references/commands-geometry.md).
+
+## Command references (11 files, by object)
 
 | Object | File |
 | --- | --- |
@@ -68,6 +89,7 @@ If a real `autoLayout` run partially fails to move objects, first inspect `error
 | Nets, differential pairs, and manufacturing exports | [commands-net.md](references/commands-net.md) |
 | Projects, boards, and schematic pages | [commands-project.md](references/commands-project.md) |
 | Reusable blocks | [commands-cbb.md](references/commands-cbb.md) |
+| Standalone module reuse extension RPC | [commands-module.md](references/commands-module.md) |
 | Custom libraries and in-project part selection | [commands-lib.md](references/commands-lib.md) |
 | Knowledge base and SMT parts | [commands-knowledge.md](references/commands-knowledge.md) |
 | **Low-frequency command appendix (32 commands; use `/help` for parameters)** | [commands-misc.md](references/commands-misc.md) |
@@ -79,6 +101,9 @@ If a real `autoLayout` run partially fails to move objects, first inspect `error
 - [workflow.md](references/workflow.md) — Standard workflow and full operating rules.
 - [pitfalls.md](references/pitfalls.md) — ⚠️ Field notes; consult first when something goes wrong.
 - [issue-reporting.md](references/issue-reporting.md) — Record plugin issues, prepare a preview, and optionally submit a report.
+- [commands-module.md](references/commands-module.md) — RPC commands forwarded through `module.*` to the installed module-reuse extension.
+
+The independent module-reuse extension handles `module.*` RPC requests. Version 0.1.10 passed a small-sample reuse workflow after saving. Version 0.1.13 passed standalone placement, internal-net mapping, reference alignment, retaining two consecutive instances without a manual save, and schematic/PCB save-reopen checks; the two-instance evidence is limited to a three-component template. An MCU functional block was extracted as a native file; after restoration, 20 components, 82 actual pads, 203 track segments, 40 vias, and resource references passed readback and save-reopen checks. Mapping nets into the main project, reference alignment, and PCB import remain unverified. General automatic extraction, replacement, and the complete R1–R8 sequence are unfinished; preserve existing unknown records and do not resubmit. Version 0.1.14 CBB PCB search and net-name style retention passed MCU testing and schematic save-reopen checks. Full MCU layout-and-routing reuse still awaits validation after channel and custom-footprint association fixes.
 
 If unsure about a command's parameters, query `GET /help?cmd=<name>`.
 
@@ -86,7 +111,7 @@ Schematic auto-wiring was removed starting with 0.10.100. Draw schematics from e
 
 ## Standalone installation and companion files
 
-This skill can be installed on its own. Download the [v0.10.116 companion skill package](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_en-zh_v0.10.116.zip), extract it, and install the complete `ai-command-engine/` directory in the AI tool's skill directory. Keep `references/` and `scripts/`; do not copy only `SKILL.md`. Alternatively, get it from the `skills/ai-command-engine/` directory in the [v0.10.116 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip).
+This skill can be installed on its own. Download the [v0.10.143 companion skill package](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine-skill_en-zh_v0.10.143.zip), extract it, and install the complete `ai-command-engine/` directory in the AI tool's skill directory. Keep `references/` and `scripts/`; do not copy only `SKILL.md`. Alternatively, get it from the `skills/ai-command-engine/` directory in the [v0.10.143 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.143.zip).
 
 Install the extension, proxy, and skill separately. The extension package does not install the local proxy or skill for the user. For first-time proxy installation, enabling the extension, and checking the connection target, see the repository [installation guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md).
 

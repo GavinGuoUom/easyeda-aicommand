@@ -47,6 +47,3 @@ Layer management, stackup, length-matching groups, and real-time DRC are covered
 | `schematic.exportPng` | Export schematic PNG (maximum 4096 px per side) | `fileName?`, `width?`/`height?` |
 | `schematic.listNets` | List all schematic nets (`detail:true` includes wire details) | `detail?` |
 
-## Debugging
-
-- `system.eval`: execute arbitrary JavaScript in the extension context (global `eda` is available; `await` is supported). **Disabled for normal operation**; use only for troubleshooting. The sandbox may block `eval` (see pitfalls §8).

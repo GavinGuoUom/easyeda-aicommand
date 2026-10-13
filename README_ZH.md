@@ -46,6 +46,8 @@
 
 已有原理图也可按指定器件或区域预览整理方案，再执行重排和连线重建。适合重复通道、MCU 外围、接口模块等具有明确连接关系的绘制任务。
 
+现有器件也可通过 `schematic.getComponentUpdatePlan` 预览封装及属性变更，再用 `schematic.updateComponents` 执行完整计划并逐项读回。此流程支持原位更换封装和批量属性补丁，保留原理图器件本身。v0.10.143 在隔离 EDA 工程中完成批量属性更新和真实 0402→0805 封装更新；保存、关闭、重开后读回确认请求内容持久化，器件身份、位置、符号和导线保持。本轮没有同步 PCB；应另行按正常 PCB 导入流程操作并检查实际焊盘与网络。
+
 ### 5. 批量连线、网络标签与连接核对
 
 提供引脚间直连、短线加网络标签，以及混合批量连线。支持网络标签命名和整理、引脚非连接标记、网络成员查询与网表导出。
@@ -73,7 +75,7 @@
 
 ### 9. 焊盘扇出与自动局部铜皮
 
-`pcb.getFanoutPlan` 和 `pcb.getAutoCopperPlan` 先生成只读计划；`pcb.fanout` 与 `pcb.autoCopper` 按完整计划执行。扇出线长、线宽、过孔外径、孔径和安全间距都须以 mil 明确输入。几何支持范围、保守近似和拒绝条件见[几何命令说明](skills/ai-command-engine/references/zh/commands-geometry.md)。相关几何功能目前只有本地回归和算法对照，尚未在真实 EDA 工程验证写入或保存重开。
+`pcb.getFanoutPlan` 和 `pcb.getAutoCopperPlan` 先生成只读计划；`pcb.fanout` 与 `pcb.autoCopper` 按完整计划执行。扇出线长、线宽、过孔外径、孔径和安全间距都须以 mil 明确输入。几何支持范围、保守近似和拒绝条件见[几何命令说明](skills/ai-command-engine/references/zh/commands-geometry.md)。历史隔离工程验收覆盖了部分较大 MCU 扇出样本，不代表所有封装形状、所有板子或完整 MCU 扇出流程均已通过。独立的填充读回路径也曾对特定铺铜区完成保存、关闭、重开后的核验；证据仅适用于对应测试对象，实际操作仍须审查计划、几何和生产输出。
 
 ### 10. 焊盘外扩与网络文字丝印
 
@@ -81,7 +83,7 @@
 
 ## 实际操作演示
 
-以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.10.116 的实机验收记录。
+以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.10.143 的实机验收记录。
 
 ### 原理图：多脚 MCU、外围元件、短连线与标签
 
@@ -103,25 +105,26 @@
 
 扩展、代理和 AI 技能是分别安装的组成部分。代理默认在本机运行，默认地址为 `http://127.0.0.1:49720`。可选的问题上报工具可整理必要问题信息，使用本机 [GitHub CLI](https://cli.github.com/) 登录身份提交 GitHub Issue；提交前由 AI 告知使用者。问题上报不会由 EDA 指令自动触发，也不会在后台上传工程数据。
 
+`module.*` 命令只是对独立“模块复用”扩展的窄代理调用。该配套扩展必须另外安装，不包含在本扩展安装包中，也不由本项目随扩展包一并发布；可用操作取决于已安装的配套扩展。
+
 ## 版本状态
 
-**v0.10.116 于 2026-10-11 正式发布。**本地定向回归与构建检查已通过。安装检查读回 218 条命令，另核对移除的 4 项入口；这不表示所有命令均已实测。普通原生放置、元件移动和布局能力保留。此次未做真实 EDA 写入，也未验证全部功能和场景；GitHub 发布不代表 EDA 市场审核通过。历史市场错误 `103014`（“entry 不能为空”）尚未重新验证。详见 [v0.10.116 版本说明](docs/releases/v0.10.116_ZH.md)。
+**v0.10.143 于 2026-10-13 正式发布。**隔离 EDA 工程中，批量属性更新和真实 0402→0805 原位换封装的正常路径均取得完整成功回执；保存、关闭、重开后读回确认修改保留，器件身份、位置、符号和导线未变。旧封装名称缓存修复分支本轮没有触发，只有回归证据。本轮没有同步 PCB；v0.10.138 由人工确认的 PCB 导入证据仍属历史记录，不能与本轮验收混为一谈。其他命令和场景未全部验证。v0.10.116 扩展于 2026-10-12 在 EDA 市场显示为已上架；v0.10.143 市场上传及审核待处理。详见 [v0.10.143 版本说明](docs/releases/v0.10.143_ZH.md)。
 
 页面展示的“小机器人画电路板”图标是项目 Logo；市场发布图标文件为 `images/logo-marketplace.png`。
 
-## v0.10.116 下载与安装
+## v0.10.143 下载与安装
 
-此正式版本的扩展包、技能包、校验文件和源码包均按 tag `v0.10.116` 获取：
+此正式版本的扩展包、技能包、校验文件和源码包均按 tag `v0.10.143` 获取：
 
-- [扩展包 ai-command-engine_v0.10.116.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine_v0.10.116.eext)
-- [配套技能包 ai-command-engine-skill_en-zh_v0.10.116.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/ai-command-engine-skill_en-zh_v0.10.116.zip)
-- [新版技能 SHA256SUMS-docs-20261013.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS-docs-20261013.txt)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS.txt)
-- [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip)
+- [扩展包 ai-command-engine_v0.10.143.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine_v0.10.143.eext)
+- [配套技能包 ai-command-engine-skill_en-zh_v0.10.143.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine-skill_en-zh_v0.10.143.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/SHA256SUMS.txt)
+- [v0.10.143 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.143.zip)
 
-新版技能包以英文 `SKILL.md` 和参考文件为主，中文备用位于 `SKILL_ZH.md` 与 `references/zh/`。两种说明共用一个技能目录，不需安装两个自动触发技能。原中文技能附件仍保留在发布页；新版校验文件为 `SHA256SUMS-docs-20261013.txt`。
+新版技能包以英文 `SKILL.md` 和参考文件为主，中文备用位于 `SKILL_ZH.md` 与 `references/zh/`。两种说明共用一个技能目录，不需安装两个自动触发技能。请用 `SHA256SUMS.txt` 校验本次发布附件。
 
-技能 ZIP 解压后，将 `ai-command-engine/` 整个目录安装到所用 AI 工具的技能目录，保留 `references/` 和脚本等子目录，不能只复制 `SKILL.md`。原 tag 的源码 ZIP 中保留原中文技能，路径为 `skills/ai-command-engine/`；英文主版使用新版技能附件或当前 main 分支。代理不单独打包；下载源码 ZIP 后，按[安装与使用指南](docs/QUICKSTART.md)安装 Node.js 依赖并运行本地代理。扩展、代理和技能分别安装，扩展市场不会替使用者安装代理或技能。
+技能 ZIP 解压后，将 `ai-command-engine/` 整个目录安装到所用 AI 工具的技能目录，保留 `references/` 和脚本等子目录，不能只复制 `SKILL.md`。代理不单独打包；下载源码 ZIP 后，按[安装与使用指南](docs/QUICKSTART.md)安装 Node.js 依赖并运行本地代理。扩展、代理和技能分别安装，扩展市场不会替使用者安装代理或技能。
 
 ## 首次使用
 

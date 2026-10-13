@@ -32,7 +32,7 @@
 
 ## 整理已有原理图
 
-- 器件乱/连线乱：`autoLayout`（先 dryRun 看 plan/connections，确认后真跑；跑前保存，跑完检查 moved、失败 error.cause（partial、moved、phase、stateDifferences）、rewired、drc。部分移动失败时停止后续写入并检查现场，依据 moved 和备份受控恢复；不承诺 UI undo 可用）。
+- 器件乱/连线乱：`autoLayout`（按需用dryRun预览；已明确要求重排时传dryRun:false执行，跑完检查 moved、失败 error.cause（partial、moved、phase、stateDifferences）、rewired、drc。部分移动失败时停止后续写入并检查现场，依据 moved 和备份受控恢复；不承诺 UI undo 可用）。
 - 标签问题：`fixNetLabels` 全科体检（dryRun 默认 true）；浮标残留 `pruneFloatingLabels`（dryRun 默认 `false`；预览须显式传 `true`；分批看 batches/unprocessed）。
 - 网络碎（人工拖标签等）：`repairNet` 收尾。
 
@@ -46,8 +46,8 @@
 
 ## 原理图转 PCB
 
-1. 原理图先清到 0 致命。
-2. 0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
+1. 按任务需要运行原理图DRC并报告结果；普通导入不额外要求检查结果清零。
+2. `pcb.importChanges` 由插件读取来源原理图并核对目标PCB的器件身份、封装关联和焊盘网络；内容匹配时正常返回成功，允许原本已匹配而没有变化。SDK返回true但内容尚未应用、只应用部分变更或读取无法确认时，保留pending-verification/unknown并停止依赖写入，不自动重发。宿主仍可能要求应用修改；本次新增内容核对尚待安装实测，成功范围不包含保存持久性或成套模块布局验收。
 3. 导入后 `listComponents`+逐器件 `getComponentPads` 比对焊盘网络与网表。
 4. 布局：零散 `moveComponent`；功能区成组用 `groupBySchematicRegions`（先 dryRun）。⚠️ DRC 不查本体/丝印挤压——摆完跑 `checkPlacement`，大本体器件（连接器、电感）加 `margin`（10~30mil）。
 5. 布线：`routeTrack`（大电流先 `knowledge.widthForCurrent`）、`placeVia`、`pourCopper`（GND 整面）；量大走自动布线闭环（先锁电源网，见 commands-pcb.md 附录 ⑦）。
@@ -64,7 +64,7 @@
 3. **批量用 macro**：>2 步合并一条 macro 发送。
 4. **画完必读回**：导线 `listWires`、网络 `exportNetlist`、PCB 网络 `getComponentPads` 逐项审计，不假设成功。
 5. **每阶段 save**。
-6. **收尾必 DRC** 如实报告；原理图 0 致命才允许 `pcb.importChanges`。
+6. **收尾必 DRC** 如实报告；DRC用于报告设计问题，不作为普通导入指令的额外许可条件。
 7. **不盲目重试**：读 `error.message`/`suggestion` 修正再发；同一指令连错 3 次停下换方案。
 8. **专业知识先查库**：阻抗/等长/载流先 `knowledge.query`，按 constraints/guidance 执行。
 9. **扩展开发另行处理**：普通绘图使用本插件指令。任意原生 API 调试不属于本技能安装流程；作者曾用的 49620 网关未包含在此仓库，不能假定用户已安装或据此执行代码。

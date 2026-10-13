@@ -30,7 +30,7 @@
 
 | 我要… | 用这条 |
 | --- | --- |
-| 器件乱/连线乱，重排 | `schematic.autoLayout`（**先 dryRun 看 plan**，确认后真跑；跑前 save） |
+| 器件乱/连线乱，重排 | `schematic.autoLayout`（按需用dryRun预览；已明确要求重排时传dryRun:false执行） |
 | 清浮空标签 | `schematic.pruneFloatingLabels`（分批跑，别调大 batchSize） |
 | 人工拖标签拖碎的网络 | `schematic.repairNet` |
 | 历史图"多个网络名"警告 | `schematic.dedupeWireNets` |
@@ -49,8 +49,8 @@
 
 ## E. 原理图 → PCB
 
-1. 原理图 `runDrc` 清到 **0 致命**。0.10.104 起，导入失败或结果不确定会报告 partial 并停止宏，不自动重试。
-2. 0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
+1. 按任务需要运行原理图DRC并报告结果；导入失败或结果未知时停止依赖步骤，不自动重试。
+2. `pcb.importChanges` 由插件读取来源原理图并核对目标PCB的器件身份、封装关联和焊盘网络；内容匹配时正常返回成功，允许原本已匹配而没有变化。SDK返回true但内容尚未应用、只应用部分变更或读取无法确认时，保留pending-verification/unknown并停止依赖写入，不自动重发。宿主仍可能要求应用修改；本次新增内容核对尚待安装实测，成功范围不包含保存持久性或成套模块布局验收。
 3. 对账：`pcb.listComponents` + 逐器件 `pcb.getComponentPads` 比焊盘网络。
 4. 布局：`pcb.groupBySchematicRegions`（先 dryRun）/ `pcb.moveComponent`；摆完 `pcb.checkPlacement`。
 5. 布线：`pcb.routeTrack`（大电流先 `knowledge.widthForCurrent` 算线宽）+ `pcb.placeVia`；GND 整面 `pcb.pourCopper`。

@@ -13,8 +13,8 @@
 | `cbb.copy` | 模块复制到另一库（如官方模块复制到个人库再改造；目标库重名失败） | `cbbUuid`, `libraryUuid`, `targetLibraryUuid`, `newName?` |
 | `cbb.delete` | 删模块 | `cbbUuid`, `libraryUuid` |
 | `cbb.openProject` | ⚠️ 打开模块工程（**会切换当前工程，未保存修改丢失**；打开后 editor.listTabs 拿图页/PCB uuid） | `cbbUuid`, `libraryUuid` |
-| `cbb.placeSymbol` | 当前原理图放模块符号（层次化设计入口；SCH 坐标 10mil 单位、需 5 的倍数） | `libraryUuid`, `cbbUuid`, `x`, `y`, `rotation?`, `mirror?` |
-| `cbb.placeSchematicPage` | 把模块的原理图图页内容铺进当前图页（uuid 先 openProject+listTabs 获取） | `libraryUuid`, `cbbUuid`, `uuid`, `x`, `y`, `reimportWhenNameRepeated?` |
+| `cbb.placeSymbol` | 当前原理图放模块符号（层次化设计入口；SCH 坐标 10mil 单位） | `libraryUuid`, `cbbUuid`, `x`, `y`, `rotation?`, `mirror?` |
+| `cbb.placeSchematicPage` | 把指定源图页的模块内容铺进当前图页；uuid 为源图页 UUID，先核对其所属原理图 | `libraryUuid`, `cbbUuid`, `uuid`, `x`, `y`, `reimportWhenNameRepeated?` |
 | `cbb.placePcb` | **复用价值最大的一条**：把模块的 PCB（含布局布线）整体铺进当前 PCB——电源/最小系统等成熟布局直接搬入（坐标 mil） | `libraryUuid`, `cbbUuid`, `uuid`, `x`, `y`, `reimportWhenNameRepeated?` |
 | `cbb.openSymbolInEditor` | 打开模块符号编辑（⚠️ 须先 openProject） | `cbbUuid`, `libraryUuid`, `splitScreenId?` |
 | `cbb.exportFile` | 导出模块为 epro（base64；需团队模块下载权限） | `cbbUuid`, `libraryUuid?`, `fileName?` |
@@ -22,5 +22,9 @@
 ⚠️ 要点：
 
 - `cbb.openProject`/`cbb.openSymbolInEditor` 会切工程/焦点，用完回自己工程要重新 `editor.openDocument` 激活。
-- `reimportWhenNameRepeated` 默认 true：重名模块重新引入而不是复用旧实例；跨板重复放置同模块时留意网络命名。
+- `reimportWhenNameRepeated`在较新SDK中用于重名模块重新引入。当前4.1.71运行SDK未转发该选项，不能据参数值认定重名策略或网络隔离生效。
 - 放置后读回核对：`cbb.placePcb` 后用 `pcb.listComponents`+`getComponentPads` 审计网络。
+
+2026-10-12 在 EDA 4.1.71 隔离样本明确传源图页 UUID，读回三个测试点、一条导线并保存。当前运行SDK按页面UUID查找，传父原理图UUID未命中时会回退选择第一页；此前父UUID成功样本不能证明其准确选择了指定页。SDK true只表示调用返回，须检查实际内容。
+
+原生转 PCB 使用元件的 `Reuse Block` 名称匹配 PCB 模板。测试工程中将配套 PCB 副本名称与该值对齐后，单次 `pcb.importChanges` 和宿主“应用修改”带入了布局、走线、过孔、板框和铺铜。保留分组与通道标识后再核对保存重开结果。这个结果只覆盖已测小样本；分别直接放置 SCH 与 PCB 不能证明关联。

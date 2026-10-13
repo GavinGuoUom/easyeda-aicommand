@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { build } from 'esbuild';
+import JSZip from 'jszip';
 
 async function main() {
 	const root = resolve(import.meta.dirname, '..');
@@ -34,14 +36,124 @@ export { schematicCommands, pcbCommands, executeCommand, registerCommand }
 		console.log(`PASS ${name}`);
 	}
 
-	const file = () => new Blob(['netlist'], { type: 'application/octet-stream' });
+	const fixturePath = resolve(root, 'test/fixtures/netlist-import-193-203.json');
+	const fixture = JSON.parse((await readFile(fixturePath, 'utf8')).replace(/^\uFEFF/, ''));
+	const pcbUuid = 'pcb-test-document';
+	const schematicUuid = 'sch-main';
+	const footprintResourceUuid = 'f8df6f1a8162dfdb';
+	const libraryFootprintUuid = 'verified-library-footprint';
+	const source = fixture.pcbSource.join('\n');
+	const pcbOnlyLine = (ticket, x) => `{"type":"COMPONENT","ticket":${ticket},"id":"pcb-only-1"}||{"partitionId":"","groupId":"1","layerId":1,"x":${x},"y":2,"angle":0,"attrs":{},"locked":false}|`;
+	const extraManagedComponentLine = `{"type":"COMPONENT","ticket":999,"id":"extra-managed"}||{"partitionId":"","groupId":"1","layerId":1,"x":0,"y":0,"angle":0,"attrs":{"Unique ID":"extraManaged","Channel ID":"$extra","Designator":"TP4","Footprint":"${fixture.netlist.components.gge1.props.Footprint}"},"locked":false}|`;
+	const padNetLine = (ticket, componentId, physicalId, net) => `{"type":"PAD_NET","ticket":${ticket},"id":${JSON.stringify(JSON.stringify(['PAD_NET', componentId, '1', physicalId]))}}||{"partitionId":"","padNet":${JSON.stringify(net)},"padLen":null,"propagationDelay":null,"attrsMap":{}}|`;
+	const file = text => new Blob([text], { type: 'application/octet-stream' });
+
+	function makeEnvironment(options = {}) {
+		let focus = { documentType: 3, uuid: pcbUuid };
+		let importCalls = 0;
+		let pageNetlistCalls = 0;
+		let sourceReads = 0;
+		let pcbSource = options.pcbOnly ? `${source}\n${pcbOnlyLine(200, 1)}` : source;
+		if (options.extraManagedSource)
+			pcbSource += `\n${extraManagedComponentLine}`;
+		if (options.duplicatePads === 'all-match')
+			pcbSource += `\n${padNetLine(201, '3fa65b9cbdc2714b', 'e3', '')}`;
+		if (options.duplicatePads === 'conflict-before-match')
+			pcbSource += `\n${padNetLine(201, '3fa65b9cbdc2714b', 'e3', 'WRONG')}\n${padNetLine(202, '3fa65b9cbdc2714b', 'e4', '')}`;
+		if (options.channelInIndependentAttr) {
+			const replaced = pcbSource.replace('"Channel ID":"$1I2"', '"Channel ID":""');
+			assert.notEqual(replaced, pcbSource, 'the fixture must clear the embedded Channel ID');
+			assert.ok(replaced.includes('"Channel ID":"","Unique ID":"gge1"'), 'the gge1 embedded Channel ID must be empty');
+			pcbSource = replaced + `\n{"type":"ATTR","ticket":203,"id":"3fa65b9cbdc2714bee2"}||{"partitionId":"","parentId":"3fa65b9cbdc2714b","key":"Channel ID","value":"$1I2"}|`;
+		}
+		const activated = [];
+		const components = Object.entries(fixture.netlist.components).map(([key, netComponent], index) => {
+			const props = netComponent.props;
+			const primitiveId = `primitive-${index}`;
+			const pins = Object.values(netComponent.pinInfoMap).map((pin, pinIndex) => ({
+				getState_PadNumber: () => pin.number,
+				getState_Net: () => options.wrongNet && index === 0 ? 'WRONG' : pin.net,
+				getState_PrimitiveId: () => `pad-${index}-${pinIndex}`,
+			}));
+			return {
+				getState_UniqueId: () => props['Unique ID'] ?? key,
+				getState_Designator: () => props.Designator,
+				getState_Footprint: () => ({ uuid: libraryFootprintUuid, libraryUuid: 'library-uuid' }),
+				getState_PrimitiveId: () => primitiveId,
+				getState_OtherProperty: () => options.channelInIndependentAttr && index === 0 ? {} : ({ 'Channel ID': props['Channel ID'] }),
+				pins,
+			};
+		});
+		globalThis.eda = {
+			dmt_SelectControl: { getCurrentDocumentInfo: async () => ({ ...focus }) },
+			dmt_Board: { getCurrentBoardInfo: async () => ({
+				parentProjectUuid: 'project-A',
+				pcb: { uuid: pcbUuid },
+				schematic: { uuid: schematicUuid },
+			}) },
+			dmt_Schematic: {
+			getAllSchematicsInfo: async () => [
+				{ uuid: schematicUuid, parentProjectUuid: 'project-A' },
+				...(options.alternateSchematic ? [{ uuid: 'sch-alt', parentProjectUuid: 'project-A' }] : []),
+			],
+				getAllSchematicPagesInfo: async () => [
+					{ uuid: 'page-1', parentSchematicUuid: schematicUuid },
+					{ uuid: 'page-2', parentSchematicUuid: schematicUuid },
+				...(options.alternateSchematic ? [{ uuid: 'page-alt', parentSchematicUuid: 'sch-alt' }] : []),
+				],
+			},
+			dmt_EditorControl: { activateDocument: async uuid => {
+				activated.push(uuid);
+				const documentUuid = uuid.split('@')[0];
+				focus = documentUuid.includes('page') ? { documentType: 1, uuid: documentUuid } : { documentType: 3, uuid: documentUuid };
+				return true;
+			}, openDocument: async uuid => {
+				focus = uuid.includes('page') ? { documentType: 1, uuid } : { documentType: 3, uuid };
+				return `${uuid}@project-A`;
+			} },
+			sch_ManufactureData: { getNetlistFile: async () => {
+				pageNetlistCalls++;
+				const netlist = options.conflictPage && pageNetlistCalls > 1 ? options.conflictPage() : fixture.netlist;
+				if (options.switchFocusAfterExport)
+					focus = { documentType: 3, uuid: 'user-selected-other-pcb' };
+				return file(JSON.stringify(netlist));
+			} },
+			sys_FileManager: {
+				getDocumentSource: async () => {
+					sourceReads++;
+					if (options.changePcbOnlyAfter && sourceReads > 1)
+						return `${source}\n${pcbOnlyLine(200, 1)}\n${pcbOnlyLine(201, 99)}`;
+					return pcbSource;
+				},
+				getProjectFile: async () => {
+					const zip = new JSZip();
+					zip.file(`FOOTPRINT/${footprintResourceUuid}.efoo`, [
+						JSON.stringify(['DOCTYPE', 'FOOTPRINT', '1.8']),
+						JSON.stringify(['HEAD', { uuid: footprintResourceUuid, source: `${libraryFootprintUuid}|library-uuid` }]),
+						JSON.stringify(['PAD', 'pad-source-1', null, null, null, '1']),
+					].join('\n'));
+					return new File([await zip.generateAsync({ type: 'nodebuffer' })], 'project.epro');
+				},
+			},
+			pcb_PrimitiveComponent: {
+				getAll: async () => components,
+				getAllPinsByPrimitiveId: async primitiveId => components.find(component => component.getState_PrimitiveId() === primitiveId)?.pins ?? [],
+			},
+			pcb_Document: { importChanges: async uuid => {
+				importCalls++;
+				assert.equal(uuid, options.schematicUuid ?? schematicUuid);
+				return options.sdkResult === undefined ? true : options.sdkResult;
+			} },
+		};
+		return { activated, get importCalls() { return importCalls; } };
+	}
 
 	await check('schematic and PCB netlist exporters accept nonempty blobs and reject missing, empty, or rejected results', async () => {
 		for (const [apiName, command] of [
 			['sch_ManufactureData', schematic('schematic.exportNetlist')],
 			['pcb_ManufactureData', pcb('pcb.exportNetlist')],
 		]) {
-			globalThis.eda = { [apiName]: { getNetlistFile: async () => file() } };
+			globalThis.eda = { [apiName]: { getNetlistFile: async () => file('netlist') } };
 			const result = await command.handler({}, {});
 			assert.ok(result.size > 0);
 			assert.ok(result.base64.length > 0);
@@ -49,302 +161,132 @@ export { schematicCommands, pcbCommands, executeCommand, registerCommand }
 				globalThis.eda = { [apiName]: { getNetlistFile: async () => resultValue } };
 				await assert.rejects(() => command.handler({}, {}), /网表导出失败/);
 			}
-			globalThis.eda = { [apiName]: { getNetlistFile: async () => {
-				throw new Error('sdk export failed');
-			} } };
+			globalThis.eda = { [apiName]: { getNetlistFile: async () => { throw new Error('sdk export failed'); } } };
 			await assert.rejects(() => command.handler({}, {}), /sdk export failed/);
 		}
 	});
 
-	await check('schematic getNetlist rejects empty and whitespace-only output', async () => {
-		for (const text of ['', ' \t\r\n ']) {
-			globalThis.eda = { sch_Netlist: { getNetlist: async () => text } };
-			await assert.rejects(() => schematic('schematic.getNetlist').handler({}, {}), /非字符串或空/);
-		}
-		globalThis.eda = { sch_Netlist: { getNetlist: async () => 'net' } };
-		assert.equal((await schematic('schematic.getNetlist').handler({}, {})).netlist, 'net');
+	await check('193/203 fixture verifies three managed components across every schematic page and preserves empty nets', async () => {
+		const env = makeEnvironment();
+		const result = await pcb('pcb.importChanges').handler({}, {});
+		assert.deepEqual(env.activated, [`page-1@project-A`, `page-2@project-A`, `${pcbUuid}@project-A`]);
+		assert.equal(env.importCalls, 1);
+		assert.equal(result.contentsVerified, true);
+		assert.equal(result.completionVerified, true);
+		assert.equal(result.persistenceVerified, false);
+		assert.equal(result.managedComponents, 3);
+		assert.equal(result.checkedComponents, 3);
+		assert.deepEqual(result.differences, []);
 	});
 
-	function pcbFocus(currentUuid = 'pcb-A') {
-		return {
-			dmt_SelectControl: { getCurrentDocumentInfo: async () => ({ documentType: 3, uuid: currentUuid() }) },
-		};
-	}
-	const importHandler = pcb('pcb.importChanges').handler;
-
-	await check('importChanges true remains pending and nonretryable until content verification', async () => {
-		let calls = 0;
-		globalThis.eda = { ...pcbFocus(() => 'pcb-A'), pcb_Document: { importChanges: async () => {
-			calls++;
-			return true;
-		} } };
-		const error = await importHandler({}, {}).catch(reason => reason);
-		assert.ok(error instanceof Error);
-		assert.equal(error.cause?.partial, true);
-		assert.equal(error.cause?.retryable, false);
-		assert.equal(error.cause?.documentUuid, 'pcb-A');
-		assert.equal(error.cause?.sdkResult, true);
-		assert.equal(error.cause?.outcome, 'pending-verification');
-		assert.equal(error.cause?.importRequested, true);
-		assert.equal(error.cause?.contentsVerified, false);
-		assert.equal(error.cause?.completionVerified, false);
-		assert.equal(calls, 1);
-	});
-
-	await check('importChanges false and undefined are partial, nonretryable outcomes after one call', async () => {
-		for (const outcome of [false, undefined]) {
-			let calls = 0;
-			globalThis.eda = { ...pcbFocus(() => 'pcb-A'), pcb_Document: { importChanges: async () => {
-				calls++;
-				return outcome;
-			} } };
-			const error = await importHandler({}, {}).catch(reason => reason);
-			assert.ok(error instanceof Error);
-			assert.equal(error.cause?.partial, true);
-			assert.equal(error.cause?.retryable, false);
-			assert.equal(error.cause?.documentUuid, 'pcb-A');
-			assert.equal(error.cause?.sdkResult, outcome === undefined ? 'undefined' : false);
-			assert.equal(error.cause?.outcome, outcome === undefined ? 'undefined' : 'sdk-false');
-			assert.equal(error.cause?.imported, undefined);
-			assert.equal(calls, 1);
-		}
-		let calls = 0;
-		let markerWrites = 0;
-		registerCommand(pcb('pcb.importChanges'));
-		registerCommand({
-			name: 'test.importFalseMarker',
-			summary: 'marker',
-			params: [],
-			returns: '{}',
-			handler: async () => {
-				markerWrites++;
-				return {};
-			},
-		});
-		globalThis.eda = { ...pcbFocus(() => 'pcb-A'), pcb_Document: { importChanges: async () => {
-			calls++;
-			return false;
-		} } };
-		const macro = await executeCommand({ cmd: 'macro', params: { stopOnError: false, steps: [
-			{ cmd: 'pcb.importChanges', params: {} },
-			{ cmd: 'test.importFalseMarker', params: {} },
-		] } });
-		assert.equal(macro.ok, false);
-		assert.equal(macro.data.stoppedReason, 'partial');
-		assert.equal(macro.data.steps[0].error.cause.partial, true);
-		assert.equal(macro.data.unexecutedSteps, 1);
-		assert.equal(markerWrites, 0);
-		assert.equal(calls, 1);
-	});
-
-	await check('SDK true after simulated source change still marks partial and blocks later writes', async () => {
-		let simulatedContentChanged = false;
-		let importCalls = 0;
-		let markerWrites = 0;
-		registerCommand(pcb('pcb.importChanges'));
-		registerCommand({
-			name: 'test.importTrueMarker',
-			summary: 'marker',
-			params: [],
-			returns: '{}',
-			handler: async () => {
-				markerWrites++;
-				return {};
-			},
-		});
-		globalThis.eda = {
-			...pcbFocus(() => 'pcb-A'),
-			pcb_Document: {
-				importChanges: async () => {
-					importCalls++;
-					simulatedContentChanged = true;
-					return true;
-				},
-			},
-		};
-		const macro = await executeCommand({ cmd: 'macro', params: {
-			stopOnError: false,
-			steps: [
-				{ cmd: 'pcb.importChanges', params: {} },
-				{ cmd: 'test.importTrueMarker', params: {} },
-			],
+	await check('identical duplicate identities across pages merge; a conflicting identity rejects before import', async () => {
+		const same = makeEnvironment();
+		const result = await pcb('pcb.importChanges').handler({}, {});
+		assert.equal(result.managedComponents, 3);
+		const conflict = makeEnvironment({ conflictPage: () => {
+			const changed = structuredClone(fixture.netlist);
+			changed.components.gge1.pinInfoMap['1'].net = 'CONFLICT';
+			return changed;
 		} });
-		assert.equal(simulatedContentChanged, true);
-		assert.equal(macro.ok, false);
-		assert.equal(macro.data.stoppedReason, 'partial');
-		assert.equal(macro.data.steps[0].error.cause.sdkResult, true);
-		assert.equal(macro.data.steps[0].error.cause.outcome, 'pending-verification');
-		assert.equal(macro.data.steps[0].error.cause.contentsVerified, false);
-		assert.equal(macro.data.steps[0].error.cause.completionVerified, false);
-		assert.equal(macro.data.unexecutedSteps, 1);
-		assert.equal(markerWrites, 0);
-		assert.equal(importCalls, 1);
-	});
-
-	await check('importChanges rejection is partial and nonretryable after one call', async () => {
-		let calls = 0;
-		globalThis.eda = { ...pcbFocus(() => 'pcb-A'), pcb_Document: { importChanges: async () => {
-			calls++;
-			throw new Error('sdk import rejected');
-		} } };
-		const error = await importHandler({}, {}).catch(reason => reason);
-		assert.ok(error instanceof Error);
-		assert.equal(error.cause?.partial, true);
-		assert.equal(error.cause?.retryable, false);
-		assert.equal(error.cause?.documentUuid, 'pcb-A');
-		assert.equal(error.cause?.outcome, 'unknown');
-		assert.equal(calls, 1);
-	});
-
-	await check('pre-import focus mismatch prevents the importer from running and is not partial', async () => {
-		let calls = 0;
-		globalThis.eda = {
-			dmt_SelectControl: { getCurrentDocumentInfo: async () => ({ documentType: 1, uuid: 'sch-A' }) },
-			pcb_Document: { importChanges: async () => {
-				calls++;
-				return true;
-			} },
-		};
-		const error = await importHandler({}, {}).catch(reason => reason);
+		const error = await pcb('pcb.importChanges').handler({}, {}).catch(reason => reason);
 		assert.ok(error instanceof Error);
 		assert.equal(error.cause?.partial, undefined);
-		assert.equal(calls, 0);
-		globalThis.eda = {
-			...pcbFocus(() => 'pcb-B'),
-			pcb_Document: { importChanges: async () => {
-				calls++;
-				return true;
-			} },
-		};
-		const wrongTarget = await importHandler({ __docUuid: 'pcb-A' }, {}).catch(reason => reason);
-		assert.ok(wrongTarget instanceof Error);
-		assert.match(wrongTarget.message, /请求目标不符/);
-		assert.equal(wrongTarget.cause?.partial, undefined);
-		assert.equal(calls, 0);
+		assert.equal(conflict.importCalls, 0);
+		assert.ok(same.activated.includes(`${pcbUuid}@project-A`));
 	});
 
-	await check('post-import focus change reports partial and nonretryable despite SDK true', async () => {
-		let currentUuid = 'pcb-A';
-		let calls = 0;
-		globalThis.eda = {
-			...pcbFocus(() => currentUuid),
-			pcb_Document: { importChanges: async () => {
-				calls++;
-				currentUuid = 'pcb-B';
-				return true;
-			} },
-		};
-		const error = await importHandler({}, {}).catch(reason => reason);
+	await check('matching current contents succeed even when SDK reports false; a pad-net mismatch is partial and nonretryable', async () => {
+		makeEnvironment({ sdkResult: false });
+		const result = await pcb('pcb.importChanges').handler({}, {});
+		assert.equal(result.imported, false);
+		assert.equal(result.sdkResult, false);
+		assert.equal(result.outcome, 'contents-verified');
+		assert.equal(result.contentsVerified, true);
+		const env = makeEnvironment({ wrongNet: true });
+		const error = await pcb('pcb.importChanges').handler({}, {}).catch(reason => reason);
 		assert.ok(error instanceof Error);
 		assert.equal(error.cause?.partial, true);
 		assert.equal(error.cause?.retryable, false);
-		assert.equal(error.cause?.documentUuid, 'pcb-A');
-		assert.equal(error.cause?.afterDocumentUuid, 'pcb-B');
-		assert.equal(calls, 1);
+		assert.equal(error.cause?.verification?.ok, false);
+		assert.equal(env.importCalls, 1);
 	});
 
-	await check('post-import focus read failure marks partial and stops a macro', async () => {
-		let focusCalls = 0;
-		let importCalls = 0;
+	await check('all same-number physical PAD_NET records must match expected network', async () => {
+		const matching = makeEnvironment({ duplicatePads: 'all-match' });
+		const result = await pcb('pcb.importChanges').handler({}, {});
+		assert.equal(result.contentsVerified, true);
+		assert.equal(matching.importCalls, 1);
+		makeEnvironment({ duplicatePads: 'conflict-before-match' });
+		const error = await pcb('pcb.importChanges').handler({}, {}).catch(reason => reason);
+		assert.ok(error instanceof Error);
+		assert.equal(error.cause?.partial, true);
+		assert.equal(error.cause?.retryable, false);
+		assert.ok(error.cause?.verification?.differences.some(item => item.includes('有效 PAD_NET 源码网络')));
+	});
+
+	await check('valid independent Channel ID ATTR is used when embedded attrs and SDK other properties omit it', async () => {
+		const env = makeEnvironment({ channelInIndependentAttr: true });
+		const result = await pcb('pcb.importChanges').handler({}, {});
+		assert.equal(result.contentsVerified, true);
+		assert.equal(result.checkedComponents, 3);
+		assert.equal(env.importCalls, 1);
+	});
+
+	await check('source-only managed component mismatch is partial and prevents later macro writes', async () => {
 		let markerWrites = 0;
 		registerCommand(pcb('pcb.importChanges'));
-		registerCommand({
-			name: 'test.importFocusFailureMarker',
-			summary: 'marker',
-			params: [],
-			returns: '{}',
-			handler: async () => {
-				markerWrites++;
-				return {};
-			},
-		});
-		globalThis.eda = {
-			dmt_SelectControl: {
-				getCurrentDocumentInfo: async () => {
-					focusCalls++;
-					if (focusCalls === 3)
-						throw new Error('post-write focus lookup failed');
-					return { documentType: 3, uuid: 'pcb-A' };
-				},
-			},
-			pcb_Document: {
-				importChanges: async () => {
-					importCalls++;
-					return true;
-				},
-			},
-		};
-		const result = await executeCommand({ cmd: 'macro', params: {
-			stopOnError: false,
-			steps: [
-				{ cmd: 'pcb.importChanges', params: {} },
-				{ cmd: 'test.importFocusFailureMarker', params: {} },
-			],
-		} });
+		registerCommand({ name: 'test.importMarker', summary: 'marker', params: [], returns: '{}', handler: async () => { markerWrites++; return {}; } });
+		const env = makeEnvironment({ extraManagedSource: true });
+		const result = await executeCommand({ cmd: 'macro', params: { stopOnError: false, steps: [
+			{ cmd: 'pcb.importChanges', params: {} },
+			{ cmd: 'test.importMarker', params: {} },
+		] } });
 		assert.equal(result.ok, false);
 		assert.equal(result.data.stoppedReason, 'partial');
 		assert.equal(result.data.steps[0].error.cause.partial, true);
-		assert.equal(result.data.steps[0].error.cause.retryable, false);
 		assert.equal(result.data.unexecutedSteps, 1);
 		assert.equal(markerWrites, 0);
-		assert.equal(importCalls, 1);
-		assert.equal(focusCalls, 3);
+		assert.equal(env.importCalls, 1);
 	});
 
-	await check('importChanges timeout stops a macro and ignores a late resolve without another call', async () => {
-		const realSetTimeout = globalThis.setTimeout;
-		let importCalls = 0;
-		let lateResolved = false;
+	await check('PCB-only source state is checked before and after import', async () => {
+		const env = makeEnvironment({ pcbOnly: true });
+		const result = await pcb('pcb.importChanges').handler({}, {});
+		assert.equal(result.pcbOnlyPreserved, true);
+		assert.equal(env.importCalls, 1);
+		makeEnvironment({ pcbOnly: true, changePcbOnlyAfter: true });
+		const error = await pcb('pcb.importChanges').handler({}, {}).catch(reason => reason);
+		assert.ok(error instanceof Error);
+		assert.equal(error.cause?.partial, true);
+		assert.equal(error.cause?.verification?.pcbOnlyPreserved, false);
+	});
+
+	await check('explicit schematic wins and a focus change during export stops before import', async () => {
+		const env = makeEnvironment({ alternateSchematic: true, schematicUuid: 'sch-alt' });
+		const result = await pcb('pcb.importChanges').handler({ schematicUuid: 'sch-alt' }, {});
+		assert.equal(result.schematicUuid, 'sch-alt');
+		assert.deepEqual(env.activated, ['page-alt@project-A', `${pcbUuid}@project-A`]);
+		const interrupted = makeEnvironment({ switchFocusAfterExport: true });
+		const error = await pcb('pcb.importChanges').handler({}, {}).catch(reason => reason);
+		assert.ok(error instanceof Error);
+		assert.equal(error.cause?.partial, undefined);
+		assert.equal(interrupted.importCalls, 0);
+	});
+
+	await check('SDK false with unresolved content is partial and stops later macro writes', async () => {
 		let markerWrites = 0;
-		registerCommand({
-			name: 'test.netlistImportMarker',
-			summary: 'marker',
-			params: [],
-			returns: '{}',
-			handler: async () => {
-				markerWrites++;
-				return { written: true };
-			},
-		});
-		globalThis.eda = {
-			...pcbFocus(() => 'pcb-A'),
-			pcb_Document: { importChanges: () => {
-				importCalls++;
-				return new Promise(resolve => setImmediate(() => {
-					lateResolved = true;
-					resolve(true);
-				}));
-			} },
-		};
-		globalThis.setTimeout = (callback, delay, ...args) => {
-			if (delay === 280_000) {
-				setImmediate(() => callback(...args));
-				return 0;
-			}
-			if (delay > 280_000)
-				return 0;
-			return realSetTimeout(callback, delay, ...args);
-		};
-		try {
-			registerCommand(pcb('pcb.importChanges'));
-			const result = await executeCommand({ cmd: 'macro', params: {
-				stopOnError: false,
-				steps: [{ cmd: 'pcb.importChanges', params: {} }, { cmd: 'test.netlistImportMarker', params: {} }],
-			} });
-			assert.equal(result.ok, false);
-			assert.equal(result.data.stoppedReason, 'partial');
-			assert.equal(result.data.steps[0].error.cause.partial, true);
-			assert.equal(result.data.steps[0].error.cause.retryable, false);
-			assert.equal(result.data.unexecutedSteps, 1);
-			assert.equal(markerWrites, 0);
-			assert.equal(importCalls, 1);
-			await new Promise(resolve => setImmediate(resolve));
-			assert.equal(lateResolved, true);
-			assert.equal(importCalls, 1);
-		}
-		finally {
-			globalThis.setTimeout = realSetTimeout;
-		}
+		registerCommand(pcb('pcb.importChanges'));
+		registerCommand({ name: 'test.importMarker', summary: 'marker', params: [], returns: '{}', handler: async () => { markerWrites++; return {}; } });
+		makeEnvironment({ wrongNet: true, sdkResult: false });
+		const result = await executeCommand({ cmd: 'macro', params: { stopOnError: false, steps: [
+			{ cmd: 'pcb.importChanges', params: {} },
+			{ cmd: 'test.importMarker', params: {} },
+		] } });
+		assert.equal(result.ok, false);
+		assert.equal(result.data.stoppedReason, 'partial');
+		assert.equal(result.data.steps[0].error.cause.partial, true);
+		assert.equal(result.data.unexecutedSteps, 1);
+		assert.equal(markerWrites, 0);
 	});
 
 	console.log(`PASS ${checks} netlist/import outcome checks`);

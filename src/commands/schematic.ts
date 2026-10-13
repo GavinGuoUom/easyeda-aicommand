@@ -819,7 +819,7 @@ async function deleteFloatingLabels(ids: Array<string>, opts?: { allowSourceRewr
 	// 通道④（主通道）：借尸还魂——建临时短导线 → modify 改 parentId 挂上去 → 删导线级联带走 → 源码重扫验证
 	// 0.10.12 加固（0.10.11 实测：真删 8 个后第 9 个起指令整体超时、会话创建类 API 全线失效，且超时丢 diagnostics）：
 	//  ① 每条包 8s 超时熔断，单条超时标记 failed 立即跳下一条，不拖死整指令；
-	//  ② 连续 3 条失败熔断整批（会话多半已损坏），返回明确提示不保存重开；
+	//  ② 单项状态未知或超时立即停止后续写入；明确读回仍存在的目标会继续处理下一项；
 	//  ③ 分批执行（batchSize 默认 5，批间停 300ms），返回分批进度，大批浮标可多次调用；
 	//  ④ 全局时间预算：临近扩展侧指令超时即停止开新条，累积结果照常返回（部分结果不丢）；
 	//  ⑤ 回滚顺序修正：删临时导线失败先把浮标 parentId 改回 $$root 还原，再重试删导线，
@@ -831,7 +831,6 @@ async function deleteFloatingLabels(ids: Array<string>, opts?: { allowSourceRewr
 	//  ⑦ 回滚删临时导线若也失败，diagnostics 明确记录导线 ID+坐标（不再静默吞掉）。
 	//  ⑧ 浮标缺坐标时不往 (0,0) 画线，直接 failed 注明"源码未解析到坐标"。
 	const PER_ITEM_TIMEOUT_MS = 8000
-	const MAX_CONSECUTIVE_FAILS = 3
 	const GLOBAL_BUDGET_MS = 100000 // 扩展侧该指令超时已放宽到 140s，留 40s 余量给收尾与传输
 	const batchSize = Math.max(1, Number(opts?.batchSize) || 5)
 	const startedAt = Date.now()
@@ -840,7 +839,6 @@ async function deleteFloatingLabels(ids: Array<string>, opts?: { allowSourceRewr
 	const ch4 = ids.filter(id => remaining.has(id))
 	if (ch4.length) {
 		const floats = await scanFloatingNetLabels()
-		let consecutiveFails = 0
 		let circuitBroken = false
 		let budgetExhausted = false
 		// 单条源码重扫：该浮标是否还浮着（每条成败的唯一判定依据，不信任何接口返回值——官方假失败前科）
@@ -923,8 +921,9 @@ async function deleteFloatingLabels(ids: Array<string>, opts?: { allowSourceRewr
 					await Promise.race([
 						reborrowOne(id),
 						new Promise((_, reject) => { itemTimeout = setTimeout(() => {
+							writeStopRequested = true
+							circuitBroken = true
 							if (signalTimeoutStop) {
-								writeStopRequested = true
 								opts?.onTimeout?.()
 							}
 							reject(new Error(`单条超时（>${PER_ITEM_TIMEOUT_MS / 1000}s，疑似官方弹模态框或卡绘制模式）`))
@@ -939,27 +938,23 @@ async function deleteFloatingLabels(ids: Array<string>, opts?: { allowSourceRewr
 						clearTimeout(itemTimeout)
 				}
 				// 成败唯一判定：每条走完后源码重扫读回（官方 modify/delete 返回值不可信——假失败前科）
-				let gone = false
+				let gone: boolean | undefined
 				try {
 					gone = !(await stillFloats(id))
 				}
-				catch {
-					gone = false
+				catch (e: any) {
+					writeStopRequested = true
+					circuitBroken = true
+					diagnostics.push(`通道④借尸还魂: 删除后读回未知（${id}）：${String(e?.message ?? e)}，停止后续写入`)
 				}
-				if (gone) {
-					consecutiveFails = 0 // 读回已删即成功，不计入连续失败（防熔断误触发）
+				if (gone === true) {
 					bDeleted++
 					if (itemError)
 						diagnostics.push(`通道④借尸还魂: 接口报错「${itemError}」但源码重扫确认已删除（${id}）——官方假失败，记成功`)
 				}
-				else {
+				else if (gone === false) {
 					bFailed++
-					consecutiveFails++
 					diagnostics.push(`通道④借尸还魂: 失败 ${itemError ? `${itemError}，` : ''}源码重扫确认仍在（${id}），已按序回滚（先还原 parentId 再删临时导线）`)
-					if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
-						circuitBroken = true
-						diagnostics.push(`通道④借尸还魂: ⚠️ 连续 ${MAX_CONSECUTIVE_FAILS} 条失败（均以源码重扫确认为准），熔断整批——会话创建功能可能已损坏（0.10.11 实测超时后创建类 API 全线失效且不自愈），建议【不保存重开页面】后再分批重试`)
-					}
 				}
 				if (shouldStop())
 					break
@@ -1747,10 +1742,23 @@ export const schematicCommands: Array<ICommandDef> = [
 				return false
 			}
 			const jogDown = String(params.jogDir ?? 'down') !== 'up'
-			// 选横腿深度：从 30 起每次加深 15，直到横腿不与任何现有导线共线重叠且全路径不穿引脚（最多试 8 层）
+			// 按当前页面障碍范围计算有限搜索层数。走到全部障碍包围盒之外后，继续平移不可能改变碰撞结果。
+			const obstacleYs = [a.y, b.y, ...existing.flatMap(s => [s[1], s[3]]), ...allPinPts.map(q => q.y)]
+			const obstacleXs = [a.x, b.x, ...existing.flatMap(s => [s[0], s[2]]), ...allPinPts.map(q => q.x)]
+			const stepsToPast = (start: number, boundary: number, direction: -1 | 1): number =>
+				Math.max(1, Math.ceil(direction * (boundary - start) / 15) + 1)
+			const stepLimit = (start: number, axis: 'x' | 'y'): number => {
+				const coords = axis === 'x' ? obstacleXs : obstacleYs
+				const boundary = jogDown
+					? Math.min(...coords) - 23 // 引脚碰撞半径 8，再越过 15 单位步进
+					: Math.max(...coords) + 23
+				return stepsToPast(start, boundary, jogDown ? -1 : 1)
+			}
+			// 选横腿深度：从 30 起每次加深 15，直到整条路径避开现有引脚且中腿不与现有导线共线。
 			let route: Array<[number, number]> | undefined
 			if (Math.abs(a.y - b.y) < 1 && Math.abs(a.x - b.x) > 1) {
-				for (let k = 0; k < 8 && !route; k++) {
+				const firstJog = jogDown ? Math.min(a.y, b.y) - 30 : Math.max(a.y, b.y) + 30
+				for (let k = 0; k < stepLimit(firstJog, 'y') && !route; k++) {
 					const jogY = jogDown
 						? Math.min(a.y, b.y) - 30 - k * 15
 						: Math.max(a.y, b.y) + 30 + k * 15
@@ -1761,7 +1769,8 @@ export const schematicCommands: Array<ICommandDef> = [
 				}
 			}
 			else if (Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) > 1) {
-				for (let k = 0; k < 8 && !route; k++) {
+				const firstJog = jogDown ? Math.min(a.x, b.x) - 30 : Math.max(a.x, b.x) + 30
+				for (let k = 0; k < stepLimit(firstJog, 'x') && !route; k++) {
 					const jogX = jogDown
 						? Math.min(a.x, b.x) - 30 - k * 15
 						: Math.max(a.x, b.x) + 30 + k * 15
@@ -1780,7 +1789,7 @@ export const schematicCommands: Array<ICommandDef> = [
 				route = okA ? viaA : okB ? viaB : undefined
 			}
 			if (!route)
-				throw new Error('找不到不共线且不穿引脚的走线路径（U 形已试 8 层 + L 形两变体，全档位都穿引脚或不共线无解），请人工布线；autoLayout 场景会自动降级为两端 label 短桩（PIN_CROSSING_FALLBACK）')
+				throw new Error('找不到不共线且不穿引脚的走线路径（已按当前障碍范围检查 U 形候选及 L 形两变体），autoLayout 场景会自动降级为两端 label 短桩（PIN_CROSSING_FALLBACK）')
 			const wireColor = params.color != null ? String(params.color) : undefined
 			const wireIds: Array<string> = []
 			const { segments } = splitToSimpleSegments(route as Array<[number, number]>)
@@ -2975,7 +2984,7 @@ export const schematicCommands: Array<ICommandDef> = [
 			//  ① 相邻器件短桩同间隙共线重叠 → labelWire 短桩四方向防撞（背离本体→上→下→反向），
 			//     桩终点 8 单位内有其他引脚或与现有导线共线即换向，另有 findWireNetsAtPoint 占用预检；
 			//  ② 同行引脚共线被直线/L 走线穿过 → linkWire 一律 U 形绕行；
-			//  ③ 多网络横腿同深度共线 → linkWire 横腿深度从 30 起每次 +15 试 8 层动态避让现有导线。
+			//  ③ 多网络横腿同深度共线 → linkWire 横腿深度从 30 起每次 +15，按当前障碍范围动态避让。
 			// 另免费获得：createNetLabel 假失败 ghost 双路检查、NC 引脚预检（逐条收错不中断）、一次网表统一审计。
 			// 电源网判定（0.10.18 起允许全大写后缀；0.10.19 起抽到模块级 isPowerNetName 共享）
 			const isPowerNet = isPowerNetName
@@ -3251,7 +3260,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.delete',
-		summary: '删除原理图图元（器件 / 导线 / 文本 / 网络标签等属性，按 primitiveId，可批量）；先完整预检类型与父子关系，再删后读回验证，区分直接删除、级联删除、原本不存在、仍存在和读回未知。TEXT 使用精确源码快照移除并验证源码与模型；逐项 8s 超时熔断、连续 3 项确认仍存在熔断整批、batchSize 分批（默认 10，批间停 300ms）、全局时间预算 100s；不完整结果通过 error.cause.partial 供宏停止后续写入。源码与模型读回不代表关闭重开持久性验证',
+		summary: '删除原理图图元（器件 / 导线 / 文本 / 网络标签等属性，按 primitiveId，可批量）；先完整预检类型与父子关系，再删后读回验证，区分直接删除、级联删除、原本不存在、仍存在和读回未知。TEXT 使用精确源码快照移除并验证源码与模型；逐项 8s 超时保护、batchSize 分批（默认 10，批间停 300ms）、全局时间预算 100s；不完整结果通过 error.cause.partial 供宏停止后续写入。源码与模型读回不代表关闭重开持久性验证',
 		params: [
 			{ name: 'primitiveIds', type: 'string[]', required: true, description: '要删除的图元 ID 列表（也兼容单数 primitiveId，自动转数组）' },
 			{ name: 'batchSize', type: 'number', description: '分批大小，默认 10：每批之间停 300ms 并记录分批进度。大批删除建议保持默认多次调用，不要一次调大硬跑' },
@@ -3433,17 +3442,15 @@ export const schematicCommands: Array<ICommandDef> = [
 			let floatDiag: Array<string> | undefined
 			// 0.10.23 加固（照抄 pruneFloatingLabels 0.10.12 成熟机制）：
 			//  ① 逐项 8s Promise.race 超时熔断——官方 API 偶尔永不 resolve（模态框/卡绘制），超时不拖死整批；
-			//  ② 连续 3 项失败熔断整批（会话多半已损坏）；
+			//  ② 单项状态未知或超时立即停止后续写入；明确读回仍存在的目标会继续处理下一项；
 			//  ③ 分批执行（batchSize 默认 10，批间停 300ms），返回分批进度，unprocessed 可再次调用续删；
 			//  ④ 全局时间预算 100s：耗尽即停开新项，已累积结果照常返回（部分结果不丢）；
 			//  ⑤ 每项成败一律以删后读回为准，不信 delete 布尔返回值（原有机制保留）。
-			const MAX_CONSECUTIVE_FAILS = 3
 			const batchSize = Math.max(1, Number(params.batchSize) || 10)
 			const startedAt = Date.now()
 			const batches: Array<{ batch: number, attempted: number, deleted: number, failed: number }> = []
 			const diagnostics: Array<string> = []
 			const failReason = new Map<string, string>() // 0.10.41：记录每项失败原因，终扫对账排除「从不存在」的 ID
-			let consecutiveFails = 0
 			let circuitBroken = false
 			let deadlineStoppedWrites = false
 			let budgetExhausted = false
@@ -3585,7 +3592,6 @@ export const schematicCommands: Array<ICommandDef> = [
 							outcomeBy[id] = 'directDeleted'
 							deleted.push(id)
 							bDeleted++
-							consecutiveFails = 0
 						}
 					else if (outcome === 'cascadePending')
 						pendingCascade.add(id)
@@ -3612,15 +3618,7 @@ export const schematicCommands: Array<ICommandDef> = [
 							else
 								diagnostics.push(`单项删除写入或读回状态未确认（${itemError}），立即停止后续写入`)
 						}
-						if (outcomeBy[id] === 'stillExists')
-							consecutiveFails++
-						else
-							consecutiveFails = 0
 						diagnostics.push(`${id}: ${itemError}`)
-						if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
-							circuitBroken = true
-							diagnostics.push(`⚠️ 连续 ${MAX_CONSECUTIVE_FAILS} 项失败（均以读回确认为准），熔断整批——会话可能已损坏，建议【不保存重开页面】后再分批重试`)
-						}
 					}
 					finally {
 						if (itemTimeout !== undefined)
@@ -4067,7 +4065,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.pruneFloatingLabels',
-		summary: '【宏】一键清理浮空网络标签：扫描全页 attached=false 的标签（附着失败残留、导线被删后留下的孤儿标签，DRC"网络标签没有连接导线或总线"的来源），dryRun 预览（含每个浮标的世界坐标，方便手动框选兜底）或直接删除。删除主通道为「借尸还魂」（建临时导线→modify 浮标 parentId 挂上去→删导线级联带走→源码重扫验证）。0.10.12 加固：每条 8s 超时熔断（单条超时标记 failed 跳下一条）、连续 3 条失败熔断整批（提示会话可能已损坏、不保存重开页面）、分批执行（batchSize 默认 5、批间停 300ms、返回分批进度，大批浮标多次调用接着删）、全局时间预算耗尽即停且累积 diagnostics 不丢、回滚顺序修正（删临时导线失败先把 parentId 改回 $$root 再重试删线，避免留下删不掉的"持属性无名导线"孤儿）。⚠️ 文档源码改写通道默认禁用（0.10.10 曾被官方运行时判"数据格式不对"），仅显式 allowSourceRewrite:true 才执行且属最后手段；全失败时返回 manualDelete 世界坐标清单供手动框选删除',
+		summary: '【宏】一键清理浮空网络标签：扫描全页 attached=false 的标签（附着失败残留、导线被删后留下的孤儿标签，DRC"网络标签没有连接导线或总线"的来源），dryRun 预览（含每个浮标的世界坐标，方便查看）或直接删除。删除主通道为「借尸还魂」（建临时导线→modify 浮标 parentId 挂上去→删导线级联带走→源码重扫验证）。逐项超时保护、分批执行（batchSize 默认 5、批间停 300ms、返回分批进度）、全局时间预算耗尽即停且累积 diagnostics 不丢、回滚顺序修正（删临时导线失败先把 parentId 改回 $$root 再重试删线，避免留下删不掉的"持属性无名导线"孤儿）。文档源码改写通道默认禁用，仅显式 allowSourceRewrite:true 才执行；全失败时返回 manualDelete 世界坐标清单',
 		params: [
 			{ name: 'dryRun', type: 'boolean', description: '只列出浮空标签不删除（默认 false 直接删）；返回每个浮标的世界坐标（Y 已翻转为 API 坐标），方便手动框选删除兜底' },
 			{ name: 'batchSize', type: 'number', description: '分批大小，默认 5：每批之间停 300ms 并记录分批进度。大批浮标建议保持默认多次调用，不要一次调大硬跑（0.10.11 实测连续高频创建临时导线会拖垮编辑器会话）' },
@@ -5252,7 +5250,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.exportNetlist',
-		summary: '导出原理图网表文件（返回 base64；引脚编号重复等数据问题会被官方拒绝）',
+		summary: '导出原理图网表文件（base64）；宿主生成时可能更新重复位号、Unique ID并保存，不用于只读来源',
 		params: [
 			{ name: 'fileName', type: 'string', description: '文件名，默认 netlist' },
 			{ name: 'netlistType', type: 'string', description: '网表格式，如 Protel2（Altium Designer 格式），默认官方默认格式' },
@@ -5272,26 +5270,20 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.getNetlist',
-		summary: '直接读取原理图网表字符串（0.10.44，GPT KIMI-EDA-20261002-04）——官方 sch_Netlist.getNetlist（已标 deprecated 但仍公开）的薄封装；用于 exportNetlist 返空时的连通性审计备选，只读不写',
+		summary: '取得原理图网表字符串；宿主生成时可能更新重复位号、Unique ID并保存，不用于只读来源',
 		params: [
-			{ name: 'netlistType', type: 'string', description: '网表格式：Protel2/PADS/Allegro/DISA/DSNET 实测可用（4.1.60）；JLCEDA/EasyEDA 官方实现有宿主级缺陷（JLCEDA 挂起/EasyEDA 返空），0.10.45 起直接拒绝并提示改用可用格式；未传时默认 Protel2，显式传入值原样使用' },
+			{ name: 'netlistType', type: 'string', description: '网表格式：Allegro/PADS/Protel2/JLCEDA/EasyEDA/DISA/DSNET；未传时默认 Protel2' },
 		],
 		returns: '{ netlistType, length, netlist }',
 		example: { cmd: 'schematic.getNetlist', params: { netlistType: 'Protel2' } },
 		handler: async (params) => {
-			// 0.10.45（GPT -05 实测）：官方 sch_Netlist.getNetlist 在 JLCEDA/EasyEDA 格式上有宿主级缺陷——
-			// JLCEDA 在测试工程挂起 >120s（你方现场报 "i is not iterable"，同一代码路径不同数据形态），
-			// EasyEDA 返空。前置拒绝，避免挂死扩展命令队列 300s；其余格式 45s 超时保护。
-			const KNOWN_BROKEN = new Set(['jlceda', 'easyeda'])
 			const rawType = params.netlistType == null ? 'Protel2' : String(params.netlistType)
-			if (rawType && KNOWN_BROKEN.has(rawType.trim().toLowerCase()))
-				throw new Error(`网表格式 "${rawType}" 的官方 getNetlist 实现存在宿主级缺陷（JLCEDA：挂起或报 "i is not iterable"；EasyEDA：返空——0.10.45 实测，EDA 4.1.60）。请改用实测可用格式：Protel2 / PADS / Allegro / DISA / DSNET`)
 			const netlist = await withTimeout(
 				eda.sch_Netlist.getNetlist(rawType as any),
 				45000,
 				`getNetlist(${rawType ?? 'default'})`,
 			).catch((e: any) => {
-				throw new Error(`网表读取失败：${String(e?.message ?? e)}——该格式官方实现可能不可用，请换 Protel2 / PADS / Allegro / DISA / DSNET 实测可用格式`)
+				throw new Error(`网表读取失败：${String(e?.message ?? e)}——请检查 EDA 返回的信息或稍后重试`)
 			})
 			if (typeof netlist !== 'string' || netlist.trim().length === 0)
 				throw new Error('网表读取失败：官方返回非字符串或空——该接口与 exportNetlist 是两条独立路径，同时失败才说明原理图数据不满足网表校验')
@@ -5301,7 +5293,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	// ---------- 原理图文本 + 区域/点查询 ----------
 	{
 		name: 'schematic.placeText',
-		summary: '在原理图放置文本（注释/版本号/说明；坐标需为 5 的倍数）',
+		summary: '在原理图放置文本（注释/版本号/说明）',
 		params: [
 			{ name: 'x', type: 'number', required: true, description: '坐标 X（10mil 单位）' },
 			{ name: 'y', type: 'number', required: true, description: '坐标 Y' },

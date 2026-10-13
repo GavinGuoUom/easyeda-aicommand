@@ -239,6 +239,11 @@ const READONLY_COMMAND_PATTERNS = [
 	/^editor\.(listTabs|screenshot|zoomToAll|zoomToRegion)$/,
 	/^library\.(search|get)/,
 	/^task\.(get|list)/,
+	/^module\.getCopyOperation$/,
+	/^module\.getRestoreOperation$/,
+	/^module\.getPlacementOperation$/,
+	/^module\.getPcbImportOperation$/,
+	/^module\.exportTemplateFile$/,
 	/^knowledge\./,
 ]
 function isReadOnlyCommand(cmd) {
@@ -246,7 +251,6 @@ function isReadOnlyCommand(cmd) {
 }
 /** 每个 EDA 窗口（ws）一条写队列；tail 永远 resolved，深度单独计数 */
 const writeQueues = new Map()
-const MAX_QUEUED_WRITES = 50
 
 // ---------- 0.10.73 写结果不确定保护 v2（KIMI-EDA-20261006-04 P1-3 复核收口） ----------
 // 背景：写指令超时/心跳丢失时代理放弃等待，但扩展侧可能仍在后台执行（EDA API 无取消）。
@@ -353,7 +357,7 @@ function laneLog(event) {
 }
 
 /**
- * 取写通道：返回 enqueue(fn)->Promise；队列已满返回 'QUEUE_FULL'；目标不在线返回 null（走原逻辑报错）
+ * 取写通道：返回 enqueue(fn)->Promise；目标不在线返回 null（走原逻辑报错）
  */
 function acquireWriteLane(routeId) {
 	const target = routeId ? connectionFor(routeId) : selectedConnection()
@@ -364,8 +368,6 @@ function acquireWriteLane(routeId) {
 		q = { tail: Promise.resolve(), depth: 0 }
 		writeQueues.set(target.ws, q)
 	}
-	if (q.depth >= MAX_QUEUED_WRITES)
-		return 'QUEUE_FULL'
 	q.depth++
 	const enqueue = (fn) => {
 		laneLog({ event: 'enqueue', cmd: fn.cmd, depth: q.depth })
@@ -973,8 +975,6 @@ const server = http.createServer(async (req, res) => {
 					return json(res, 200, { ok: false, cmd: command.cmd, error: { message: blockReason } })
 			}
 			const writeLane = isReadOnlyCommand(command.cmd) ? null : acquireWriteLane(routeId)
-			if (writeLane === 'QUEUE_FULL')
-				return json(res, 200, { ok: false, cmd: command.cmd, error: { message: `写指令队列已满（${MAX_QUEUED_WRITES} 个写操作排队中），为保护工程已拒绝本条。请等队列消化后再发；大批量操作请合并为一次 batchWire/macro 提交` } })
 			const executeWrite = async () => {
 				// 0.10.73b（KIMI-EDA-20261006-05 用例1）：出队二次检查——入队时保护尚未设置
 				// （前一条写还在跑），排队期间前写超时触发 writeUncertain 的，本条不得发往扩展，

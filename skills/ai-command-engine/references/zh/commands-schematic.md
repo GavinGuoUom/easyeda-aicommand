@@ -6,6 +6,49 @@
 
 ## ① 批量生成与整理（第一入口）
 
+### 原位换封装与批量更新属性
+
+用于保留已画好的原理图器件，更新其封装关联、型号或采购属性。
+适合把0603改0402、批量整理阻值/耐压/厂家/料号，以及修改放入项目后的模块实例。
+封装更新保留原器件ID、位号、唯一ID、符号和原理图位置；不是删除旧器件再放新器件。
+更换整个型号或符号还需处理引脚和导线，不由这两条指令完成。
+134已验证两颗已有器件的批量属性更新、外部0805资源载入、原位关联和保存重开，PCB实际焊盘尺寸及网络对应正确。136新器件属性更新已返回完整成功并保存重开。138原位封装与两项属性实际写入已保存重开，PCB经原生确认后实际焊盘尺寸、网络及保存重开均通过。最终核对因宿主补入封装名称误报；139只接受与已验证资源一致的UUID和名称。142已通过默认配置核对，0805关联与两项属性已保存重开；最终回执因宿主保留旧封装名称停止。143已取得两器件属性更新及真实0402→0805组合更新成功回执，名称正确、保存关闭重开通过。本轮footprintNameRepairs为空，宿主正常刷新名称；新增旧名兜底修正分支仅回归通过，未单独触发实机。PCB导入中的原生确认框已手动应用，不计为自动同步通过。
+
+| 指令 | 用途 | 参数 |
+| --- | --- | --- |
+| `schematic.getComponentUpdatePlan` | 只读列出封装与属性变化 | `items:[{primitiveId,footprint?,properties?}]` |
+| `schematic.updateComponents` | 执行并逐项读回 | `plan`为规划响应的完整`data` |
+
+流程：激活目标原理图 → 查器件和目标封装 → 生成计划 → 执行 → 保存。
+需要更新PCB时，再用现有`pcb.importChanges`同步，并核对实际封装、焊盘网络及走线。
+计划不导入库资源。执行时在当前工程库建立或复用辅助器件，以载入目标封装；原理图里的器件不删除、不重建，也不额外放置辅助器件。辅助库器件及必要的空符号保留在工程库，结果会报告其UUID。`copiedResources[].normalizedDefaultRecords`列出比较时排除的已知默认配置；其余记录继续核对。`footprintNameRepairs`记录旧名称缓存的修正前后值、源码写入和读回状态。
+
+`primitiveId`来自当前原理图；`footprint`为明确的`{uuid,libraryUuid}`，来自封装搜索或目标库器件的封装关联。
+`properties`只传要改的字段，其余属性由插件保留。
+支持`manufacturer`、`manufacturerId`、`supplier`、`supplierId`、`name`、`designator`、`addIntoBom`、`addIntoPcb`、`otherProperty`。
+阻值、容差和耐压等自定义字段放在`otherProperty`；这些字段合并更新，不覆盖整份旧属性。
+同一项可同时换封装和更新属性，多项可在一次计划中处理。
+
+规划参数示例：
+
+```json
+{
+  "items": [
+    {
+      "primitiveId": "当前电阻ID",
+      "footprint": {"uuid":"目标0402封装UUID","libraryUuid":"目标库UUID"},
+      "properties": {"otherProperty":{"Resistance":"10k","Tolerance":"1%"}}
+    },
+    {"primitiveId":"另一个器件ID","properties":{"manufacturerId":"新厂家料号"}}
+  ]
+}
+```
+
+执行请求组装为`{instanceId:currentInstanceId,cmd:"schematic.updateComponents",params:{plan:planResponse.data}}`。
+成功结果只确认原理图更新和即时读回，保存持久性与PCB同步分别检查。
+`copiedResources`保留原字段名，报告实际导入或复用的封装、辅助器件、来源及检查范围。库源码内容核验、工程资源存在和旧格式序列化几何核验分别报告；不能把资源存在当作任意引脚映射正确。
+部分失败会说明已导入资源、已更新项目和未执行项目；写入未知时先只读检查，不重复执行旧计划。
+
 ### `schematic.buildBlock` — 从零生成功能区
 
 器件清单+连接表 → 自动区框（默认 0,0 起、黑虚线，可 color/lineType）→ 行列排布（cw32 模板横距 60 行距 90，标题框底居中字号 20）→ 按 nets 连线 → 网表+DRC 自查。
@@ -59,7 +102,7 @@
 - **标签 rotation 恒 0、锚点恒在桩末端**。附着判定看锚点，锚点须在导线上，离线外 5 单位即浮标；rotation 180=反字（装机实锤）。朝左场景用位置偏移，不要旋转。
 - 文字宽度估算 **4.4×字符数+5 单位**（数字/下划线略宽，宁高估）。
 - **占用预检**：引脚已被同名网占用直接复用；异名占用拒绝（防串网）；`force:true` 强并。
-- **整段路径避让**：短桩/横腿全段 8 单位内有任何引脚即换向；linkWire 全部候选（U 形 8 层+L 形 2 变体）逐段查引脚（两端点豁免），无解抛 `PIN_CROSSING_FALLBACK`。
+- **整段路径避让**：短桩/横腿全段 8 单位内有任何引脚即换向；linkWire 全部候选（U形避让层按当前引脚和导线范围推导，L形保留两种基本转折）逐段查引脚（两端点豁免），无解抛 `PIN_CROSSING_FALLBACK`。
 - **NC 引脚禁止接线**：预检中文报错，不强画。
 - 附着验证失败快速返回 `attached:false`（最多 2 次 500ms 重试）。
 
@@ -140,9 +183,9 @@
 | `schematic.delete` | 删图元（批量；先识别类型+删除后立即读回+终扫对账；仍在才按既有间隔复核；未知读回以 partial 停止后续写入） | `primitiveIds`, `batchSize?` |
 
 - **浮空标签（parentId=$$root）官方删除盲区**：属性图元不支持删除（@internal），主通道**借尸还魂**（建临时导线→modify 挂 parentId→删导线级联带走→源码重扫验证）；官方 modify parentId 有假失败——以走完后的源码重扫为准。
-- pruneFloatingLabels：dryRun 返回每个浮标世界坐标（**Y 已翻成 API 坐标**，便手动框选兜底）。每条 8s 熔断、连 3 败熔断整批、`batchSize` 默认 5（批间停 300ms，看 `batches`/`unprocessed` 分批续删，**不要调大硬跑**）。**大批量分多次跑**。
+- pruneFloatingLabels：`dryRun` 可预览浮空标签。插件按当前结果处理全部目标；已确认失败不因失败次数停工，超时或读回未知时停止后续写入。`batchSize` 只影响分批节奏，不能把任意失败次数当作页面损坏。
 - **浮空标签处理的源码改写第三兜底默认禁用**（实机事故：离线字节级验证过 ≠ 运行时安全，官方写回有格式校验弹窗拒绝）：仅显式传入 `allowSourceRewrite:true` 才尝试，返回带 `warning`，操作前保存工程。此开关与普通 `TEXT` 删除使用的内部快照路径分开；全失败返回 `manualDelete` 世界坐标清单。
-- **会话损坏迹象**：创建类指令（drawWire/placeNetLabel/placeText/placeDevice/labelWire/linkWire）突然全 `create failed!` 或超时而读类正常 → 判定损坏；不空跑（插件连 3 败自动熔断）；**不保存直接关页面重开**即可还原，重开后分批继续。
+- 创建或删除失败时按实际读回判断，不能仅凭连续失败次数认定页面损坏。结果未知时停止依赖写入；关闭重开不代表已回滚。
 - fixNetLabels：**dryRun 默认 true 只出四类体检报告**（id/net/世界坐标/问题/建议），确认后 `dryRun:false` 真修，逐条收错，修完自动 pruneFloatingLabels 复核。四类：浮空（parentId=$$root，DRC 来源）；重复（同线同网名>1 或锚点距<10）；反字（rotation 180）；位置不对（锚点离线>20 或导线戳出悬空端点）。
 - repairNet：人工拖标签致网断后用它收尾；流程另见 pitfalls.md。
 - **delete 加固**：先识别类型；删除调用后立即读回，只有仍在才按既有 400/600/1000ms 间隔复核，最后终扫对账。SDK 布尔返回不代表成功；写入超时或读回未知保持 partial，停止后续项和健康探针，不能用“终扫目标消失”清洗未知写入。`unprocessed` 只表示未处理，须先核对现场和写保护。非未知路径的健康探针仅单次串行创建/清理；探针不能代替保存重开。`taskId` 可用于查询原任务，超时不代表取消。`deletedBy` 含 `text` 时，日常统一用 `schematic.delete`，不自动保存；按任务另行 save→close→open 核验持久性。
@@ -166,9 +209,10 @@
 | `schematic.runDrcDetailed` | DRC 逐条明细（**需 EDA v4.2+**；4.1 只返回聚合结构并标 `aggregated:true`，别假装支持或反复重试） | 无 |
 | `schematic.structuralAudit` | **【0.10.60】整页结构+排版验收（只读）**：并查集编树+官方 net 对账。blocking=桥接(LABEL_NET_MISMATCH/树内多网名)/异网共线重叠/重复位号；candidate=孤立树/浮标/引脚穿线/十字交叉/区框重叠/器件出区/器件相碰(引脚云近似待目检)；info=零长段/悬端/同网重叠。九页验收逐页调用 | `ncExempt?`(豁免名单如 ["U2.2"]), `deviceMargin?`(相碰筛选外扩 mil,默认 10) |
 | `schematic.exportNetlist` | 导网表（base64；须解析后逐网络核对引脚） | `fileName?`, `netlistType?` |
-| `schematic.getNetlist` | 直接读网表字符串（0.10.44；exportNetlist 返空时的连通性审计备选，只读不写） | `netlistType?` |
+| `schematic.getNetlist` | 取得网表字符串（生成时可能自动更新位号/Unique ID并保存） | `netlistType?` |
 | `schematic.save` | 保存原理图 | 无 |
 
+- 2026-10-12实测与宿主源码确认：生成网表可能先更新重复Designator/Unique ID并保存。`getNetlist`与`exportNetlist`不能当作只读来源查询；在隔离目标允许该变化时使用，随后按实际源码身份核对。
 - 0.10.104 起，网表文件导出拒绝零字节文件及空 base64；`getNetlist` 拒绝纯空白文本。返回非空数据仍须解析并核对实际引脚，不能只看导出成功。
 - 官方单对象 `get()` 对已删除 ID 永久返回缓存旧对象——存在性判断用全量列表/源码重扫，别用 `get()`。
 - **structuralAudit 宿主语义边界（0.10.61 实测）**：①宿主会把物理相接的异网名导线**合并成一个 wire** 并把 net 定为其中一个名——桥接实际由 LABEL_NET_MISMATCH[blocking] 抓获，MULTI_NET_TREE 只在字段可伪造的场景出现，不触发属正常；②画线穿过引脚会被官方**吸附拆分**、引脚成为端点=合法连接——PIN_INTERIOR_LANDING 在宿主数据上通常不触发，规则保留作防御；③图框 (0,0) 会被报 COMP_OUTSIDE_REGION[candidate]，图框不是器件，可忽略。

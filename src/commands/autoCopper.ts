@@ -721,8 +721,8 @@ async function executePlan(params: Record<string, any>) {
 					throw new Error(`覆铜 ${id} 不支持 rebuildCopperRegion`);
 				const poured = await host.write(`重建覆铜填充 ${id}`, async () => await pourObject.rebuildCopperRegion());
 				if (!poured) {
-					resultRecord.status = 'border-read-back; rebuild returned false; fill pending';
-					throw new Error(`覆铜 ${id} rebuildCopperRegion 返回 false`);
+					resultRecord.status = 'border-read-back; rebuild returned no fill object; fill unverified';
+					throw new Error(`覆铜 ${id} 重建未返回实填充对象，已创建边框保留，填充结果未验证`);
 				}
 				resultRecord.status = 'border-read-back; rebuild returned; fill pending';
 				const fillReadback = await readPourFillReadback(host, eda, {

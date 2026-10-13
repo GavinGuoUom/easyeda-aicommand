@@ -72,7 +72,7 @@ Writes are queued by window. `editor.openDocument` and `editor.closeDocument` ar
 | PCB/footprint | **mil** (1 mm ≈ 39.37 mil) | +Y points up | Use the board outline as the limit. |
 
 - ⚠️ The units differ by a factor of 10. Mixing them can place objects extremely far away.
-- Schematic grid snapping: coordinates should be **multiples of 10**. Otherwise DRC may report “网络图元不在原理图格点上” (schematic primitive is not on the schematic grid).
+- Schematic grid snapping follows the current sheet's grid settings. Coordinates use 10 mil units, but commands are not restricted to fixed multiples of 5 or 10; the active DRC rules determine whether a point is on-grid.
 - **Read sheet dimensions:** For schematics, use `schematic.getPageInfo` (it returns `width` and `height` in `titleBlock`, in 10 mil units; A4 is 1170 × 825 and A3 about 1630 × 1150, subject to actual readback). For PCB outline dimensions, scan the whole board with `pcb.getPrimitivesInRegion` to find Region primitives and convert their dimensions, or compare against a screenshot.
 - Sheet-frame dimensions are not fixed. Read `width` and `height` with `schematic.getPageInfo` before placing components.
 - ⚠️ **Rectangle “top-left corner”:** Schematic +Y points up. The official rectangle anchor is the world-coordinate top-left point `(minX, maxY)`. The supplied `y` is the rectangle's **top edge**; the rectangle extends downward (toward smaller Y) by `height`. Do not use screen coordinates, where Y points down, as world coordinates. Since 0.9.4, `listRects` and `checkRectOverlap` return normalized `span:{x1,y1,x2,y2}`; always use `span` for calculations.

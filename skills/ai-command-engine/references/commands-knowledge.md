@@ -1,19 +1,19 @@
-### 知识库
+# Knowledge Base Commands
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+> The tables and parameter objects on this page describe commands and `params`, not complete HTTP requests. When sending `/command`, the outer request must include `cmd`, the top-level `instanceId`, and the required `params`. A macro routes only the outer request; its steps inherit the instance. See [setup](setup.md) for a complete example.
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `knowledge.query` | 检索布线规则/经验 | `query`, `limit?` |
-| `knowledge.listRules` | 列出全部规则主题 | 无 |
-| `knowledge.widthForCurrent` | 载流→线宽换算 | `currentA` |
+| `knowledge.query` | Search routing rules and practical guidance | `query`, optional `limit?` |
+| `knowledge.listRules` | List all rule topics | None |
+| `knowledge.widthForCurrent` | Convert current to trace width | `currentA` |
 
-## 嘉立创开放平台（代理本地执行，无需 EDA 在线）
+## JLC Open Platform (executed locally by the proxy; EDA does not need to be online)
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `smt.queryComponent` | 查询 SMT 可贴装物料 | `queryString`, `pageNum?`, `pageSize?` |
+| `smt.queryComponent` | Search SMT components available for assembly | `queryString`, optional `pageNum?`, `pageSize?` |
 
-- 返回 `components[].code` 即立创编号，可直接用于 `schematic.placeDevice`。
-- 首次使用：让用户打开 `http://127.0.0.1:49720/smt` 填 appId / accessKey / secretKey（存于 `bridge/jlc-credentials.json`，升级不丢失，保存即时生效不用重启代理）；该页面也支持人工查询。
-- **密钥获取**（遇到"未配置嘉立创开放平台密钥"报错时引导用户）：https://open.jlc.com → 登录嘉立创账号 →「快速接入」→「创建应用」，一键生成三件套（appId / accessKey / secretKey），约 1 分钟；密钥只存本机（代理目录 jlc-credentials.json，.gitignore 已排除），勿提交 git、勿外发。
+- The returned `components[].code` is the LCSC part number and can be used directly with `schematic.placeDevice`.
+- First-time setup: have the user open `http://127.0.0.1:49720/smt` and enter `appId`, `accessKey`, and `secretKey`. They are stored in `bridge/jlc-credentials.json`, persist across upgrades, and take effect immediately when saved; restarting the proxy is not needed. This page also supports manual searches.
+- **Obtaining credentials** (guide the user here if they see “嘉立创开放平台密钥未配置” / “JLC Open Platform credentials are not configured”): visit https://open.jlc.com → sign in to the JLC account → “快速接入” (“Quick Access”) → “创建应用” (“Create Application”). Generate the three values (`appId` / `accessKey` / `secretKey`) in one step; this takes about one minute. Credentials are stored only locally (in the proxy directory's `jlc-credentials.json`, excluded by `.gitignore`); do not commit them to Git or share them externally.

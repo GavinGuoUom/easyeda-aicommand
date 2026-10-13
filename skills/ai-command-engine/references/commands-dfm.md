@@ -1,47 +1,47 @@
-# 嘉立创下单检查（PCB DFM）
+# JLC Order Checks (PCB DFM)
 
-> P11 版本提示：0.10.90 曾出现 DFM 入口异常；0.10.91 已在指定 PCB 的命令调用中实机复验生成 18 项结果，菜单 iframe 与导出仍待实机验收。0.10.91 源解析显示外/内层均为 1oz，这是图纸读数，不能代替 0.10.92 的下单铜厚输入。
+> P11 version note: 0.10.90 had a DFM entry-point failure. In 0.10.91, a real-host command call on a specified PCB was rechecked and returned 18 results; the menu iframe and export still require real-host verification. Source parsing in 0.10.91 showed 1 oz on both outer and inner layers. This is a drawing readout and does not replace the order copper-thickness input added in 0.10.92.
 
-> 本页说明 `pcb.runDfm`、`pcb.runSmtDfm`、`pcb.checkSameNetPadSpacing` 及 PCB 菜单“嘉立创下单检查”。命令经现有 `/command` 通道执行；请求外层仍须带 `instanceId`。
+> This page covers `pcb.runDfm`, `pcb.runSmtDfm`, `pcb.checkSameNetPadSpacing`, and the PCB menu “嘉立创下单检查” (“JLC Order Checks”). Commands run through the existing `/command` channel; the outer request must still include `instanceId`.
 
-## AI 命令
+## AI commands
 
-| 命令 | 必需参数 | 检查范围 |
+| Command | Required parameters | Scope |
 | --- | --- | --- |
-| `pcb.runDfm` | `material`、`thickness`、`outerCopperOz`、`innerCopperOz` | PCB 18 项检查。板材须精确使用 `FR4`、`HDI板`、`高频板`、`铝基板`、`铜基板` 之一；板厚单位 mm，须为有限正数；外层铜厚须为数字 `1` 或 `2`，内层铜厚须为数字 `1`。缺参或其他铜厚值拒绝。铜厚按本次下单输入选档，不从图纸或默认值代填 |
-| `pcb.runSmtDfm` | `standard`、`thickness` | SMT 7 项检查；`standard` 为 `economy` 或 `standard`；厚度单位 mm，须为有限正数 |
-| `pcb.checkSameNetPadSpacing` | `minSpacingMm` | 同网络焊盘间距 1 项检查；间距单位 mm，须为有限正数 |
+| `pcb.runDfm` | `material`, `thickness`, `outerCopperOz`, `innerCopperOz` | 18 PCB checks. `material` must exactly match one of `FR4`, `HDI板`, `高频板`, `铝基板`, `铜基板`; board thickness is in mm and must be finite and positive; outer copper thickness must be numeric `1` or `2`, and inner copper thickness must be numeric `1`. Missing parameters or any other copper weight are rejected. Copper weights are selected for this order input and are not filled from drawing data or defaults. |
+| `pcb.runSmtDfm` | `standard`, `thickness` | 7 SMT checks. `standard` must be `economy` or `standard`; thickness is in mm and must be finite and positive. |
+| `pcb.checkSameNetPadSpacing` | `minSpacingMm` | One same-net pad spacing check; spacing is in mm and must be finite and positive. |
 
-板材枚举以复用的上游 core 导出 `JLC_SUPPORTED_MATERIALS` 为准。检查实现复用[上游项目](https://github.com/easyeda/eext-jlc-order-dfm-checker) v1.0.4，来源提交 `afd538786d510f537ad4fa47c6329e6a99dc7625`，许可证 Apache-2.0。没有新增依赖；工艺参数表及几何算法来自该上游版本，不表示与嘉立创网站当前工艺实时同步。上游 v1.0.4 原接口只有板材与板厚；`outerCopperOz`、`innerCopperOz` 是本地增强字段。本次仅支持外层 1/2 oz、内层 1 oz，不代表厂家全部工艺选项。
+The material enumeration follows `JLC_SUPPORTED_MATERIALS` exported by the reused upstream core. The check implementation reuses [the upstream project](https://github.com/easyeda/eext-jlc-order-dfm-checker) v1.0.4, source commit `afd538786d510f537ad4fa47c6329e6a99dc7625`, licensed under Apache-2.0. No dependency was added. Its process parameter table and geometry algorithms come from that upstream version; this does not mean they are synchronized with the current JLC website process specifications. Upstream v1.0.4 accepted only material and board thickness. `outerCopperOz` and `innerCopperOz` are local extension fields. This implementation supports only 1/2 oz outer copper and 1 oz inner copper; this is not a claim that these are the manufacturer's only options.
 
-`pcb.runSmtDfm` 与 `pcb.checkSameNetPadSpacing` 不增加铜厚输入。菜单中的 PCB DFM 表单由用户明确选择外层 1 或 2 oz、内层 1 oz；这些选项仅适用于 PCB DFM。
+`pcb.runSmtDfm` and `pcb.checkSameNetPadSpacing` do not accept copper thickness. In the PCB DFM menu form, the user explicitly chooses outer copper of 1 or 2 oz and inner copper of 1 oz. These options apply only to PCB DFM.
 
-使用前须确认已安装 0.10.92 或后续含此增强的版本，并在在线命令帮助中看到这两个铜厚参数。旧版 0.10.91 不支持它们，可能忽略额外字段；仅向旧版请求添加参数不能证明已按本次铜厚检查。新报告必须回显 `inputs.outerCopperOz`、`inputs.innerCopperOz` 及 `reportedCopper`。
+Before use, confirm that version 0.10.92 or later with this enhancement is installed and that online command help lists both copper-thickness parameters. Version 0.10.91 does not support them and may ignore extra fields; adding the parameters to a request to an older version does not prove that checks used the selected copper thickness. New reports must echo `inputs.outerCopperOz`, `inputs.innerCopperOz`, and `reportedCopper`.
 
-## 返回与完整性
+## Results and completeness
 
-命令成功回包的 `data` 中保留 `results`、`expectedCount`、`issues` 和 `coverage`；`issues` 项包含 `code`、`message` 和可选 `item`。`data` 另含 `documentUuid`、`checkType`、`inputs`、`timestamp`、`upstream` 及汇总字段 `upstreamPassed`、`complete`、`passed`。`upstreamPassed` 为兼容保留的字段名，表示复用并适配后的各项结果是否全部为 `success`；不表示官方在线服务已通过，也不表示算法逐行保持原样。菜单与 TXT 将其标为“逐项检查通过”。单项检查通过不等于整项检查通过；只在 `complete:true` 且 `passed:true` 时可报告该命令覆盖范围内通过。`complete:false` 必须同时为 `passed:false`。命令回包 `ok:true` 只代表处理器成功返回，不代表 `data.passed:true`。
+For a successful command response, `data` retains `results`, `expectedCount`, `issues`, and `coverage`; each `issues` entry contains `code`, `message`, and optional `item`. `data` also includes `documentUuid`, `checkType`, `inputs`, `timestamp`, `upstream`, and summary fields `upstreamPassed`, `complete`, and `passed`. `upstreamPassed` is retained for compatibility and means that all adapted results from the reused implementation have status `success`; it does not mean an official online service passed or that the algorithm is unchanged line by line. The menu and TXT report label this “逐项检查通过” (“all individual checks passed”). Passing an individual check does not mean the entire check passed. Report a pass within the command's coverage only when `complete:true` and `passed:true`. `complete:false` must also have `passed:false`. A command response with `ok:true` only means the handler returned successfully; it does not mean `data.passed:true`.
 
-三类检查分别保留预期的 18、7、1 项原始结果。若用于本次检查的必要输入不完整、读取失败或使用回退/推断值，适配层会标记未完整，不能报告完整通过。例如源码读取失败、网络数据只部分可读、焊盘尺寸缺失或无板框而使用回退，都不能变成通过结论。铜厚请求参数不会默认；图纸源铜厚按下一节单独处理。查看 `coverage`、完整性标记及 `upstream` 说明，勿只看 `passed` 或问题数。
+The three check types preserve their expected 18, 7, and 1 raw results respectively. If required inputs for the check are incomplete, reading fails, or fallback/inferred values are used, the adapter marks the result incomplete and it cannot be reported as a complete pass. For example, a source read failure, partially readable net data, missing pad dimensions, or using a fallback because there is no board outline cannot become a pass. Copper thickness request parameters have no defaults; drawing source copper thickness is handled separately in the next section. Review `coverage`, completeness flags, and `upstream` details; do not rely only on `passed` or the issue count.
 
-## 下单铜厚输入与图纸读数
+## Order copper-thickness input and drawing readout
 
-`pcb.runDfm` 以本次输入的铜厚选档检查支持性：第 5 项检查所选外层铜厚，第 6 项检查所选内层铜厚；第 12/13 项根据设计铜层及设计层数，分别使用外层或内层所选铜厚从原工艺表取阈值。工艺表数值和几何算法不变；其他检查中的有效铜层数量仍按原有含铜图元启发式判断。
+`pcb.runDfm` checks support for the selected copper thickness provided in this order input: check 5 checks the selected outer copper thickness, and check 6 checks the selected inner copper thickness. Checks 12 and 13 select thresholds from the original process table using the design copper layer and design layer count, applying the selected outer or inner copper thickness respectively. The process table values and geometry algorithms are unchanged. For other checks, the effective number of copper layers is still determined by the existing heuristic based on copper primitives.
 
-PCB 结果另含 `reportedCopper`，与 DFM 判定分开：`status` 为 `available`、`partial` 或 `unavailable`；`layers` 为 `[{layerId:number, thicknessMil:number|null, copperOz:number|null}]`；`matchesTarget` 为布尔值或 `null`；`differences` 为 `[{layerId, requestedOz, reportedOz}]`；`messages` 为铜厚源采集诊断字符串数组。请求铜厚仍列在 `inputs`；检查标准值反映本次外/内铜厚输入及对应阈值。
+PCB results also include `reportedCopper`, separately from the DFM verdict: `status` is `available`, `partial`, or `unavailable`; `layers` is `[{layerId:number, thicknessMil:number|null, copperOz:number|null}]`; `matchesTarget` is a boolean or `null`; `differences` is `[{layerId, requestedOz, reportedOz}]`; and `messages` is an array of diagnostic strings about collecting source copper-thickness data. The requested copper thickness remains in `inputs`; reported standard values reflect this order's outer/inner copper inputs and corresponding thresholds.
 
-图纸铜厚与本次输入不一致、缺少 `LAYER_PHYS` 记录或无法解析时，只在 `reportedCopper` 表示，不单独加入 `issues`，也不因此把 DFM 判为失败。若源读取异常影响必要几何、身份或 API 数据，则仍须按既有规则进入 `issues` 并令检查不完整，不能被铜厚旁证豁免。0.10.91 实机报告中的图纸外/内 1oz 是源读数，不代表用户下单请求了 1oz；差异本身也不构成 DFM 失败。
+If drawing copper thickness differs from the request, the `LAYER_PHYS` record is missing, or the value cannot be parsed, this is reported only in `reportedCopper` and is not added separately to `issues`; it does not by itself fail DFM. If a source read error affects required geometry, identity, or API data, the existing rules still require an `issues` entry and an incomplete result; copper-thickness corroboration does not exempt it. The 1 oz outer/inner values in the 0.10.91 real-host report were drawing readouts, not proof that the user requested 1 oz. A discrepancy alone is not a DFM failure.
 
-## PCB 菜单行为
+## PCB menu behavior
 
-PCB 顶部“嘉立创下单检查”菜单提供上述三项检查，与 AI 命令共用同一检查处理和结果汇总。菜单可显示逐项结果及问题位置；用户点击“导出TXT”或“导出JSON”后，宿主保存对话框用于选择报告保存位置。AI 命令不弹窗、不清日志、不自动写报告；命令执行本身不保存、修复、上传或下单。定位是辅助查看，不会修改图纸。
+The PCB top menu “嘉立创下单检查” (“JLC Order Checks”) provides the three checks above and shares the same check handlers and result aggregation with AI commands. The menu can show individual results and issue locations. When the user clicks “导出TXT” (“Export TXT”) or “导出JSON” (“Export JSON”), the host save dialog lets them choose the report location. AI commands do not open dialogs, clear logs, or write reports automatically. Running a command does not save, repair, upload, or place an order. Issue location is for reference and does not modify the drawing.
 
-菜单或命令开始后若当前焦点或 PCB 身份变化，后续读取及报告交付会停止。定位前先核对目标 PCB 与当前板一致；不要把另一板上的坐标用于定位。旧 DFM 窗口会话失效时，关闭旧窗口并从 PCB 菜单重新打开。菜单表单、AI 命令及 TXT/JSON 导出应显示相同的 `inputs`、外/内层阈值和 `reportedCopper` 对照。
+If the current focus or PCB identity changes after a menu or command starts, subsequent reads and report delivery stop. Before locating an issue, verify that the target PCB matches the current board; do not use coordinates from another board. If an old DFM window session has expired, close the old window and reopen it from the PCB menu. The menu form, AI command, and TXT/JSON export should show the same `inputs`, outer/inner thresholds, and `reportedCopper` comparison.
 
-## 检查边界
+## Check boundaries
 
-这些检查复用上游插件的参数表和算法，不是嘉立创在线 DFM 服务的全量检查，也不是可制造性放行。当前几何覆盖有明确近似：线间距只计算 `Line` 的正间隙，不覆盖接触、重叠、`Arc` 或 `Polyline`；长圆及不等边焊环按最大轴近似；同网焊盘间距采用胶囊体和内接圆近似；有效铜层按存在铜图元的层启发式计算；EIA/BGA 类型依据名称识别。定位 ID 由两组列表索引辅助匹配，问题位置可能有偏差；菜单定位仅辅助查看，不能自动改图。请把原始结果和 `coverage` 一并交由工程人员审阅。
+These checks reuse an upstream plugin's parameter table and algorithms. They are not a complete set of checks from JLC's online DFM service and do not constitute manufacturing approval. Geometry coverage uses explicit approximations: trace spacing is calculated only for positive gaps between `Line` objects and does not cover touching, overlap, `Arc`, or `Polyline`; obrounds and unequal annular rings are approximated using the larger axis; same-net pad spacing uses capsule and inscribed-circle approximations; effective copper layers are estimated from layers containing copper primitives; and EIA/BGA types are identified by name. Location IDs are matched heuristically using indexes from two lists, so issue locations may be inaccurate. Menu location is for reference only and cannot edit the drawing. Have an engineer review the raw results together with `coverage`.
 
-0.10.90 曾通过核心 20/20、命令/菜单 8/8、owner 17/17、client 32/32 本地回归和类型检查，随后真实宿主发现 P11 入口错误。0.10.91 针对词法 SDK 入口重跑命令/菜单 8/8、owner 17/17 与类型检查通过；未变的核心与 client 沿用原证据。2026-10-09 在 PCB3_1 以 FR4/1.6mm 完成命令实机复验：18 项结果返回，图纸源铜厚外/内均读为 1oz，丝印项报错且25个焊盘网络未确定，因此 complete=false、passed=false；检查前后非文档头源内容一致。该图纸读数不代表下单请求值。0.10.92 铜厚输入与图纸对照已通过本地核心31/31、命令/菜单8/8、owner 17/17与类型检查，独立审查闭合；真实宿主命令对照已完成（见下）；菜单表单、定位和导出对话框此前未实机验收。
+Version 0.10.90 passed local regressions for core 20/20, command/menu 8/8, owner 17/17, client 32/32, and type checking; a real host later exposed a P11 entry-point error. In 0.10.91, after adapting to the lexical SDK entry point, command/menu 8/8, owner 17/17, and type checking passed; unchanged core and client checks rely on the prior evidence. On 2026-10-09, a real-host command check was run on PCB3_1 with FR4/1.6 mm: 18 results were returned; drawing source copper thickness read as 1 oz outer and inner; the silkscreen check reported an error and 25 pad nets were unresolved, so `complete=false` and `passed=false`. Non-document-header source content was unchanged before and after the check. Those drawing readouts do not represent order request values. Copper input and drawing comparison in 0.10.92 passed local core 31/31, command/menu 8/8, owner 17/17, and type checking, with independent review complete. Real-host command comparison is complete (see below); the menu form, locating issues, and export dialog had not yet been verified on a real host.
 
-2026-10-09 安装版0.10.92在PCB3_1（FR4、1.6mm、设计4层）只读对照通过：外2/内1时线宽/线距门槛为外0.15、内0.09mm，线距项报21条违规记录；外1/内1时门槛均为0.09mm，线距项通过。两次均返回18项，图纸源铜厚均为1oz并独立列对照，25个焊盘网络未确定及丝印问题仍在，complete=false、passed=false。两次检查前后非DOCHEAD源内容相同；菜单定位与导出对话框未实机验收。
+On 2026-10-09, a read-only comparison using installed version 0.10.92 on PCB3_1 (FR4, 1.6 mm, four design layers) passed: with outer 2/inner 1 oz, the trace width/spacing thresholds were 0.15 mm outer and 0.09 mm inner, and the spacing check reported 21 violation records; with outer 1/inner 1 oz, both thresholds were 0.09 mm and the spacing check passed. Both runs returned 18 results; drawing source copper thickness remained 1 oz on both outer and inner layers and was reported separately. The unresolved nets on 25 pads and the silkscreen issue remained, so `complete=false` and `passed=false`. Non-`DOCHEAD` source content was unchanged before and after both checks. The menu locator and export dialog were not verified on a real host.

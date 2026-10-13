@@ -1,45 +1,45 @@
-# 低频指令附录（32 条，0.10.62 口径）
+# Low-Frequency Command Appendix (32 commands, 0.10.62 reference)
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+> The tables and parameter objects on this page describe commands and `params`, not complete HTTP requests. When sending `/command`, the outer request must include `cmd`, the top-level `instanceId`, and the required `params`. A macro routes only the outer request; its steps inherit the instance. See [setup](setup.md) for a complete example.
 
-不在主文档详表里的低频指令，按对象分组一句话说明。**参数细节一律 `GET /help?cmd=<名>` 在线查**，别猜。
+Commands used infrequently and not listed in detail in the main documentation are grouped by object and described briefly. **Always use `GET /help?cmd=<name>` to look up parameter details online; do not guess.**
 
-## 原理图补充
+## Additional schematic commands
 
-| 指令 | 说明 |
+| Command | Description |
 | --- | --- |
-| `schematic.getPrimitiveAtPoint` | 查询指定坐标处的图元（返回 id+类型），排查"这个位置是什么" |
-| `schematic.setAttribute` | 改器件属性（如位号 R?→R4，key=Designator）。⚠️ 只能改已存在属性；Footprint 别写裸名/空串（见 pitfalls G1/G2） |
+| `schematic.getPrimitiveAtPoint` | Find a primitive at the specified coordinates (returns ID and type); useful for checking “what is at this location?” |
+| `schematic.setAttribute` | Change a component attribute (e.g. reference designator R? → R4, with `key=Designator`). ⚠️ Can only change an existing attribute. Do not set `Footprint` to a bare name or an empty string (see pitfalls G1/G2). |
 
-## lib 库管理（⚠️ 全族记住：modify 后 uuid 可能变化——0.10.62 起三个 Modify 已内置回查，返回 `uuid/uuidChanged/verify`；Copy/Delete 仍信返回值，失败按名复核）
+## Library management (`lib.*`; remember across all families: UUID may change after Modify—since 0.10.62 all three Modify commands perform a built-in lookup and return `uuid`/`uuidChanged`/`verify`; Copy/Delete still trust the returned value, so verify failures by name)
 
-| 指令 | 说明 |
+| Command | Description |
 | --- | --- |
-| `lib.symbolGet` / `lib.symbolModify` / `lib.symbolCopy` / `lib.symbolDelete` | 符号四操作（Modify 0.10.62 起带 uuid 回查） |
-| `lib.footprintGet` / `lib.footprintModify` / `lib.footprintCopy` / `lib.footprintDelete` / `lib.footprintUpdateSource` | 封装四操作+源码写回（Get 对不存在 uuid 会 reject 而非返空，报错≠丢了，按名搜） |
-| `lib.deviceGet` / `lib.deviceCopy` / `lib.deviceDelete` | 器件三操作（目标库重名会失败） |
+| `lib.symbolGet` / `lib.symbolModify` / `lib.symbolCopy` / `lib.symbolDelete` | Four symbol operations (Modify includes a UUID lookup since 0.10.62) |
+| `lib.footprintGet` / `lib.footprintModify` / `lib.footprintCopy` / `lib.footprintDelete` / `lib.footprintUpdateSource` | Four footprint operations plus source write-back (Get rejects an unknown UUID instead of returning empty; an error does not mean the item is gone—search by name) |
+| `lib.deviceGet` / `lib.deviceCopy` / `lib.deviceDelete` | Three device operations (fails if the target library already contains the name) |
 
-## PCB 层/铺铜/过孔/文字
+## PCB layers, copper pours, vias, and text
 
-| 指令 | 说明 |
+| Command | Description |
 | --- | --- |
-| `pcb.addCustomLayer` / `pcb.removeCustomLayer` | 自定义层增删（CUSTOM_1=71 起，只能删 CUSTOM 层） |
-| `pcb.modifyLayer` / `pcb.setLayerLocked` | 改层属性（名/类型/颜色/透明度）/ 锁定层 |
-| `pcb.listPours` / `pcb.modifyPour` / `pcb.rebuildPour` | 铺铜查/改/重铺（listPours 可按网络/层过滤） |
-| `pcb.listVias` / `pcb.modifyVia` | 过孔查/改（网络/位置/孔径/外径） |
-| `pcb.listStrings` / `pcb.modifyString` / `pcb.placeString` | PCB 文字（丝印）查/改/放 |
-| `pcb.setPcbType` | 板子类型（刚性 NORMAL / 柔性 FPC） |
+| `pcb.addCustomLayer` / `pcb.removeCustomLayer` | Add/remove a custom layer (`CUSTOM_1` starts at 71; only `CUSTOM` layers can be removed) |
+| `pcb.modifyLayer` / `pcb.setLayerLocked` | Change layer properties (name/type/color/opacity) / lock a layer |
+| `pcb.listPours` / `pcb.modifyPour` / `pcb.rebuildPour` | List/change/rebuild copper pours (`listPours` can filter by net/layer) |
+| `pcb.listVias` / `pcb.modifyVia` | List/change vias (net/location/hole diameter/outer diameter) |
+| `pcb.listStrings` / `pcb.modifyString` / `pcb.placeString` | List/change/place PCB text (silkscreen) |
+| `pcb.setPcbType` | Set board type (rigid `NORMAL` / flexible `FPC`) |
 
-## PCB 网络类/差分/层叠低频项
+## Low-frequency PCB net, differential-pair, and stackup commands
 
-| 指令 | 说明 |
+| Command | Description |
 | --- | --- |
-| `pcb.deleteNetClass` / `pcb.removeNetFromClass` / `pcb.renameNetClass` | 网络类删/移出/改名 |
-| `pcb.deleteDiffPair` | 删差分对（建/查见 commands-net.md） |
-| `pcb.deleteStackingConfig` / `pcb.setDefaultStackingConfig` | 层叠配置删/设默认（建/应用见 commands-pcb.md） |
-| `pcb.removeNetFromEqualLengthGroup` | 网络移出等长组 |
-| `pcb.getNetPrimitives` | 查网络上的全部图元（走线/过孔/焊盘） |
+| `pcb.deleteNetClass` / `pcb.removeNetFromClass` / `pcb.renameNetClass` | Delete a net class / remove a net from a class / rename a class |
+| `pcb.deleteDiffPair` | Delete a differential pair (see commands-net.md for creation and lookup) |
+| `pcb.deleteStackingConfig` / `pcb.setDefaultStackingConfig` | Delete a stackup configuration / set the default (see commands-pcb.md for creation and application) |
+| `pcb.removeNetFromEqualLengthGroup` | Remove a net from an equal-length group |
+| `pcb.getNetPrimitives` | Get all primitives on a net (tracks/vias/pads) |
 
-## 维护说明
+## Maintenance
 
-新指令默认先进主文档（commands-*.md）或本附录；本附录指令升主文档后从这里删除。文档覆盖率可用工作区 `t_docdiff.py` 核对（差集应只剩误报）。
+Add new commands to the main reference (`commands-*.md`) or this appendix first. Remove a command from this appendix when it is promoted to a main reference. Check documentation coverage with `t_docdiff.py` in the workspace; the remaining differences should be false positives only.

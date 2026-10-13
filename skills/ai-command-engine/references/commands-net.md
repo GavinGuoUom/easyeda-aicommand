@@ -1,52 +1,52 @@
-# 网络类·差分对·生产导出（PCB）
+# Net, Differential-Pair, and Manufacturing Export Commands (PCB)
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+> The tables and parameter objects on this page describe commands and `params`; they are not complete HTTP requests. A `/command` request must include outer `cmd`, top-level `instanceId`, and required `params`. A macro routes only at the outer level; its steps inherit the instance. See [setup](setup.md) for a complete example.
 
-层管理/层叠/等长组/实时 DRC 已并入 [commands-pcb.md](commands-pcb.md) ③⑥，本文只留信号与生产。
+Layer management, stackup, length-matching groups, and real-time DRC are covered in sections ③ and ⑥ of [commands-pcb.md](commands-pcb.md). This page covers nets and manufacturing workflows only.
 
-## 网络类（NetClass）与差分对
+## Net classes and differential pairs
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `pcb.createNetClass` | 建网络类（一组网统一设规则/颜色） | `name`, `nets[]`, `color?` |
-| `pcb.listNetClasses` | 列出网络类 | 无 |
-| `pcb.deleteNetClass` | 删除网络类 | `name` |
-| `pcb.renameNetClass` | 重命名网络类 | `name`, `newName` |
-| `pcb.addNetToClass` / `removeNetFromClass` | 网络类增删成员 | `netClass`, `nets[]` |
-| `pcb.createDiffPair` | 建差分对（USB D+/D- 等） | `name`, `positiveNet`, `negativeNet` |
-| `pcb.listDiffPairs` / `deleteDiffPair` | 列出/删除 | delete: `name` |
-| `pcb.getNetRules` | 读当前设计规则中的网络规则（线宽/间距等，**只读**——写入接口结构复杂暂未开放） | 无 |
-| `pcb.getNetLength` | 网络已布线总长度（等长检查用） | `net` |
-| `pcb.getNetInfo` / `getNetPrimitives` | 网络详细信息 / 网络上全部图元（走线/过孔/焊盘） | `net` |
-| `pcb.highlightNet` | 高亮/取消高亮网络（排查用） | `net` 或 `all:true`, `highlight?` |
+| `pcb.createNetClass` | Create a net class (apply shared rules/color to a group of nets) | `name`, `nets[]`, `color?` |
+| `pcb.listNetClasses` | List net classes | None |
+| `pcb.deleteNetClass` | Delete a net class | `name` |
+| `pcb.renameNetClass` | Rename a net class | `name`, `newName` |
+| `pcb.addNetToClass` / `removeNetFromClass` | Add/remove members of a net class | `netClass`, `nets[]` |
+| `pcb.createDiffPair` | Create a differential pair (for example, USB D+/D-) | `name`, `positiveNet`, `negativeNet` |
+| `pcb.listDiffPairs` / `deleteDiffPair` | List/delete differential pairs | delete: `name` |
+| `pcb.getNetRules` | Read net rules in current design rules (width/clearance, etc.; **read-only** because the write interface is structurally complex and not yet exposed) | None |
+| `pcb.getNetLength` | Total routed length of a net (for length matching) | `net` |
+| `pcb.getNetInfo` / `getNetPrimitives` | Detailed net info / all primitives on a net (tracks/vias/pads) | `net` |
+| `pcb.highlightNet` | Highlight/unhighlight a net for diagnosis | `net` or `all:true`, `highlight?` |
 
-## 生产导出（base64 自行落盘）
+## Manufacturing exports (decode base64 to local files yourself)
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `pcb.exportGerber` | Gerber 打板文件（通常 zip） | `fileName?` |
-| `pcb.exportPickPlace` | 贴片坐标（Pick&Place） | `fileName?`, `fileType?`(xlsx\|csv), `unit?`(mm\|mil) |
-| `pcb.exportDsn` | Specctra DSN（外部自动布线第一步：`exportDsn` → 外部布线器 → `importAutoRouteSes` 导回） | `fileName?` |
-| `pcb.exportNetlist` | PCB 网表；0.10.104 起拒绝零字节文件及空 base64，导出后仍须解析核对 | `fileName?`, `netlistType?`（如 Protel2） |
+| `pcb.exportGerber` | Gerber fabrication files (usually ZIP) | `fileName?` |
+| `pcb.exportPickPlace` | Pick-and-place coordinates | `fileName?`, `fileType?` (xlsx\|csv), `unit?` (mm\|mil) |
+| `pcb.exportDsn` | Specctra DSN (first step for an external autorouter: `exportDsn` → external router → import with `importAutoRouteSes`) | `fileName?` |
+| `pcb.exportNetlist` | PCB netlist; since 0.10.104, rejects zero-byte files and empty base64. Parse and check the export afterward. | `fileName?`, `netlistType?` (such as Protel2) |
 
-## 选择/交叉探针
+## Selection and cross-probing
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `pcb.select` / `pcb.clearSelection` / `pcb.getSelection` | 按 ID 选中/清空/读当前选择 | select: `primitiveIds[]` |
-| `pcb.crossProbe` | 交叉探针：位号/引脚/网络在原理图↔PCB 间联动定位（高亮+选中） | `components?`/`pins?`/`nets?`, `highlight?`, `select?` |
+| `pcb.select` / `pcb.clearSelection` / `pcb.getSelection` | Select by ID / clear / read current selection | select: `primitiveIds[]` |
+| `pcb.crossProbe` | Cross-probe designators/pins/nets between schematic and PCB (locate via linked highlight and selection) | `components?`/`pins?`/`nets?`, `highlight?`, `select?` |
 
-## 原理图杂项补充
+## Additional schematic commands
 
-| 指令 | 说明 | 关键参数 |
+| Command | Description | Key parameters |
 | --- | --- | --- |
-| `schematic.setPinNoConnect` | 给引脚打/取消 X 非连接标识（消除悬空引脚 DRC 提示） | `componentId`, `pinNumbers[]`, `noConnected?` |
-| `schematic.getAttributes` / `setAttribute` | 读/改图元属性（key=Designator/Value/Footprint 等） | `primitiveId`（set 再加 `key`,`value`） |
-| `schematic.getSelection` | 读当前选中的图元 | 无 |
-| `schematic.exportBom` | 导 BOM（xlsx/csv，base64） | `fileName?`, `fileType?` |
-| `schematic.exportPng` | 导原理图 PNG（单边最大 4096px） | `fileName?`, `width?`/`height?` |
-| `schematic.listNets` | 原理图全部网络（`detail:true` 带导线明细） | `detail?` |
+| `schematic.setPinNoConnect` | Set/clear the pin's X no-connect marker (remove floating-pin DRC warnings) | `componentId`, `pinNumbers[]`, `noConnected?` |
+| `schematic.getAttributes` / `setAttribute` | Read/modify primitive attributes (keys such as Designator/Value/Footprint) | `primitiveId` (`setAttribute` also needs `key`,`value`) |
+| `schematic.getSelection` | Read selected primitives | None |
+| `schematic.exportBom` | Export BOM (xlsx/csv, base64) | `fileName?`, `fileType?` |
+| `schematic.exportPng` | Export schematic PNG (maximum 4096 px per side) | `fileName?`, `width?`/`height?` |
+| `schematic.listNets` | List all schematic nets (`detail:true` includes wire details) | `detail?` |
 
-## 调试
+## Debugging
 
-- `system.eval`：扩展上下文执行任意 JS（全局 `eda` 可用、支持 await）。**正常操作禁用**，仅排障；沙箱可能禁 eval（见 pitfalls §8）。
+- `system.eval`: execute arbitrary JavaScript in the extension context (global `eda` is available; `await` is supported). **Disabled for normal operation**; use only for troubleshooting. The sandbox may block `eval` (see pitfalls §8).

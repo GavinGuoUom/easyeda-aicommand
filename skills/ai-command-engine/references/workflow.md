@@ -1,71 +1,70 @@
-# 标准工作流程
+# Standard workflow
 
-## 功能区布局与引脚接线准备
+## Prepare functional-block layout and pin wiring
 
-- 多功能区图纸先规划各区的位置、阅读顺序和标题空间。
-- 区框按实际符号、引脚出线、标签及属性文字的范围留余量。
-- 大型模块和高引脚数器件按实际占用单独留位。
-- 元件间距按符号尺寸调整，不直接套用其他工程的固定坐标。
-- 批量放置前整理料号、预期位号和引脚网络表。
-- 已取得的器件资料按料号复用；当前命令支持批量查询时优先批量查询。
-- 引脚网络表以器件身份和引脚编号定位，多单元器件同时区分单元。
-- 核对 `buildBlock` 返回的 `refMap` 后，再对照实际位号和引脚接线。
-- 电源、地、信号和合法 NC 分别列明；未分配引脚先核实用途。
-- 相近同网引脚优先直连；需用标签时，从实际引脚接线端向符号外侧引出短线。
-- 标签间距按当前单位、文字和邻近引脚调整，不统一套用上游的 10 单位偏移。
-- 生成后检查器件、标签和文字是否留在所属区框内，必要时调整布局或扩大区框。
+- For a drawing with multiple functional blocks, plan their locations, reading order, and title space first.
+- Size each block boundary to leave room for the actual symbols, pin leads, labels, and property text.
+- Reserve space separately for large modules and components with many pins, based on their actual footprint in the schematic.
+- Adjust component spacing for symbol size; do not reuse fixed coordinates from another project.
+- Before batch placement, organize part numbers, expected designators, and the pin-to-net table.
+- Reuse component data already obtained for the same part number. Prefer batch queries when the current command supports them.
+- Identify each pin in the pin-to-net table by component identity and pin number. For multi-unit components, distinguish the unit as well.
+- Check the `refMap` returned by `buildBlock`, then compare it with the actual designators and pin wiring.
+- List power, ground, signals, and valid NC pins separately. Verify the purpose of any unassigned pin first.
+- Prefer direct wires between nearby pins on the same net. When a label is needed, draw a short lead outward from the actual pin connection point.
+- Set label spacing based on the current units, text, and nearby pins. Do not apply the upstream 10-unit offset everywhere.
+- After generation, check that components, labels, and text stay inside their functional-block boundaries. Adjust the layout or enlarge the boundary as needed.
 
-这些要求用于规划和读回检查，不代表 `buildBlock` 已实现按符号尺寸自动避让。
-已有图纸只在授权范围内调整，不因套用功能框而重排全图。
+These requirements guide planning and readback checks. They do not mean `buildBlock` already avoids collisions based on symbol size.
+Adjust an existing drawing only within the authorized scope. Do not rearrange the entire drawing just to apply functional-block frames.
 
-借鉴来源：[官方原理图放置与网络引出技能](https://github.com/easyeda/easyeda-enhanced-schematic-skill/blob/main/SKILL.md)（2026-10-10 核查）。
-这里只吸收布局与批量准备方法；执行仍使用本插件命令及现有保存验收流程。
+Adapted from the [official schematic placement and net lead skill](https://github.com/easyeda/easyeda-enhanced-schematic-skill/blob/main/SKILL.md) (checked 2026-10-10). Only its layout and batch-preparation methods are used here; execution still uses this plugin's commands and existing save/acceptance workflow.
 
-## 画原理图（批量优先）
+## Draw schematics (prefer batch operations)
 
-1. `GET /connections` 核对窗口；每条请求带顶层 `instanceId` → `editor.openDocument` 激活 → 页级请求带 `params.__docUuid` → `schematic.getPageInfo` 读图框。
-2. **放器件优先 `buildBlock`**：一个功能区一条命令；零散补充才 `placeDevice`。同功能器件聚拢。
-3. **连线优先 `batchWire`**：一批接线一次提交；单条修补用 `labelWire`（单脚）/`linkWire`（双脚）；`connectPin`/`drawWire`/`placeNetLabel` 仅特殊场景（母排、多点直连、批量改色）。
-4. **读回自查**：`listWires`+`exportNetlist` 审计每个网络的引脚成员（别信"画了就通"）。
-5. `runDrc`（自动取稳定值）→ 致命清零；历史图"多个网络名"警告跑 `dedupeWireNets`。
-6. `save`。
+1. Run `GET /connections` and verify the window. Include the top-level `instanceId` in every request. Activate the page with `editor.openDocument`; include `params.__docUuid` in page-level requests; read the frame with `schematic.getPageInfo`.
+2. **Prefer `buildBlock` for component placement:** use one command per functional block. Use `placeDevice` only for occasional additions. Group components that serve the same function.
+3. **Prefer `batchWire` for wiring:** submit a batch in one request. For a single repair, use `labelWire` for one pin or `linkWire` for two pins. Use `connectPin`, `drawWire`, or `placeNetLabel` only for special cases such as buses, multi-point direct connections, or batch recoloring.
+4. **Read back and audit:** use `listWires` and `exportNetlist` to audit the pin membership of every net. Do not assume that drawing a wire connected it.
+5. Run `runDrc` (it automatically obtains a stable result) and clear all fatal errors. For historical drawings with “multiple net names” warnings, run `dedupeWireNets`.
+6. Save with `save`.
 
-## 整理已有原理图
+## Organize an existing schematic
 
-- 器件乱/连线乱：`autoLayout`（先 dryRun 看 plan/connections，确认后真跑；跑前保存，跑完检查 moved、失败 error.cause（partial、moved、phase、stateDifferences）、rewired、drc。部分移动失败时停止后续写入并检查现场，依据 moved 和备份受控恢复；不承诺 UI undo 可用）。
-- 标签问题：`fixNetLabels` 全科体检（dryRun 默认 true）；浮标残留 `pruneFloatingLabels`（dryRun 默认 `false`；预览须显式传 `true`；分批看 batches/unprocessed）。
-- 网络碎（人工拖标签等）：`repairNet` 收尾。
+- Messy components or wires: run `autoLayout` with `dryRun` first and review `plan` and `connections`. Save before the actual run. Afterwards, inspect `moved`, `error.cause` (`partial`, `moved`, `phase`, and `stateDifferences`), `rewired`, and DRC. If some moves fail, stop later writes and inspect the current state. Use `moved` and a backup for controlled recovery; UI undo is not guaranteed.
+- Label issues: run `fixNetLabels` as a full check (`dryRun` defaults to `true`). For floating remnants, use `pruneFloatingLabels` (`dryRun` defaults to `false`; explicitly set `true` to preview, then inspect `batches` and `unprocessed`).
+- Fragmented nets, such as after manually dragging labels: finish with `repairNet`.
 
-## 元器件摆放与表达（以项目及器件要求为准）
+## Component placement and schematic representation (follow project and component requirements)
 
-1. 去耦电容在原理图上应能辨认对应电源引脚/电源域；实际连接、容量、数量及 PCB 距离按具体器件资料与项目工况确定。不能从示意摆放推导同名电源脚不可并网。
-2. 输入/输出电容与相关引脚的关系表达清楚，PCB 就近布局要求仍须在 PCB 上核验。
-3. 同功能块优先真实连线，跨块按需标签；合法未连接引脚明确标注 NC，不为消除视觉孤立而添加需求外连接。
-4. 避免导线穿符号本体、标签压引脚、文字重叠；移动后复核网络和预期端点。
-5. 本技能自包含，不要求用户另装作者的原理图优化技能。
+1. The schematic should make the related power pin or power domain recognizable for each decoupling capacitor. Determine actual connections, capacitance, quantity, and PCB distance from the specific component data and project conditions. A schematic arrangement alone does not imply that same-named power pins must be on separate nets.
+2. Clearly show the relationship between input/output capacitors and the related pins. Verify near-component placement on the PCB itself.
+3. Prefer actual wires within one functional block and labels across blocks as needed. Mark valid unconnected pins as NC. Do not add an unrequested connection just to remove a visual stub.
+4. Avoid wires through symbol bodies, labels over pins, and overlapping text. After moving anything, recheck the nets and intended endpoints.
+5. This skill is self-contained; it does not require the user to install the author's separate schematic-layout skill.
 
-## 原理图转 PCB
+## Convert a schematic to PCB
 
-1. 原理图先清到 0 致命。
-2. 0.10.105 起，`pcb.importChanges` 即使 SDK 返回 true，也以 `partial:true,retryable:false,outcome:pending-verification` 停止宏。SDK 返回仅说明调用结束，可能仍需在 EDA 点击“应用修改”。不自动重试；处理确认窗口后，独立读回预期器件和网络，再继续后续任务。
-3. 导入后 `listComponents`+逐器件 `getComponentPads` 比对焊盘网络与网表。
-4. 布局：零散 `moveComponent`；功能区成组用 `groupBySchematicRegions`（先 dryRun）。⚠️ DRC 不查本体/丝印挤压——摆完跑 `checkPlacement`，大本体器件（连接器、电感）加 `margin`（10~30mil）。
-5. 布线：`routeTrack`（大电流先 `knowledge.widthForCurrent`）、`placeVia`、`pourCopper`（GND 整面）；量大走自动布线闭环（先锁电源网，见 commands-pcb.md 附录 ⑦）。
-6. `runDrc` → 报告违规 → `save`。
+1. Clear schematic DRC to 0 fatal errors first.
+2. Since 0.10.105, even if the SDK returns `true`, `pcb.importChanges` stops the macro with `partial:true,retryable:false,outcome:pending-verification`. The SDK response only means the call ended; the user may still need to click “Apply Changes” in EDA. Do not retry automatically. Handle any confirmation dialog, independently read back the expected components and nets, then continue.
+3. After import, compare pad nets with the netlist using `listComponents` and `getComponentPads` for each component.
+4. Placement: move individual components with `moveComponent`; group functional blocks with `groupBySchematicRegions` after checking `dryRun`. ⚠️ DRC does not detect body/silkscreen crowding. After placement, run `checkPlacement`; add `margin` (10–30 mil) for components with large bodies, such as connectors and inductors.
+5. Routing: use `routeTrack`; for high-current nets, query `knowledge.widthForCurrent` first. Use `placeVia` and `pourCopper` for a full-board ground pour. For large jobs, use the autorouting workflow; lock power nets first (see appendix ⑦ in commands-pcb.md).
+6. Run `runDrc`, report violations, and save.
 
-## 收尾纪律
+## Closeout discipline
 
-每阶段 save；破坏性操作前确认目标 ID、留备份（代理自动备份 .epro 或手动 `project.exportFile`）；所有修改以读回为准（带 `readback` 的返回也不信单次值）。
+Save at each stage. Before a destructive operation, verify the target ID and keep a backup (the proxy automatically backs up `.epro`, or manually use `project.exportFile`). Treat readback as the source of truth for all changes; even a response containing `readback` should not be trusted from a single value alone.
 
-## 工作守则（全文）
+## Full operating rules
 
-1. **先查再画**：改前先 `project.getInfo`/`listComponents` 了解现状。
-2. **先核对目标、再激活**：每条请求带顶层 `instanceId`，不以 `/select` 代替；`schematic.*`/`pcb.*` 前先 `editor.openDocument`。
-3. **批量用 macro**：>2 步合并一条 macro 发送。
-4. **画完必读回**：导线 `listWires`、网络 `exportNetlist`、PCB 网络 `getComponentPads` 逐项审计，不假设成功。
-5. **每阶段 save**。
-6. **收尾必 DRC** 如实报告；原理图 0 致命才允许 `pcb.importChanges`。
-7. **不盲目重试**：读 `error.message`/`suggestion` 修正再发；同一指令连错 3 次停下换方案。
-8. **专业知识先查库**：阻抗/等长/载流先 `knowledge.query`，按 constraints/guidance 执行。
-9. **扩展开发另行处理**：普通绘图使用本插件指令。任意原生 API 调试不属于本技能安装流程；作者曾用的 49620 网关未包含在此仓库，不能假定用户已安装或据此执行代码。
-10. **按指令授权范围操作**：不超出被调用指令的授权范围修复、删除或恢复。`dedupeWireNets` 与 `autoRouteStatus` 在已写入后失败时会尝试整页快照恢复并读回；恢复失败或未确认仍报错，不保证成功。`autoLayout` 本身不自动恢复。官方创建类接口有假失败（返回空但实际已创建），不信返回值，以文档实际内容为准。
+1. **Inspect before drawing:** before changes, use `project.getInfo` and `listComponents` to understand the current state.
+2. **Verify the target before activation:** include the top-level `instanceId` in every request; do not use `/select` as a substitute. Call `editor.openDocument` before `schematic.*` or `pcb.*`.
+3. **Batch with `macro`:** combine more than two steps into one macro.
+4. **Always read back after drawing:** audit wires with `listWires`, nets with `exportNetlist`, and PCB nets with `getComponentPads` item by item. Do not assume success.
+5. **Save at each stage.**
+6. **Always finish with DRC** and report it truthfully. `pcb.importChanges` is allowed only after 0 fatal schematic errors.
+7. **Do not blindly retry:** read `error.message` and `suggestion`, correct the request, then send it. After the same command fails three times consecutively, stop and choose another approach.
+8. **Check the knowledge base first for engineering guidance:** query `knowledge.query` for impedance, length matching, or current capacity, then follow its `constraints` and `guidance`.
+9. **Handle extension development separately:** use this plugin's commands for ordinary drawing. Native API debugging is not part of this skill's installation workflow. The 49620 gateway once used by the author is not included in this repository; do not assume the user has it or run code through it.
+10. **Stay within the command's authorization scope:** do not repair, delete, or restore beyond the scope of the invoked command. If `dedupeWireNets` or `autoRouteStatus` fails after writing, it attempts a full-page snapshot restore and readback; if recovery fails or is unconfirmed, the command still reports an error and does not guarantee recovery. `autoLayout` does not recover automatically. Some official creation APIs can falsely fail (return empty even though the object was created); trust the document's actual contents, not just the response.

@@ -1,100 +1,100 @@
-# PCB 扇出、局部铜皮、焊盘外扩与网络丝印
+# PCB Fanout, Local Copper, Pad Expansion, and Net Silkscreen
 
-> 这些操作都先生成只读计划，再将完整计划对象传给对应执行命令。外层 `/command` 仍需带当前 PCB 窗口的顶层 `instanceId`；连接和请求格式见 [setup.md](setup.md)。所有长度与坐标使用 mil。
+> These operations first generate a read-only plan, then pass the complete plan object to the corresponding execution command. The outer `/command` request still needs the top-level `instanceId` of the current PCB window. See [setup.md](setup.md) for connection and request formats. All lengths and coordinates are in mil.
 
-## 矩形板框读取（0.10.97）
+## Rectangular board-outline reading (0.10.97)
 
-已有直线闭环继续使用。板框层 Polyline 新支持严格七项 `R` 路径，要求坐标与尺寸有效、宽高为正、旋转和圆角均为 0。SDK 的 `R` 坐标是左上角，矩形下边为 `y-height`。未知路径、读取不完整或异常坐标会阻止执行；不能因为另有一个合法矩形而忽略未知板框。
+Existing straight closed loops remain supported. The board-outline `Polyline` layer now also supports a strict seven-item `R` path, provided the coordinates and dimensions are valid, width and height are positive, and rotation and corner radius are both 0. The SDK's `R` coordinates specify the top-left corner; the rectangle's bottom edge is `y-height`. Unknown paths, incomplete reads, or abnormal coordinates block execution; an unknown board outline cannot be ignored just because another valid rectangle exists.
 
-扇出沿用原有闭环处理和对几何边界的间距检查，没有新增板框笔画半宽余量。局部铜皮仍仅接受一个闭环，矩形四边同时参与板内与原有板边宽度/间距检查。多个闭环、旋转矩形、圆角矩形及曲线支持范围不因本次适配而扩大。
+Fanout retains the existing closed-loop handling and spacing checks against geometric boundaries; no extra board-outline stroke half-width margin was added. Local copper still accepts only one closed loop, and all four rectangle edges participate in the board-interior and existing board-edge width/spacing checks. This adaptation does not expand support to multiple loops, rotated rectangles, rounded rectangles, or curves.
 
-2026-10-10 隔离实测：0.10.97 两项只读计划均识别矩形板框；扇出线及过孔创建、逐项读回和保存关闭重开核对通过。局部铜皮已创建边框，但宿主反向返回同一闭环时被严格数组比较拦截，未执行填充，不能视为完成。
+Isolated test on 2026-10-10: both read-only plans in 0.10.97 recognized the rectangular board outline; creation of fanout traces and vias, item-by-item read-back, and save/close/reopen verification passed. A local copper outline was created, but the host returned the same loop in reverse order and strict array comparison rejected it; fill was not executed, so this cannot be considered complete.
 
-## 指令
+## Commands
 
-| 指令 | 用途 | 参数 |
+| Command | Purpose | Parameters |
 | --- | --- | --- |
-| `pcb.getFanoutPlan` | 只读规划焊盘扇出线和通孔 | `padIds?`、`componentIds?`、`net?` 三选一；方向、层及尺寸参数见下文 |
-| `pcb.fanout` | 执行扇出计划 | `plan`：`pcb.getFanoutPlan` 返回的完整对象 |
-| `pcb.getAutoCopperPlan` | 只读规划局部覆铜或固定填充 | `targetIds`、`layer` 必填；`net?`、`expansion?`、`generationType?`、倒角选项可选 |
-| `pcb.autoCopper` | 执行自动局部铜皮计划 | `plan`：`pcb.getAutoCopperPlan` 返回的完整对象 |
-| `pcb.getPourFillReadback` | 只读核验指定边框的实填充 | `primitiveId`、预期 `net`、`layer: top或bottom` 必填 |
-| `pcb.getPadExpansionPlan` | 只读规划焊盘外扩环形 | `targetIds`、`expansion`、`generationType` 必填 |
-| `pcb.expandPads` | 执行焊盘外扩计划 | `plan`：`pcb.getPadExpansionPlan` 返回的完整对象 |
-| `pcb.getNetSilkscreenPlan` | 只读规划可编辑网络文字丝印 | `targetIds`、`layer` 和放置方式必填；字体参数可选 |
-| `pcb.generateNetSilkscreen` | 执行网络丝印计划 | `plan`：`pcb.getNetSilkscreenPlan` 返回的完整对象 |
+| `pcb.getFanoutPlan` | Read-only plan for pad fanout traces and vias | Choose exactly one of `padIds?`, `componentIds?`, or `net?`; direction, layer, and size parameters below |
+| `pcb.fanout` | Execute a fanout plan | `plan`: the complete object returned by `pcb.getFanoutPlan` |
+| `pcb.getAutoCopperPlan` | Read-only plan for local copper pour or fixed fill | Required: `targetIds`, `layer`; optional: `net?`, `expansion?`, `generationType?`, and chamfer options |
+| `pcb.autoCopper` | Execute an automatic local-copper plan | `plan`: the complete object returned by `pcb.getAutoCopperPlan` |
+| `pcb.getPourFillReadback` | Read-only verification of actual fill for a specified outline | Required: `primitiveId`, expected `net`, and `layer: top or bottom` |
+| `pcb.getPadExpansionPlan` | Read-only plan for pad expansion rings | Required: `targetIds`, `expansion`, `generationType` |
+| `pcb.expandPads` | Execute a pad-expansion plan | `plan`: the complete object returned by `pcb.getPadExpansionPlan` |
+| `pcb.getNetSilkscreenPlan` | Read-only plan for editable net-name silkscreen text | Required: `targetIds`, `layer`, and placement method; optional font parameters |
+| `pcb.generateNetSilkscreen` | Execute a net silkscreen plan | `plan`: the complete object returned by `pcb.getNetSilkscreenPlan` |
 
-先规划并检查 `executable`、目标、网络、层、几何、警告和覆盖信息。`executable:false` 时不得提交执行命令。计划包含 `documentUuid`、`operation`、`units`、`inputs`、设计源码和 DRC 规则 `baseline`、`targets`、`groups`、`plannedPrimitives`、`coverage`、`warnings` 与 `provenance` 等内容。执行命令要求原样提供完整计划；不要只拼出部分字段。
+Plan first and inspect `executable`, targets, nets, layers, geometry, warnings, and coverage. Do not send an execution command when `executable:false`. Plans include fields such as `documentUuid`, `operation`, `units`, `inputs`, design-source and DRC-rule `baseline`, `targets`, `groups`, `plannedPrimitives`, `coverage`, `warnings`, and `provenance`. Execution commands require the complete plan exactly as returned; do not construct a partial object by copying selected fields.
 
-执行前会核对 PCB 焦点、文档身份、源码与规则基线，并根据当前对象重算目标和几何计划；与提交计划不符就拒绝写入。每个 SDK 操作依序执行并核对焦点。写入结果逐项读回；失败时停止后续步骤，回执说明已创建/已核验项目和未执行步骤。命令不自动保存、回滚或重试；失败后先只读检查现场，再决定是否保存或继续。
+Before execution, the plugin checks PCB focus, document identity, source and rule baselines, and recalculates targets and geometry from current objects. It rejects a write if these differ from the submitted plan. SDK operations run sequentially with focus checks. Written items are read back one by one. On failure, later steps stop, and the receipt identifies created/verified items and steps not executed. Commands do not automatically save, roll back, or retry. After failure, inspect the current state read-only before deciding whether to save or continue.
 
-## 焊盘扇出
+## Pad fanout
 
-`padIds`、`componentIds`、`net` 必须且只能指定一类目标。`direction` 可用 `auto`、`8directions` 或 `N`、`NE`、`E`、`SE`、`S`、`SW`、`W`、`NW`；缺省为 `auto`。`auto` 与 `8directions` 都会尝试八个方向并选择可用的较短路线。`staggerLength` 为相邻目标的参差距离，缺省为 0 mil。
+Exactly one of `padIds`, `componentIds`, or `net` must be specified. `direction` can be `auto`, `8directions`, or `N`, `NE`, `E`, `SE`, `S`, `SW`, `W`, `NW`; it defaults to `auto`. Both `auto` and `8directions` try eight directions and select a shorter available route. `staggerLength` is the stagger distance between adjacent targets and defaults to 0 mil.
 
-必须明确提供 `lineLength`、`lineWidth`、`viaDiameter`、`holeDiameter` 和 `clearance`，单位均为 mil；当前没有核实可统一适用的 DRC 规则字段，不会从规则结构猜默认值。缺任一数值、孔径不小于过孔外径、几何/网络/层数据不完整或搜索无结果时，计划不可执行。多层或通孔焊盘必须明确 `layer: "top"` 或 `"bottom"`；顶/底 SMT 焊盘保留其实际铜层。工具按当前实现创建通孔，不能把结果当作盲孔或埋孔扇出。
+Explicitly provide `lineLength`, `lineWidth`, `viaDiameter`, `holeDiameter`, and `clearance`, all in mil. No DRC rule field has been verified as universally applicable, so the plugin will not guess defaults from the rule structure. If any value is missing, the hole diameter is not smaller than the via outer diameter, geometry/net/layer data is incomplete, or route search finds no result, the plan is not executable. Multilayer or through-hole pads require an explicit `layer: "top"` or `"bottom"`; top/bottom SMT pads retain their actual copper layer. The current tool creates through vias; do not treat its result as blind or buried via fanout.
 
-受支持的椭圆、长圆和圆角矩形焊盘按不大于 10 度的角度步长采样，并按弓高误差向外保守膨胀；这不代表所有曲线焊盘均受支持。焊盘复杂多边形中的 `C`/`ARC`/`CARC` 曲线、曲线铜面或区域，以及弧形板框或板内孔边界当前不可安全解析，会使计划不可执行。单独的圆弧走线可按弓高误差膨胀后作为障碍处理。
+Supported oval, obround, and rounded-rectangle pads are sampled at angular steps no greater than 10 degrees and conservatively expanded outward according to sagitta error. This does not mean all curved pads are supported. Curves (`C`/`ARC`/`CARC`) in complex pad polygons, curved copper surfaces or regions, and arc-shaped board outlines or board-interior boundaries cannot currently be parsed safely and make the plan non-executable. A standalone arc track can be treated as an obstacle after expansion by sagitta error.
 
-计划会返回目标焊盘的真实坐标、网络与层、路线分组、拟创建线段/过孔、候选搜索次数及限制状态。搜索每个方向最多检查 20,000 个候选；若达到上限，`coverage.searchLimited` 与组内状态会显示受限。缺少完整障碍、板框、禁布区或目标形状数据时，不应把部分几何当作安全路线。仅选网络意味着选中该网络的目标焊盘来扇出，不代表该网络已全部连通。
+The plan reports actual target-pad coordinates, net and layer, route groups, proposed traces/vias, candidate search count, and any limitations. Search checks at most 20,000 candidates per direction. When the limit is reached, `coverage.searchLimited` and the group status show the limit. If obstacle, board-outline, keepout, or target-shape data is incomplete, do not treat partial geometry as a safe route. Selecting a net means fan out target pads on that net; it does not mean that the entire net is connected.
 
-执行按计划逐段新建线与通孔，并按图元 ID 读回网络、层、坐标和尺寸。成功回执含 `createdIds`、`verifiedIds`、逐项 `readback` 及 `saved:false`。这只确认新图元与计划相符，不代表 DRC 通过、网络完整连通或制造验收。
+Execution creates new traces and vias segment by segment and reads back net, layer, coordinates, and dimensions by primitive ID. A successful receipt includes `createdIds`, `verifiedIds`, per-item `readback`, and `saved:false`. This confirms only that new primitives match the plan; it does not mean DRC passed, the net is fully connected, or manufacturing requirements are met.
 
-## 自动局部铜皮
+## Automatic local copper
 
-`targetIds` 是必填、不重复的图元 ID，可指焊盘、过孔或器件；器件会展开为焊盘。`layer` 必须明确为 `top` 或 `bottom`。`net` 可选，用于按网络筛选目标。`expansion` 为外扩 mil，缺省 5；`generationType` 为 `pour` 或 `fill`，缺省 `pour`。倒角选项为 `enableChamfer`（默认 `false`）、`chamferType`（默认 `straight`）和 `chamferWidth`（默认 5 mil）。
+`targetIds` is required and must contain unique primitive IDs; IDs can refer to pads, vias, or components. Components are expanded to their pads. `layer` must explicitly be `top` or `bottom`. Optional `net` filters targets by net. `expansion` is the outward expansion in mil and defaults to 5. `generationType` is `pour` or `fill` and defaults to `pour`. Chamfer options are `enableChamfer` (default `false`), `chamferType` (default `straight`), and `chamferWidth` (default 5 mil).
 
-计划按网络和目标铜层分组，分别生成多边形，不把不同网络合并为同一片。普通 SMT 焊盘不会投影到另一面。计划列出已选和排除目标、各组几何、实际边界/间距/裁剪处理、规则信息、诊断与退化说明；不完整的对象或规则数据、未解析几何及冲突会使计划不可执行。边界生成和避让沿用 `JLCEDA/eext-auto-copper-shape` 的相关几何链，但计划不是完整板级 DRC 结论：目标附近有未处理圆弧时计划不可执行；只接受已核验的单一闭环板框（原生直线或上述受支持矩形），多环或弧线板框不可执行。阅读 `coverage` 和 `warnings`，不要把有限覆盖说成完整制造检查。
+The plan groups targets by net and target copper layer, then creates separate polygons; it does not merge different nets into one region. Ordinary SMT pads are not projected onto the opposite side. The plan lists selected and excluded targets, each group's geometry, actual boundary/spacing/clipping handling, rule information, diagnostics, and degradation notes. Incomplete object or rule data, unresolved geometry, or conflicts make the plan non-executable. Boundary generation and clearance reuse the relevant geometry pipeline from `JLCEDA/eext-auto-copper-shape`, but the plan is not a complete board-level DRC conclusion: if an untreated arc is near a target, the plan is non-executable. Only a verified single-loop board outline is accepted (native straight segments or the supported rectangle above); multi-loop or arc outlines are not executable. Read `coverage` and `warnings`; do not describe limited coverage as a complete manufacturing check.
 
-默认 `generationType: "pour"` 会逐组创建覆铜边框、重建填充并读回新填充图元；成功结果区分几何读回、覆铜顺序源码读回和填充读回。`generationType: "fill"` 创建固定填充几何并读回，不执行覆铜边框重建流程。执行不自动运行 DRC，也不自动保存。部分失败不自动撤销已创建的图元。
+The default `generationType: "pour"` creates copper-pour outlines per group, rebuilds the fills, and reads back the new fill primitives. Success results distinguish geometry read-back, copper-pour ordering source read-back, and fill read-back. `generationType: "fill"` creates and reads back fixed-fill geometry without rebuilding copper-pour outlines. Execution does not automatically run DRC or save. Partial failure does not automatically undo primitives already created.
 
-## 单环几何读回（0.10.98）
+## Single-loop geometry read-back (0.10.98)
 
-仅创建后的几何读回允许单个直线闭环循环换起点、整体反向及一维/二维单环包装差异。要求有限坐标、明确闭合和至少三个不同顶点，按有序顶点精确比较；不增加容差、重采样或共线点消除。多环继续严格比较，不扩大孔洞或曲线支持。网络、层和写入前完整计划核对保持不变。
+Only after-creation geometry read-back allows a single straight closed loop to differ by a changed start vertex, full reversal, or one-/two-dimensional single-loop wrapping. It still requires finite coordinates, explicit closure, and at least three distinct vertices, and compares ordered vertices exactly. No tolerance, resampling, or collinear-point removal is added. Multi-loop geometry continues to use strict comparison; support for holes or curves is not expanded. Net, layer, and complete pre-write plan checks are unchanged.
 
-读回证据保留计划源、实际源及比较方式。真实坐标、边、网络或层不一致时仍停止后续写入并报告部分执行；不要重复提交旧计划。0.10.98 实机已通过边框反向比较与排序读回，重建返回成功；随后的实填充 SDK 适配校验失败，原命令仍未完成。
+Read-back evidence retains the planned source, actual source, and comparison method. If actual coordinates, edges, net, or layer differ, later writes still stop and partial execution is reported; do not resubmit the old plan. In 0.10.98, real-host comparison and ordered read-back after outline reversal passed, and rebuild returned success. A subsequent actual-fill SDK adaptation check failed, so the original command remained incomplete.
 
-## 实填充读回（0.10.99）
+## Actual fill read-back (0.10.99)
 
-填充图元通过关联的 Pour ID 独立读取父边框，核对 ID、网络与层；结果注明网络和层来自父边框。填充子区域的 path 是复杂多边形对象，使用 getSource() 读取原始路径。核对 fill:true 子区域、路径的非空数组及标量结构；这不证明填充几何正确或满足制造要求。异常保留证据并停止后续写入，全部核对完成后才标记成功。实填充会受覆铜规则裁剪，不要求与原边框严格相等，不推断内部源码坐标单位。
+The fill primitive's associated Pour ID is used to read its parent outline independently and check ID, net, and layer; the result states that net and layer come from the parent outline. A fill subregion's `path` is a complex polygon object, whose original path is read with `getSource()`. The check verifies a `fill:true` subregion, a non-empty path array, and scalar structure. It does not prove that fill geometry is correct or meets manufacturing requirements. Exceptions preserve evidence and stop later writes; success is reported only after all checks complete. Actual fill may be clipped by copper-pour rules, so it is not required to exactly match the parent outline, and source coordinate units are not inferred.
 
-`pcb.getPourFillReadback` 与执行后的校验共用读回逻辑。提供已知边框 `primitiveId`、预期 `net` 和 `layer`，可检查已存在填充，不创建、重建、保存或解除保护。它用于只读恢复核验，不能将旧命令的部分失败改称成功。2026-10-10 在0.10.99隔离宿主对0.10.98已创建并重建的同一铜皮只读核验通过。实测确认 Poured 无网络/层 getter，path.getSource() 返回非空路径；父边框与此前已核对边界一致。保存关闭重开后父边框、关联填充、路径及扇出图元保持一致，DRC为0错误/0警告。此证据覆盖新共用读回逻辑与持久性；没有在0.10.99重复执行新建铜皮的完整命令，也不改变0.10.98原命令的部分失败记录。
+`pcb.getPourFillReadback` and post-execution checks share the same read-back logic. Given a known outline `primitiveId`, expected `net`, and `layer`, it can inspect an existing fill without creating, rebuilding, saving, or unprotecting anything. It supports read-only recovery checks and cannot reclassify a partial failure of an earlier command as success. On 2026-10-10, read-only inspection on an isolated 0.10.99 host passed for the same copper area created and rebuilt in 0.10.98. Testing confirmed that Poured has no net/layer getter and `path.getSource()` returns a non-empty path; the parent outline matched the boundary checked earlier. After save/close/reopen, the parent outline, associated fill, path, and fanout primitives remained consistent, and DRC reported 0 errors/0 warnings. This evidence covers the new shared read-back logic and persistence. The full copper-creation command was not rerun on 0.10.99, and the 0.10.98 record of the original command's partial failure remains unchanged.
 
-## 焊盘外扩（0.10.103）
+## Pad expansion (0.10.103)
 
-`targetIds` 指定焊盘或器件 ID。器件展开为其焊盘，相同焊盘只处理一次。`expansion` 为大于 0 的 mil 数值。`generationType` 必须明确为 `noPours`（禁止铺铜）、`noFills`（禁止填充）或 `solderMask`（阻焊层外扩图形）。
+`targetIds` specifies pad or component IDs. A component expands to its pads, and each pad is processed only once. `expansion` is a positive mil value. `generationType` must be explicitly one of `noPours` (keep out of copper pours), `noFills` (keep out of fills), or `solderMask` (solder-mask expansion geometry).
 
-输出是外轮廓减去原焊盘轮廓形成的环形，不修改原焊盘属性。顶层或底层焊盘在本面生成；多层焊盘在顶、底两面生成。首版支持椭圆、长圆和矩形（含圆角）外形。按层变化外形、自定义多边形及未核实朝向的正多边形会使整个计划不可执行。曲线外形通过采样近似，需在宿主检查真实边界。
+Output is an annulus formed by subtracting the original pad outline from the expanded outer outline; it does not modify original pad attributes. Top- or bottom-layer pads generate on that side; multilayer pads generate on both top and bottom. The initial version supports oval, obround, and rectangular (including rounded-corner) shapes. Shapes that vary by layer, custom polygons, and regular polygons whose orientation has not been verified make the entire plan non-executable. Curved shapes are approximated by sampling; inspect the actual boundary in the host.
 
-禁止区域将每面环形拆成两个无孔多边形；两片并集须与原环形相同。阻焊层仍使用带内孔的双环填充。计划保留完整环形与每片轮廓，不能删减后提交。
+Keepout output splits each side's annulus into two hole-free polygons; their union must equal the original annulus. Solder-mask output remains a double-ring fill with an inner hole. The plan retains the complete annulus and each piece; do not remove pieces before submission.
 
-图元线宽明确为 0.2 mil，并按此值创建和读回。`expansion` 表示路径轮廓的外扩量；线宽对最终阻焊或禁区输出边界的影响尚待验证，不应直接据此承诺制造开窗尺寸。
+Primitive line width is explicitly 0.2 mil and is used for creation and read-back. `expansion` is the outward offset of the path outline. The effect of line width on the final solder-mask or keepout boundary has not been verified; do not use it to promise a manufacturing opening size.
 
-执行前重新读取目标和重算完整计划。创建后按 ID 核对图元类型、层、规则和几何，并从当前工程源码核对完整路径；坐标仅容许 0.0001 mil 的序列化偏差。源码即时读回不代表保存后仍保留。出现结果不明时停止，先读取现场再决定下一步。不自动保存、删除旧结果或重试。
+Before execution, targets are read again and the complete plan is recalculated. After creation, primitive type, layer, rules, and geometry are checked by ID, and the complete path is checked against current project source. Coordinates allow only a 0.0001 mil serialization difference. Immediate source read-back does not prove the data persists after saving. If the result is uncertain, stop and inspect the current state before proceeding. The command does not automatically save, delete old results, or retry.
 
-## 网络文字丝印（0.10.101 候选）
+## Net-name silkscreen (0.10.101 candidate)
 
-`targetIds` 指定焊盘或器件 ID。不同焊盘即使同网也分别生成丝印。重复焊盘去重；空网络在 `excludedTargets` 中列明并跳过。`layer` 必须明确为 `top-silk` 或 `bottom-silk`。
+`targetIds` specifies pad or component IDs. Separate silkscreen text is generated for different pads, even if they share a net. Duplicate pads are deduplicated; pads with empty nets are listed in `excludedTargets` and skipped. `layer` must explicitly be `top-silk` or `bottom-silk`.
 
-放置方式二选一：
+Choose one placement method:
 
-- `position: top|bottom|left|right` 与非负 `offset` 配套。锚点按 SDK 返回的旋转后焊盘边界计算。
-- `placements: [{padId,x,y,align}]` 逐个指定锚点。`align` 为 `left|center|right`，必须覆盖所有有网络名的目标焊盘。
+- Use `position: top|bottom|left|right` with a non-negative `offset`. The anchor is calculated from the SDK-returned rotated pad boundary.
+- Use `placements: [{padId,x,y,align}]` to specify an anchor for each pad. `align` is `left|center|right`, and every target pad with a net name must be covered.
 
-可选 `fontFamily`、`fontSize`、`lineWidth`、`rotation` 和 `mirror`。默认分别为 `Arial`、50 mil、8 mil、0° 和 `false`。底层不自动推断镜像，应按需要显式指定。文字可编辑，本版不提供文字转图片。
+Optional parameters are `fontFamily`, `fontSize`, `lineWidth`, `rotation`, and `mirror`. Defaults are `Arial`, 50 mil, 8 mil, 0°, and `false`, respectively. The lower layer is not automatically mirrored; set it explicitly as needed. Text remains editable; this version does not convert text to an image.
 
-计划返回 `plannedStrings`、目标及排除原因。执行后独立读回文字属性。未执行全局碰撞检测，`offset` 也不保证旋转文字与焊盘之间的净间距。需检查丝印、阻焊开窗及现有图元之间的间距。成功或部分失败后均须重新规划，重复生成相同位置的文字仍可能重叠。
+The plan returns `plannedStrings`, targets, and exclusion reasons. After execution, text attributes are read back independently. No global collision check is performed, and `offset` does not guarantee clearance between rotated text and a pad. Check spacing among silkscreen, solder-mask openings, and existing primitives. Re-plan after success or partial failure; generating text again at the same location can still cause overlap.
 
-2026-10-10 在 EDA 4.1.71 安装 0.10.101 后，8 条网络文字的创建与独立读回通过。保存关闭重开后文字保留，覆盖顶/底丝印、同网分别标注、底层镜像和 90° 旋转。旧计划再次执行被写前拒绝，未新增文字。默认相对位置可能与位号或其他文字重叠，仍须视觉检查。
+On 2026-10-10, after installing 0.10.101 on EDA 4.1.71, creation and independent read-back of eight net labels passed. Text persisted after save/close/reopen, covering top/bottom silkscreen, separate labels for pads on the same net, bottom-layer mirroring, and 90° rotation. Re-executing the old plan was rejected before writing and added no text. Default relative placement may overlap reference designators or other text; visual inspection is still required.
 
-0.10.101 焊盘外扩未通过。禁止区域即时源码有内外两环，保存关闭重开后却仅剩外环；阻焊填充的双环能保留。另发现 SDK 多边形 getter 只返回外环，0 线宽实际成为 0.2 mil，空网络 getter 的诊断归一化为 null，原始类型当时未区分。失败样本不能当作合格外扩结果，也不能仅修读回判断就宣称持久化问题解决。
+Pad expansion in 0.10.101 did not pass. Keepout immediate source showed inner and outer rings, but only the outer ring remained after save/close/reopen; solder-mask double-ring fill persisted. It was also found that the SDK polygon getter returns only the outer ring, zero line width becomes 0.2 mil in practice, and the empty-net getter diagnostic was normalized to `null` without distinguishing the original value type at the time. The failed sample is not a qualified expansion result. Fixing only read-back checks would not prove the persistence issue resolved.
 
-0.10.102 在 EDA 4.1.71 实测：8 个禁布区域的单环分片路径及属性保存关闭重开后保留，原器件、焊盘网络和 8 条网络文字未变。阻焊填充双环和源码空网络保留，但 SDK 空网络判定仍失败。0.10.103 仅补充 null 空网络兼容，并记录 SDK 网络值类型；仍要求同 ID 的有效源码 netName 严格为空。103 实机已确认 SDK 空网络类型为 null。累计 16 个禁布分片、6 个阻焊填充保存关闭重开后，完整路径、图层、规则、线宽及网络保留，原器件/焊盘网络/8条丝印未变。底层旋转矩形单样本 Gerber 外边界与计划路径相符，最大坐标差约 0.000001 mm；不将此结论外推至全部形状或禁止区域的实际作用。
+Real-host testing on EDA 4.1.71 in 0.10.102 showed that the single-ring split paths and attributes for 8 keepout regions persisted after save/close/reopen; the original components, pad nets, and 8 net labels were unchanged. Solder-mask double-ring fills and empty net values in source persisted, but the SDK empty-net check still failed. Version 0.10.103 only added compatibility for a null empty-net value and recorded the SDK net-value type; it still requires `netName` in source for the same ID to be strictly empty. Version 0.10.103 real-host testing confirmed the SDK's empty-net type is `null`. After save/close/reopen, a total of 16 keepout pieces and 6 solder-mask fills retained complete paths, layers, rules, line widths, and nets; original components/pad nets/8 silkscreen labels were unchanged. For one bottom-layer rotated rectangle sample, the Gerber outer boundary matched the planned path with a maximum coordinate difference of about 0.000001 mm. Do not generalize this result to every shape or to the actual effectiveness of keepout areas.
 
-## 来源
+## Sources
 
-- 扇出算法来源：`JLCEDA/eext-pad-fanout`，commit `7c88e571457e6d63463b7cb391e1e62bdbdd02d7`。
-- 自动局部铜皮算法来源：`JLCEDA/eext-auto-copper-shape`，commit `98317b6b5941977a3ae90948a05295f9d8b1169f`；许可证为 Apache-2.0。规划复用边界、规则和裁剪处理，原扩展界面与其 SDK 写入路径不作为本命令执行路径。
-- 当前 0.10.99 为本地候选；已验证范围与待验项目见上文，不能将本地回归视为宿主或制造验收。
-- 焊盘外扩参考：[eext-pad-expand-helper](https://github.com/easyeda/eext-pad-expand-helper/tree/de5b2eb6bd6817bb25025d621c2f6010bc110cab)，Apache-2.0。
-- 网络文字丝印参考：[eext-generate-silkscreen](https://github.com/easyeda/eext-generate-silkscreen/tree/f87bf3c725dea2dcb2b825a9faa90cb869dba86b)，Apache-2.0。当前只采用原生文字方式。
+- Fanout algorithm source: `JLCEDA/eext-pad-fanout`, commit `7c88e571457e6d63463b7cb391e1e62bdbdd02d7`.
+- Automatic local-copper algorithm source: `JLCEDA/eext-auto-copper-shape`, commit `98317b6b5941977a3ae90948a05295f9d8b1169f`, licensed under Apache-2.0. Planning reuses boundary, rule, and clipping handling; the original extension UI and its SDK write path are not used for this command's execution.
+- Current 0.10.99 is a local candidate; see the above for verified scope and pending items. Local regressions do not establish host or manufacturing acceptance.
+- Pad expansion reference: [eext-pad-expand-helper](https://github.com/easyeda/eext-pad-expand-helper/tree/de5b2eb6bd6817bb25025d621c2f6010bc110cab), Apache-2.0.
+- Net silkscreen reference: [eext-generate-silkscreen](https://github.com/easyeda/eext-generate-silkscreen/tree/f87bf3c725dea2dcb2b825a9faa90cb869dba86b), Apache-2.0. This implementation uses native text only.

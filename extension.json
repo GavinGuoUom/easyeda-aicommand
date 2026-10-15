@@ -3,7 +3,7 @@
   "uuid": "29aa51f0bed4411d866cb7a7a249231a",
   "displayName": "AI Command Engine",
   "description": "通过本地代理与 AI 技能驱动嘉立创 EDA 专业版的原理图、PCB、工程及元件库操作；需另行安装本地代理并启用 AI 技能。",
-  "version": "0.10.143",
+  "version": "0.20.0",
   "publisher": "ai-command-engine",
   "engines": {
     "eda": "^3.2.0"

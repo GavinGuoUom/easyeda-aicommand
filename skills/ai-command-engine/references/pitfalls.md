@@ -10,6 +10,16 @@ These are lessons from hands-on testing. Read the relevant topic before operatin
 - See [schematic commands](commands-schematic.md) for full parameters and verification status.
 - The 0.10.94 property-readback fix passed save/reopen. In 0.10.95, `getDocumentFootprintSources()` was confirmed to return an empty array for that schematic even though the complete project archive contained the resource. The 0.10.96 candidate verifies the exact footprint path from a full project export and retains page/project and instance-reference checks. On 2026-10-10, placement of a new test point and save/close/reopen passed in an isolated host. Resource references and netlist remained consistent. The fix addresses an incorrect verification boundary; the historical missing-footprint cause has still not been reproduced. Do not guess a prefix, save automatically, or retry placement.
 
+## Complete component replacement
+
+- A complete component replacement is a sequence of existing commands; there is no single automatic replacement command. Follow the [complete replacement workflow](commands-schematic.md#complete-component-replacement): place and verify the new instance before deleting the old one.
+- `schematic.listComponents` does not return mirror state. Read the active page with `project.getDocumentSource`; match the component ID to the `id` in the `COMPONENT` header and inspect fields such as `isMirror`. Read its properties from `ATTR` bodies whose `parentId` matches that component. This command is read-only; do not rewrite source data.
+- Source records use `JSON header||JSON body` and may end with `|`. Split on the first `||`, preserving `|` inside JSON strings. For each `(type,id)`, select the highest `ticket`; an empty body `""` is a deletion tombstone. Resolve the effective records and their ATTR records by component ID. Stop if the format is unknown or identity cannot be matched uniquely.
+- Do not inherit the old model, manufacturer part number, supplier part number, purchase number, or electrical parameters. Restore only project-identity fields and business properties that must be preserved. Build the complete `modifyComponent` request from values read back from the new instance.
+- Do not delete the old instance until every old/new pin number, absolute position, wire endpoint, and net has been verified. After deletion, read back the connections and target-ID mapping.
+- Stop and report the specific gap if current commands cannot preserve resource association, required properties, or nets. For an unknown write result, inspect read-only; do not blindly retry or assume automatic rollback.
+- The user starts and confirms PCB updates in the EDA UI. AI must not call `pcb.importChanges` or the official import API.
+
 ## 1. Do not trust return values (general rule)
 
 - The official `delete()` may return true for a mismatched type or a nonexistent ID; inspect the `failed` array.
@@ -57,7 +67,7 @@ These are lessons from hands-on testing. Read the relevant topic before operatin
 ## 6. Checks and import
 
 - Schematic DRC in EDA 4.1 returns category counts only. `runDrcDetailed` requires EDA v4.2+; 4.1 returns aggregate results (`aggregated:true`). Do not pretend it supports details or retry repeatedly.
-- Clear fatal schematic DRC errors before importing. Since 0.10.105, even if the SDK returns `true`, `pcb.importChanges` stops the macro with `partial:true,retryable:false,outcome:pending-verification`. The SDK response only means the call ended; the user may still need to click “Apply Changes” in EDA. Do not retry automatically. Handle any confirmation dialog, independently read back expected components and nets, then continue.
+- The user starts “Update Schematic to PCB” in the EDA UI and confirms the changes. AI must not call `pcb.importChanges` or the official import API. Before and after the user action, use read-only checks. The plugin import check compares component identity, footprint association, and pad nets; a match may return success even when nothing changed. If the SDK returns `true` but application is absent, partial, or unconfirmed by readback, preserve `pending-verification`/`unknown`, stop dependent writes, and do not retry. The new content check still awaits installed-build verification; success does not establish save/reopen persistence or acceptance of a complete module layout.
 - `save` returning false when there are no changes is official behavior. Before `renameBoard`, run `project.getBoardInfo` to avoid changing the wrong board with the same name.
 - The parameter for `openDocument` is `uuid`, not `documentUuid`; the wrong key fails silently. Check the returned `ok` after the call. For an occasional timeout while switching pages, retry or switch manually and verify again.
 - If `runDrcDetailed` times out once, it may recover on its own. Try again before concluding that the plugin has failed.

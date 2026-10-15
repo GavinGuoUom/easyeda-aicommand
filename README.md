@@ -47,7 +47,7 @@ Place components by JLC part number, read their actual pins, edit reference desi
 
 For an existing schematic, preview an organization plan for selected components or regions before rearranging them and rebuilding connections. This is suitable for repeated channels, MCU peripherals, interface modules, and other drawing tasks with clear connection relationships.
 
-For existing components, `schematic.getComponentUpdatePlan` previews footprint and property changes; `schematic.updateComponents` applies the complete plan and reads each result back. This supports in-place footprint changes and property patches while retaining the original schematic component. In an isolated EDA project, the v0.10.143 normal update path changed a connected resistor from 0402 to 0805, updated requested properties, and passed save/close/reopen checks with the component identity, position, symbol, and wires preserved. This session did not synchronize the change to PCB; use the normal PCB import workflow separately and inspect the resulting pads and nets.
+Complete component replacement uses a temporary new instance and the companion skill's full verification, deletion, property-update, identity-transfer, and persistence procedure. It does not preserve the old instance ID through an in-place update; follow the [current Chinese schematic command guide](skills/ai-command-engine/references/zh/commands-schematic.md#完整器件更换) for the exact steps and field sources. The v0.10.143 update commands are removed. If an existing PCB must reflect schematic changes, the user starts and confirms import in the EDA interface; AI only performs read-only checks before and after.
 
 ### 5. Batch wiring, net labels, and connection checks
 
@@ -84,7 +84,7 @@ Use `pcb.getPadExpansionPlan` / `pcb.expandPads` to plan and perform pad expansi
 
 ## Operation demonstrations
 
-Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not hands-on acceptance records for v0.10.143.
+Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not acceptance records for v0.20.0.
 
 ### Schematic: multi-pin MCU, supporting parts, short wires, and labels
 
@@ -110,20 +110,22 @@ Commands in the `module.*` namespace are a narrow proxy to the separate module-r
 
 ## Release status
 
-**v0.10.143 is the formal release dated 2026-10-13.** In an isolated EDA project, normal in-place component updates passed for batch attribute changes and a real 0402-to-0805 footprint change; saving, closing, reopening, and readback confirmed the requested changes persisted while component identity, position, symbol, and wires remained. The stale footprint-name repair fallback branch was not triggered in this session and has regression evidence only. This release session did not synchronize the change to PCB; prior v0.10.138 manually confirmed PCB-import evidence remains historical and separate. Other commands and scenarios were not all exercised. The v0.10.116 extension was listed in the EDA marketplace as of 2026-10-12; v0.10.143 has been submitted to the marketplace and is under review; the public listing may remain on the previous version until approval. See the [v0.10.143 release notes](docs/releases/v0.10.143.md).
+**v0.20.0 is the formal GitHub release.** The release removes `schematic.getComponentUpdatePlan` and `schematic.updateComponents`; complete replacement now uses a sequence of existing atomic commands documented in the companion skill. The candidate package checks passed before release, but v0.20.0 has not been installed or verified in a live EDA host. The Chinese EDA marketplace package is prepared for the user to upload; it has not been uploaded or approved. See the [v0.20.0 release notes](docs/releases/v0.20.0.md) and [Chinese release notes](docs/releases/v0.20.0_ZH.md).
 
 The “little robot drawing a circuit board” shown on the page is the project logo. The marketplace icon file is `images/logo-marketplace.png`.
 
-<a id="v010143-downloads-and-installation"></a>
+<a id="v0200-downloads-and-installation"></a>
 
-## v0.10.143 downloads and installation
+## v0.20.0 downloads and installation
 
-Download the formal v0.10.143 release files:
+Download the formal v0.20.0 release files:
 
-- [Extension package: ai-command-engine_v0.10.143.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine_v0.10.143.eext)
-- [Companion skill package: ai-command-engine-skill_en-zh_v0.10.143.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine-skill_en-zh_v0.10.143.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/SHA256SUMS.txt)
-- [v0.10.143 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.143.zip)
+- [Extension package: ai-command-engine_v0.20.0.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine_v0.20.0.eext)
+- [Companion skill package: ai-command-engine-skill_en-zh_v0.20.0.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine-skill_en-zh_v0.20.0.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/SHA256SUMS.txt)
+- [v0.20.0 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.0.zip)
+
+
 
 The English-first skill ZIP includes `SKILL.md` and English references, plus `SKILL_ZH.md` and `references/zh/` as the Chinese fallback. These are two documentation versions inside one installed skill; do not install the fallback as a second automatic skill. Verify both release files with `SHA256SUMS.txt`.
 

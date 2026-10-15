@@ -20,7 +20,9 @@ The `symbol`, `footprint`, and `device` groups use a common pattern: `Create`, `
 | `lib.symbolOpenInEditor` / `lib.footprintOpenInEditor` | Open a library item in the symbol/footprint editor for editing; after opening, use `project.getDocumentSource` to read its source | `symbolUuid*` / `footprintUuid*`, optional `libraryUuid?` |
 
 Special cases:
-- `lib.deviceCreate`: to bind across libraries, pass `symbolLibraryUuid` and `footprintLibraryUuid` separately. If omitted, each defaults to the `libraryUuid` used to create the device.
+- `lib.deviceCreate`: to bind across libraries, pass `symbolLibraryUuid` and `footprintLibraryUuid` separately. If omitted, each defaults to the `libraryUuid` used to create the device. For example: `{"libraryUuid":"target-library-UUID","name":"test resistor","symbolUuid":"symbol-UUID","symbolLibraryUuid":"symbol-library-UUID","footprintUuid":"footprint-UUID","footprintLibraryUuid":"footprint-library-UUID"}`.
+- To create an ordinary empty symbol, pass `symbolType:2`; `symbolUuid` is not required. Version 0.10.135 includes this SDK-supported branch; the project-library result has not been tested on the host.
+- After creation, first try `get` for readback. If project libraries do not support that query, search by name and match the UUID returned by creation; do not create a second item. Version 0.10.134 proved that cross-library resources can enter the project, but the old final `get` falsely reported an error. Full receipt verification after the 0.10.135 adaptation remains pending.
 
 - `lib.deviceGetByLcscIds`: `lcscIds` accepts one value or an array for batch lookup (e.g. `"C1523"` or `["C1523","C17168"]`); `allowMultiMatch?` returns all matches when a C-number has multiple matches. ⚠️ Not available in private deployments.
 - `lib.deviceModify` supports rebinding: use `symbolUuid`/`footprintUuid` to change bindings and `property` to change designator/manufacturer/supplier, etc.

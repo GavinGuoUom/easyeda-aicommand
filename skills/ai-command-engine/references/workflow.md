@@ -37,6 +37,8 @@ Adapted from the [official schematic placement and net lead skill](https://githu
 
 ## Component placement and schematic representation (follow project and component requirements)
 
+For a complete component replacement, follow the [complete component replacement workflow](commands-schematic.md#complete-component-replacement) and combine existing commands. Read the active page's `COMPONENT` and `ATTR` records with `project.getDocumentSource` to obtain mirror state, project identity, and the new instance's full properties; do not edit source data directly. Verify the replacement's resources, pin numbers, and original nets before placement. Read back the new instance and verify all connections and project fields before deleting the old one. Save, close, and reopen, then verify again. Stop later writes and report the gap if the source format is unknown, a record cannot be matched uniquely, or a write result is uncertain.
+
 1. The schematic should make the related power pin or power domain recognizable for each decoupling capacitor. Determine actual connections, capacitance, quantity, and PCB distance from the specific component data and project conditions. A schematic arrangement alone does not imply that same-named power pins must be on separate nets.
 2. Clearly show the relationship between input/output capacitors and the related pins. Verify near-component placement on the PCB itself.
 3. Prefer actual wires within one functional block and labels across blocks as needed. Mark valid unconnected pins as NC. Do not add an unrequested connection just to remove a visual stub.
@@ -45,9 +47,10 @@ Adapted from the [official schematic placement and net lead skill](https://githu
 
 ## Convert a schematic to PCB
 
-1. Run schematic DRC when the task calls for it and report the result. Ordinary import does not require clearing DRC first.
-2. The plugin reads the source schematic and checks component identity, footprint association, and pad nets on the target PCB. If the contents match, `pcb.importChanges` may return success, including when everything was already matched and no changes were needed. If the SDK returns `true` but the changes are not applied, only partly applied, or cannot be confirmed by readback, the result remains `pending-verification`/`unknown`; stop dependent writes and do not automatically retry. The host may still require the user to click “Apply Changes.” This content check still awaits installed-build verification; success does not establish persistence after save/reopen or complete module-layout acceptance.
-3. After import, compare pad nets with the netlist using `listComponents` and `getComponentPads` for each component.
+The user starts “Update Schematic to PCB” in the EDA UI and confirms the changes. AI must not call the plugin import command or the official import API. Before and after the user's action, perform read-only checks. After the user saves, closes, and reopens the PCB, verify component records, footprint associations, pad numbers and positions, nets, and non-target content.
+
+1. Run schematic DRC when the task calls for it and report the result; ordinary import does not require a clean DRC first.
+2. After the user's action, use `listComponents`, `getComponentPads`, and document-source readback as needed to compare component records, footprints, pad numbers and positions, and nets with the schematic. Stop and report any differences or uncertainty; do not make corrective writes under this import step.
 4. Placement: move individual components with `moveComponent`; group functional blocks with `groupBySchematicRegions` after checking `dryRun`. ⚠️ DRC does not detect body/silkscreen crowding. After placement, run `checkPlacement`; add `margin` (10–30 mil) for components with large bodies, such as connectors and inductors.
 5. Routing: use `routeTrack`; for high-current nets, query `knowledge.widthForCurrent` first. Use `placeVia` and `pourCopper` for a full-board ground pour. For large jobs, use the autorouting workflow; lock power nets first (see appendix ⑦ in commands-pcb.md).
 6. Run `runDrc`, report violations, and save.
@@ -68,3 +71,6 @@ Save at each stage. Before a destructive operation, verify the target ID and kee
 8. **Check the knowledge base first for engineering guidance:** query `knowledge.query` for impedance, length matching, or current capacity, then follow its `constraints` and `guidance`.
 9. **Handle extension development separately:** use this plugin's commands for ordinary drawing. Native API debugging is not part of this skill's installation workflow. The 49620 gateway once used by the author is not included in this repository; do not assume the user has it or run code through it.
 10. **Stay within the command's authorization scope:** do not repair, delete, or restore beyond the scope of the invoked command. If `dedupeWireNets` or `autoRouteStatus` fails after writing, it attempts a full-page snapshot restore and readback; if recovery fails or is unconfirmed, the command still reports an error and does not guarantee recovery. `autoLayout` does not recover automatically. Some official creation APIs can falsely fail (return empty even though the object was created); trust the document's actual contents, not just the response.
+
+
+Package-resource validation requires the netlist project's footprint UUID, the PCB's effective Footprint property, and the epro resource `HEAD.uuid` to agree. An SDK reference must fully match the project footprint UUID and current project UUID, or match the source footprint UUID and source-library UUID in the resource record. Names and matching geometry do not prove association; wrong libraries, conflicting properties, and missing resources remain rejected. Unrelated resources without a valid `HEAD`/source do not create mappings and do not otherwise block this validation.

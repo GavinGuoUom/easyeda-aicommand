@@ -15,7 +15,6 @@ import { createBridgeOwnerCoordinator } from './bridge/owner';
 import { getBridgeLifecycleStatus, reconnectBridgeClient, startBridgeClient, stopBridgeClient } from './bridge/client';
 import { autoCopperCommands } from './commands/autoCopper';
 import { cbbCommands } from './commands/cbb';
-import { componentUpdateCommands } from './commands/componentUpdate';
 import { dfmCommands } from './commands/dfm';
 import { editorCommands } from './commands/editor';
 import { fanoutCommands } from './commands/fanout';
@@ -42,7 +41,6 @@ function registerAllCommands(): void {
 		...libraryCommands,
 		...editorCommands,
 		...schematicCommands,
-		...componentUpdateCommands,
 		...pcbCommands,
 		...fanoutCommands,
 		...autoCopperCommands,

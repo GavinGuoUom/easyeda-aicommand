@@ -114,14 +114,29 @@ async function requireFocus(api: ImportApi, documentType: number, uuid: string, 
 		throw new Error(`${label}焦点身份不符（期望 type=${documentType}, uuid=${uuid}; 实际 type=${focus?.documentType ?? '未知'}, uuid=${focus?.uuid ?? '未知'}）`);
 }
 
-async function projectFootprints(api: ImportApi, focusUuid: string): Promise<Map<string, string>> {
+interface ProjectFootprintReference {
+	projectUuid: string;
+	sourceUuid: string;
+	sourceLibraryUuid: string;
+}
+
+function requireProjectIdentity(actual: unknown, expected: string, label: string): void {
+	if (typeof actual !== 'string' || !actual.trim() || actual !== expected)
+		throw new Error(`${label}工程身份不符（期望 projectUuid=${expected}; 实际 projectUuid=${typeof actual === 'string' ? actual : '未知'}）`);
+}
+
+async function projectFootprints(api: ImportApi, focusUuid: string, projectUuid: string): Promise<Map<string, ProjectFootprintReference>> {
 	await requireFocus(api, 3, focusUuid, '封装映射导出前');
+	const exportFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+	requireProjectIdentity(exportFocus?.parentProjectUuid, projectUuid, '封装映射导出前');
 	const file = await api.sys_FileManager.getProjectFile(undefined, undefined, 'epro');
 	if (!file || typeof file.arrayBuffer !== 'function')
 		throw new Error('导出工程封装映射失败：未返回 epro 文件');
 	await requireFocus(api, 3, focusUuid, '封装映射导出后');
+	const importFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+	requireProjectIdentity(importFocus?.parentProjectUuid, projectUuid, '封装映射导出后');
 	const zip = await JSZip.loadAsync(await file.arrayBuffer());
-	const result = new Map<string, string>();
+	const result = new Map<string, ProjectFootprintReference>();
 	for (const path of Object.keys(zip.files).filter(name => /^FOOTPRINT\/[^/]+\.efoo$/i.test(name))) {
 		const source = await zip.files[path].async('string');
 		let head: any;
@@ -143,12 +158,17 @@ async function projectFootprints(api: ImportApi, focusUuid: string): Promise<Map
 				head = row[1];
 			}
 		}
-		if (head && typeof head.uuid === 'string' && typeof head.source === 'string') {
-			const sourceParts = head.source.split('|');
-			if (sourceParts.length !== 2 || !sourceParts[0] || !sourceParts[1])
-				throw new Error(`封装 ${path} 的 HEAD.source 无法解析`);
-			result.set(head.uuid, sourceParts[0]);
-		}
+		if (!head || typeof head.uuid !== 'string' || !head.uuid.trim() || typeof head.source !== 'string')
+			continue;
+		const pathUuid = path.match(/^FOOTPRINT\/([^/]+)\.efoo$/i)?.[1];
+		if (pathUuid !== head.uuid)
+			throw new Error(`封装资源路径与 HEAD.uuid 不一致（pathUuid=${pathUuid ?? '缺失'}, HEAD.uuid=${head.uuid}）`);
+		const sourceParts = head.source.split('|');
+		if (sourceParts.length !== 2 || !sourceParts[0]?.trim() || !sourceParts[1]?.trim())
+			throw new Error(`封装 ${path} 的 HEAD.source 无法解析`);
+		if (result.has(head.uuid))
+			throw new Error(`工程 epro 含重复封装 HEAD.uuid=${head.uuid}`);
+		result.set(head.uuid, { projectUuid: head.uuid, sourceUuid: sourceParts[0], sourceLibraryUuid: sourceParts[1] });
 	}
 	return result;
 }
@@ -197,8 +217,10 @@ function mismatch(condition: boolean, text: string, out: Array<string>): void {
 		out.push(text);
 }
 
-async function verifyContents(api: ImportApi, pcbUuid: string, expected: Array<ExpectedComponent>, beforePcbOnly: Array<unknown>): Promise<Record<string, unknown>> {
+async function verifyContents(api: ImportApi, pcbUuid: string, projectUuid: string, expected: Array<ExpectedComponent>, beforePcbOnly: Array<unknown>): Promise<Record<string, unknown>> {
 	await requireFocus(api, 3, pcbUuid, '读回 PCB 前');
+	const initialFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+	requireProjectIdentity(initialFocus?.parentProjectUuid, projectUuid, '读回 PCB 前');
 	const source = await api.sys_FileManager.getDocumentSource();
 	if (typeof source !== 'string' || !source.trim())
 		throw new Error('读取 PCB 源码失败');
@@ -235,7 +257,7 @@ async function verifyContents(api: ImportApi, pcbUuid: string, expected: Array<E
 		sourceByIdentity.set(identity, component);
 		sourceChannelByUniqueId.set(uniqueId, [...(sourceChannelByUniqueId.get(uniqueId) ?? []), { component, channelId }]);
 	}
-	const libraryFootprints = await projectFootprints(api, pcbUuid);
+	const projectFootprintRefs = await projectFootprints(api, pcbUuid, projectUuid);
 	const actual = await api.pcb_PrimitiveComponent.getAll();
 	if (!Array.isArray(actual))
 		throw new Error('PCB 器件列表读回失败');
@@ -271,11 +293,21 @@ async function verifyContents(api: ImportApi, pcbUuid: string, expected: Array<E
 		}
 		const designator = value(component, 'getState_Designator');
 		const footprint = value(component, 'getState_Footprint');
-		const expectedLibraryUuid = libraryFootprints.get(want.footprintUuid);
+		const expectedFootprintUuid = attrs.get(fromSource.id)?.footprint ?? '';
+		const expectedReference = projectFootprintRefs.get(expectedFootprintUuid);
 		const actualFootprintUuid = typeof footprint?.uuid === 'string' ? footprint.uuid : '';
+		const actualFootprintLibraryUuid = typeof footprint?.libraryUuid === 'string' ? footprint.libraryUuid : '';
 		mismatch(designator === want.designator, `${want.designator}: 位号读回为 ${String(designator)}`, differences);
 		mismatch(fromSource.designator === want.designator, `${want.designator}: 有效 COMPONENT/ATTR 源码位号为 ${String(fromSource.designator)}`, differences);
-		mismatch(Boolean(expectedLibraryUuid) && actualFootprintUuid === expectedLibraryUuid, `${want.designator}: 封装绑定不一致或无法经工程资源确认`, differences);
+		mismatch(expectedFootprintUuid === want.footprintUuid, `${want.designator}: PCB ATTR Footprint 与 JLCEDA 网表不一致（期望 ATTR/网表=${want.footprintUuid}, 实际 ATTR=${expectedFootprintUuid || '缺失'}）`, differences);
+		if (!expectedReference) {
+			differences.push(`${want.designator}: epro 缺少与 PCB ATTR Footprint 对应的封装资源（期望 projectFootprintUuid=${expectedFootprintUuid || '缺失'}, expectedProjectUuid=${projectUuid}; 实际 SDK footprintUuid=${actualFootprintUuid || '缺失'}, libraryUuid=${actualFootprintLibraryUuid || '缺失'}）`);
+		}
+		else {
+			const projectPairMatches = actualFootprintUuid === expectedReference.projectUuid && actualFootprintLibraryUuid === projectUuid;
+			const sourcePairMatches = actualFootprintUuid === expectedReference.sourceUuid && actualFootprintLibraryUuid === expectedReference.sourceLibraryUuid;
+			mismatch(projectPairMatches || sourcePairMatches, `${want.designator}: 封装绑定不一致（期望 ATTR/project UUID=${expectedFootprintUuid}, SDK 接受 (${expectedReference.projectUuid}, ${projectUuid}) 或 (${expectedReference.sourceUuid}, ${expectedReference.sourceLibraryUuid}); 实际 SDK (${actualFootprintUuid || '缺失'}, ${actualFootprintLibraryUuid || '缺失'}), 当前工程=${projectUuid}）`, differences);
+		}
 		const pads = await api.pcb_PrimitiveComponent.getAllPinsByPrimitiveId(String(value(component, 'getState_PrimitiveId')));
 		if (!Array.isArray(pads))
 			throw new Error(`${want.designator}: 焊盘列表读回失败`);
@@ -311,11 +343,133 @@ async function verifyContents(api: ImportApi, pcbUuid: string, expected: Array<E
 			differences.push(`PCB 含原理图托管集合之外的器件 ${identity.replace('\u0000', '/')}`);
 	}
 	await requireFocus(api, 3, pcbUuid, 'PCB 内容核验结束');
+	const finalFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+	requireProjectIdentity(finalFocus?.parentProjectUuid, projectUuid, 'PCB 内容核验结束');
 	return { ok: differences.length === 0, managedComponents: expected.length, checkedComponents: byIdentity.size, pcbOnlyPreserved, differences };
 }
 
+interface TargetSourceObservation {
+	ready: boolean;
+	fingerprint: string;
+	differences: Array<string>;
+}
+
+function observeTargetSource(source: string, pcbUuid: string, expected: Array<ExpectedComponent>): TargetSourceObservation {
+	const parsed = extractPcbDocument(source);
+	if (parsed.uuid !== pcbUuid)
+		throw new Error(`PCB 源码 UUID 不符（期望 ${pcbUuid}, 实际 ${parsed.uuid}）`);
+	const attrs = attributes(source);
+	const componentsByIdentity = new Map<string, Array<{ designator: string; footprint: string }>>();
+	for (const component of parsed.components) {
+		const row = attrs.get(component.id) ?? {};
+		const uniqueId = row['unique id'] ?? String((component.data.attrs as any)?.['Unique ID'] ?? '');
+		if (!uniqueId)
+			continue;
+		const channelId = row['channel id'] ?? String((component.data.attrs as any)?.['Channel ID'] ?? '');
+		const identity = identityOf(uniqueId, channelId);
+		componentsByIdentity.set(identity, [...(componentsByIdentity.get(identity) ?? []), {
+			designator: String(row.designator ?? (component.data.attrs as any)?.Designator ?? component.designator ?? ''),
+			footprint: String(row.footprint ?? ''),
+		}]);
+	}
+	const differences: Array<string> = [];
+	const target: Array<{ identity: string; designator: string; footprint: string; present: boolean }> = [];
+	for (const want of expected) {
+		const matches = componentsByIdentity.get(want.identity) ?? [];
+		if (matches.length > 1)
+			throw new Error(`PCB 源码有重复身份 ${want.uniqueId}/${want.channelId}`);
+		const actual = matches[0];
+		if (!actual) {
+			differences.push(`${want.designator}: 等待 PCB 源码出现托管器件 ${want.uniqueId}/${want.channelId}`);
+			target.push({ identity: want.identity, designator: '', footprint: '', present: false });
+			continue;
+		}
+		if (actual.footprint !== want.footprintUuid)
+			differences.push(`${want.designator}: 等待 PCB Footprint ATTR=${want.footprintUuid}，当前=${actual.footprint || '缺失'}`);
+		target.push({ identity: want.identity, designator: actual.designator, footprint: actual.footprint, present: true });
+	}
+	// The signature contains only managed component identity and its relevant SOURCE attributes;
+	// volatile document records such as DOCHEAD do not delay this stability check.
+	return { ready: differences.length === 0, fingerprint: stableJson(target), differences };
+}
+
+async function observeAppliedTarget(api: ImportApi, pcbUuid: string, projectUuid: string, expected: Array<ExpectedComponent>, deadline: number): Promise<{ matched: boolean; differences: Array<string>; observedMs: number; stable: boolean }> {
+	const started = performance.now();
+	let previousReadyFingerprint: string | undefined;
+	let lastDifferences: Array<string> = [];
+	const observationApi = new Proxy(api, {
+		get(target, namespace: string) {
+			const service = target[namespace];
+			if (!service || typeof service !== 'object')
+				return service;
+			return new Proxy(service, {
+				get(serviceTarget, method: string) {
+					const fn = serviceTarget[method];
+					if (typeof fn !== 'function')
+						return fn;
+					return (...args: Array<any>) => {
+						const remaining = Math.floor(deadline - performance.now());
+						if (remaining <= 0) {
+							const error = new Error('PCB 异步导入观察已达截止时间');
+							(error as any).observationDeadline = true;
+							return Promise.reject(error);
+						}
+						let timer: ReturnType<typeof setTimeout> | undefined;
+						const timeout = new Promise<never>((_, reject) => {
+							timer = setTimeout(() => {
+								const error = new Error('PCB 异步导入观察已达截止时间');
+								(error as any).observationDeadline = true;
+								reject(error);
+							}, remaining);
+						});
+						return Promise.race([Promise.resolve().then(() => fn.apply(serviceTarget, args)), timeout]).finally(() => {
+							if (timer)
+								clearTimeout(timer);
+						});
+					};
+				},
+			});
+		},
+	});
+	const readTarget = async (): Promise<TargetSourceObservation> => {
+		await requireFocus(observationApi, 3, pcbUuid, '异步导入观察前');
+		const beforeRead = await observationApi.dmt_SelectControl.getCurrentDocumentInfo();
+		requireProjectIdentity(beforeRead?.parentProjectUuid, projectUuid, '异步导入观察前');
+		const source = await observationApi.sys_FileManager.getDocumentSource();
+		if (typeof source !== 'string' || !source.trim())
+			throw new Error('异步导入观察读取 PCB 源码失败');
+		await requireFocus(observationApi, 3, pcbUuid, '异步导入观察后');
+		const afterRead = await observationApi.dmt_SelectControl.getCurrentDocumentInfo();
+		requireProjectIdentity(afterRead?.parentProjectUuid, projectUuid, '异步导入观察后');
+		return observeTargetSource(source, pcbUuid, expected);
+	};
+	while (performance.now() < deadline) {
+		const remaining = Math.floor(deadline - performance.now());
+		if (remaining <= 0)
+			break;
+		let observation: TargetSourceObservation;
+		try {
+			observation = await readTarget();
+		}
+		catch (error) {
+			if ((error as any)?.observationDeadline)
+				break;
+			throw error;
+		}
+		lastDifferences = observation.differences;
+		if (observation.ready && previousReadyFingerprint === observation.fingerprint)
+			return { matched: true, differences: [], observedMs: Math.round(performance.now() - started), stable: true };
+		previousReadyFingerprint = observation.ready ? observation.fingerprint : undefined;
+		const waitMs = Math.min(120, Math.max(0, Math.floor(deadline - performance.now())));
+		if (waitMs > 0)
+			await new Promise(resolve => setTimeout(resolve, waitMs));
+	}
+	return { matched: false, differences: lastDifferences, observedMs: Math.round(performance.now() - started), stable: false };
+}
+
 export async function importAndVerifyChanges(api: ImportApi, params: Record<string, any>): Promise<Record<string, unknown>> {
-	const deadline = performance.now() + (Number.isFinite(Number(params._timeoutMs)) && Number(params._timeoutMs) > 0 ? Number(params._timeoutMs) : 290_000);
+	const totalBudgetMs = Number.isFinite(Number(params._timeoutMs)) && Number(params._timeoutMs) > 0 ? Number(params._timeoutMs) : 290_000;
+	const deadline = performance.now() + totalBudgetMs;
 	api = new Proxy(api, {
 		get(target, namespace: string) {
 			const service = target[namespace];
@@ -348,6 +502,8 @@ export async function importAndVerifyChanges(api: ImportApi, params: Record<stri
 		const board = await api.dmt_Board.getCurrentBoardInfo();
 		if (!board?.pcb?.uuid || board.pcb.uuid !== pcbUuid || !board?.schematic?.uuid)
 			throw new Error('当前 PCB 未能通过 Board 关联到同工程原理图');
+		const projectUuid = string(board.parentProjectUuid, '当前 Board 工程 UUID');
+		requireProjectIdentity(beforeFocus.parentProjectUuid, projectUuid, '导入前焦点 PCB');
 		if (!requested)
 			requested = board.schematic.uuid;
 		const schematics = await api.dmt_Schematic.getAllSchematicsInfo();
@@ -398,21 +554,45 @@ export async function importAndVerifyChanges(api: ImportApi, params: Record<stri
 		if (typeof pcbTabId !== 'string' || !pcbTabId)
 			throw new Error(`无法打开目标 PCB ${pcbUuid}`);
 		await requireFocus(api, 3, pcbUuid, '打开目标 PCB 后');
+		const openedPcbFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+		requireProjectIdentity(openedPcbFocus?.parentProjectUuid, projectUuid, '打开目标 PCB 后');
 		const activatedPcb = await api.dmt_EditorControl.activateDocument(pcbTabId);
 		if (activatedPcb === false)
 			throw new Error(`无法恢复目标 PCB ${pcbUuid}`);
 		await requireFocus(api, 3, pcbUuid, '导入前恢复 PCB');
+		const restoredPcbFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+		requireProjectIdentity(restoredPcbFocus?.parentProjectUuid, projectUuid, '导入前恢复 PCB');
 		const preImportSource = await api.sys_FileManager.getDocumentSource();
 		if (typeof preImportSource !== 'string' || !preImportSource.trim())
 			throw new Error('导入前读取 PCB 源码失败');
 		const beforePcbOnly = snapshotPcbOnly(preImportSource);
+		const preImportTarget = observeTargetSource(preImportSource, pcbUuid, expected);
 		await requireFocus(api, 3, pcbUuid, '导入前 PCB 源码快照');
+		const beforeImportFocus = await api.dmt_SelectControl.getCurrentDocumentInfo();
+		requireProjectIdentity(beforeImportFocus?.parentProjectUuid, projectUuid, '导入前 PCB 源码快照');
 		importRequested = true;
 		const sdkResult = await api.pcb_Document.importChanges(requested);
 		await requireFocus(api, 3, pcbUuid, '导入后');
 		if (sdkResult !== true && sdkResult !== false)
 			throw partialError(`pcb.importChanges 返回无效结果（${String(sdkResult)}）；目标 PCB=${pcbUuid}，应用状态未知，不要自动重试`, { documentUuid: pcbUuid, sdkResult: sdkResult === undefined ? 'undefined' : sdkResult, outcome: 'unknown', importRequested: true });
-		const contents = await verifyContents(api, pcbUuid, expected, beforePcbOnly);
+		if (sdkResult === true && !preImportTarget.ready) {
+			const verificationReserveMs = Math.min(60_000, Math.max(1_000, Math.floor(totalBudgetMs / 4)));
+			const observationDeadline = deadline - verificationReserveMs;
+			const observation = await observeAppliedTarget(api, pcbUuid, projectUuid, expected, observationDeadline);
+			if (!observation.matched) {
+				throw partialError(`PCB 导入 API 返回 true，但在核验预算截止前未观察到稳定的目标器件/封装源码；目标 PCB=${pcbUuid}`, {
+					documentUuid: pcbUuid,
+					sdkResult: true,
+					applicationState: 'unconfirmed',
+					reason: 'verification-deadline',
+					lastDifferences: observation.differences,
+					observedMs: observation.observedMs,
+					stabilityReached: observation.stable,
+					importRequested: true,
+				});
+			}
+		}
+		const contents = await verifyContents(api, pcbUuid, projectUuid, expected, beforePcbOnly);
 		if (!contents.ok)
 			throw partialError(`导入请求返回 ${String(sdkResult)}，但 PCB 内容核验失败；目标 PCB=${pcbUuid}，不要自动重试`, { documentUuid: pcbUuid, sdkResult, outcome: 'content-mismatch', importRequested: true, verification: contents });
 		return { imported: sdkResult === true, sdkResult, outcome: 'contents-verified', importRequested: true, contentsVerified: true, completionVerified: true, verificationScope: ['component identity', 'designator', 'footprint binding', 'pin net'], persistenceVerified: false, documentUuid: pcbUuid, schematicUuid: requested, ...contents };

@@ -42,7 +42,7 @@ The command explicitly errors if the host returns `undefined`, `null`, a non-arr
 | `project.getBoardInfo` | Current board info and schematic/PCB association state; use to diagnose a detached PCB when `pcb.importChanges` reports import failure | None |
 | `project.associateBoard` | Associate a schematic and PCB with a board (repair a detached PCB) | `schematicUuid`, `pcbUuid` |
 | `project.copyBoard` | Copy a board | `boardName` |
-| `project.deleteBoard` | Delete a board | `boardName` |
+| `project.deleteBoard` | Delete a board; if the official API returns failure, the response includes current target information. No automatic retry. | `boardName` |
 | `project.renameBoard` | Rename a board (⚠️ matches by name and may rename the wrong board if names collide; verify with `getBoardInfo` first) | `boardName`, `newName` |
 
 ## Schematics and pages
@@ -77,3 +77,4 @@ The command explicitly errors if the host returns `undefined`, `null`, a non-arr
 ```
 
 If `error.cause.partial=true` is returned, do not copy again; inspect using the read-only checks above.
+

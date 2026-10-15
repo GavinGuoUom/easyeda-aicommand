@@ -1,28 +1,16 @@
 ---
 name: ai-command-engine
-description: 通过简易 JSON 指令操作嘉立创 EDA 专业版（EasyEDA Pro）。当用户要求用 AI 操作/检查/绘制嘉立创 EDA 的原理图或 PCB，或查询嘉立创 SMT 可贴装物料时使用本 skill。铁律：每条 /command 必须带顶层 instanceId（先 GET /connections 查、勿缓存；省略会被当前代理拒绝；不得依赖全局选中实例）。前置条件：EDA 内已安装并启用 "AI Command Engine" 扩展（勾选「允许外部交互」），且 bridge/command-proxy.mjs 指令代理正在运行（默认手动启动；自动拉起须预先注册本机 URL 协议，注册与启动要求见 references/zh/setup.md；所有实例断开后默认 300 秒退出）。
+description: 通过本地 HTTP 指令操作嘉立创 EDA 专业版的原理图、PCB、工程和物料库，用于在线查询、绘制、修改与检查。插件开发和调试另用 extension-dev-skill。
 ---
 
 # AI Command Engine — 嘉立创 EDA 操作指令集
 
 [English](SKILL.md) | 中文备用
 
-## 开发首要要求（必须遵守）
+## 开发与验证资料
 
-开发、修改和审查插件指令时，必须先遵守本节，再执行后文流程。
-
-- 先实现功能并跑通正常使用流程，再审查安全性和限制是否必要。
-- 不得让额外限制或开发检查阻挡功能实现。
-- 指令必须完成它承诺的操作，并由插件自己检查结果。
-- 不得把开发记录、测试步骤和验收过程变成普通使用的前置条件。
-- 不得因开发方便、历史问题或宿主行为差异增加无用限制。
-- 遇到宿主行为差异，必须完善插件适配，不能靠增加限制代替修复。
-- 可由插件完成的检查，必须在插件内完成，不得转嫁给使用者。
-- 只保留防止改错工程、错误连接、重复写入和明确运行错误的必要检查。
-- 新增限制必须说明它防止的具体错误，并优先通过插件内部处理解决。
-- 结果能确认时，必须明确返回成功或失败，不得一律返回待验证。
-- 结果确实无法确认时，必须说明原因并停止依赖该结果的操作，不得自动重试未知写入。
-- 交付前必须检查正常使用流程能够完成，不能只以代码编译通过作为完成依据。
+- 开发、修改或审查插件指令时，读取[插件开发要求](references/zh/插件开发要求.md)。
+- 查询既有实测、历史失败和未验收范围时，读取[历史验证记录](references/zh/历史验证记录.md)。历史记录不代表当前安装版已验证。
 
 本技能可独立安装，不依赖作者本机的其他技能或调试网关。首次装机见仓库 README；连接细节见 setup。
 
@@ -52,7 +40,7 @@ HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `ed
 | 整理乱图 | `schematic.autoLayout`（先 dryRun） |
 | 连通性对账 | `schematic.exportNetlist` |
 | 切工程 | 先 `schematic.save` → `project.open` |
-| 转 PCB | `pcb.importChanges`（0 致命才导，弹窗用户点） |
+| 转 PCB | 用户在 EDA 界面亲自发起并确认；AI 不调用插件或官方导入接口，只做前后只读核对 |
 | 出生产资料 | `pcb.exportGerber`/`exportPickPlace` + `schematic.exportBom` |
 
 ## MCU 与密脚器件扇出
@@ -77,7 +65,7 @@ HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `ed
 
 ## 指令分级（0.10.61）
 
-原位换封装与批量属性更新使用 `schematic.getComponentUpdatePlan` → `schematic.updateComponents`，适合改封装尺寸、整理器件资料及模块实例属性。批量属性与原位封装的分步路径已有实机证据；138原位封装与批量属性实际写入已保存重开，PCB经原生确认后的同步也已核验；142已通过默认配置核对，封装与属性写入已保存重开；143已取得批量属性及真实0402→0805更新的成功回执，保存重开通过；旧名兜底修正分支本轮未触发。作用、目标和调用示例直接见[原理图命令页](references/zh/commands-schematic.md#原位换封装与批量更新属性)。
+完整更换原理图器件时，组合现有物料查询、放置、读回、删除和属性更新指令；用`project.getDocumentSource`只读核对镜像与项目属性，不直接写源码。流程与停止条件见[完整器件更换](references/zh/commands-schematic.md#完整器件更换)。这不是一条自动替换指令。
 
 **✅ 推荐**
 批量类 `buildBlock`/`autoLayout`/`batchWire`/`macro`（一次提交多条，带进度心跳）；语义接网 `labelWire`/`linkWire`；只读体检 `structuralAudit`/`list*`/`get*`/`runDrc*`（只读不改图，探路/验收随便跑）；PCB `checkPlacement`/`routeTrack`/`pourCopper`/`runDrc`；修复类一律先 `dryRun`。
@@ -105,8 +93,6 @@ HTTP 发 JSON 到 `http://localhost:49720` 操作 EasyEDA Pro；禁止自编 `ed
 | **低频指令附录（32 条，参数用 /help 在线查）** | [commands-misc.md](references/zh/commands-misc.md) |
 
 ## 其他文件
-
-独立模块复用通过`module.*`转发到已安装的模块复用扩展。0.1.10保存后的复用路径已通过小样本；0.1.13已实测通过独立放置、内部网映射、引用对齐、未手动保存连续两实例保留，以及SCH/PCB保存重开。两实例证据限3器件模板。MCU功能区已提取为原生文件，恢复后20器件、82真实焊盘、203段走线、40个过孔及资源引用通过核对和保存重开。MCU在主工程的网络映射、引用对齐及PCB导入仍待验证。通用自动提取、替换与完整R1–R8尚未完成；旧unknown记录保留，不重发。0.1.14的CBB PCB检索与改网名样式保留已通过MCU实测及SCH保存重开。MCU完整布局布线复用仍待通道与自定义封装关联修复验证。
 
 - [tasks.md](references/zh/tasks.md) — **按需求选指令速查**（我要做什么 → 指令序列，先看这里）
 - [setup.md](references/zh/setup.md) — 连接/坐标/激活全文（新手区引用的详情）+ 超时心跳 + 编辑器操作/截图

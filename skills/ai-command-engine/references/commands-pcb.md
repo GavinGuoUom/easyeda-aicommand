@@ -73,13 +73,14 @@
 | `pcb.runDfm` | JLCPCB order DFM check (18 items; material, board thickness, and selected outer/inner copper weight are required) | `material`, `thickness`, `outerCopperOz`, `innerCopperOz` |
 | `pcb.runSmtDfm` | JLCPCB SMT order DFM check (7 items; economy/standard option and board thickness are required) | `standard`, `thickness` |
 | `pcb.checkSameNetPadSpacing` | Same-net pad spacing check (1 item) | `minSpacingMm` |
-| `pcb.importChanges` | Import from schematic; an apply dialog may appear, so follow the actual UI | |
+| `pcb.importChanges` | Existing native import command. For this workflow, the user must start and confirm the import in the EDA interface; AI must not call this command or the official import API. | |
 | `pcb.save` | Save (⚠️ the official API returns false when there are no changes; this is not a failure) | |
 
 See [JLCPCB order DFM notes](commands-dfm.md) for parameters, copper-weight inputs and drawing comparison, result completeness, and limits. Copper-weight parameters in 0.10.92 were checked against local and live commands; menu location and export dialog remain pending live acceptance.
 
-- Run schematic DRC when the task calls for it and report the result; ordinary import does not require clearing DRC first. The plugin reads the source schematic and checks component identity, footprint association, and pad nets on the target PCB. If the contents match, `pcb.importChanges` may return success, including when everything was already matched and no changes were needed. If the SDK returns `true` but the changes are not applied, only partly applied, or cannot be confirmed by readback, the result remains `pending-verification`/`unknown`; stop dependent writes and do not automatically retry. The host may still require the user to click “应用修改” (Apply Changes). This content check still awaits installed-build verification; success does not establish persistence after save/reopen or complete module-layout acceptance.
-- After import, compare pad nets and netlist using `listComponents` plus `getComponentPads` for each component.
+- Run schematic DRC when the task calls for it and report the result; an ordinary import does not require clearing DRC first. The user starts and confirms schematic-to-PCB import in the EDA interface. AI does not call `pcb.importChanges` or the official import API. Before and after the user action, AI may perform read-only checks, including component identity, footprint association, pad nets, and netlist. The user action is required even when the plugin command exists in the installed API.
+- After the user confirms import, compare pad nets and netlist using `listComponents` plus `getComponentPads` for each component. Read-only checks do not apply changes, and a successful readback does not by itself prove save/reopen persistence or acceptance of a complete module layout.
+- Earlier candidate notes said the new content check awaited installation testing; that was the status before version 0.10.150 host acceptance. Installed version 0.10.150 passed the normal matching-content case on 2026-10-15 (details below), but this did not test newly applied changes. Version 0.20.0 remains uninstalled and has not been host-tested.
 - `runDrcDetailed` sometimes recovers after a single timeout; retry before deciding the plugin failed. The same applies to occasional `editor.openDocument` page-switch timeouts.
 - `project.renameBoard` matches by name and can change the wrong board when names collide. Run `project.getBoardInfo` before renaming.
 
@@ -152,3 +153,14 @@ Prerequisite: run a local FreeRouting V2.2.3+ service on port 37864. Run `bridge
 
 - **0.10.106 candidate:** `autoRouteStart` returns only `outcome:start-request-submitted,stateVerified:false`; it no longer describes a submitted request as RUNNING. If the start call fails, it still retains `jobId` and returns partial, `retryable:false`; do not resubmit. First query the original job or cancel it and verify its state. Use `autoRouteStatus` with `noImport:true` to read actual status first; allow applying results only after confirming the target and contents. Local regression passed; the candidate is not installed yet.
 - In this run, a DSN from EDA 4.1.71 containing existing routes caused stack overflow in FreeRouting 2.2.3 and was not applied. Do not treat a native host autorouter fix as proof that this plugin workflow passed.
+
+
+## Footprint identity checks and historical acceptance
+
+Footprint verification requires the netlist project's footprint UUID, the PCB's effective `Footprint` property, and the epro resource `HEAD.uuid` to agree. An SDK reference must fully match either the project footprint UUID and current project UUID, or the source-footprint UUID and source-library UUID in the resource record. Names or matching geometry do not establish resource association. Reject a wrong library, conflicting property, or missing resource. Do not create a mapping for unrelated resources that lack a valid `HEAD`/source; they do not block this check.
+
+Version 0.10.150 corrected a comparison that mixed project-footprint UUIDs with source-library UUIDs. Its final source dated 2026-10-15 passed 14 regression checks, type checking, targeted lint, expert review, and read-only checks of five real components through the official API.
+
+On 2026-10-15, installed version 0.10.150 passed the formal `pcb.importChanges` command in a dedicated test project: `contentsVerified` and `completionVerified` were true, all five managed components matched individually, `differences` was empty, and PCB-only items were retained. This tested the normal matching case for synchronized content; it did not show newly applied changes. After `save:true` and a real close/reopen, all valid record fields matched except the DOCHEAD time/version; the R2 pad and net remained. The earlier F09 partial result and five rule/display observations remain. Full-page visuals, rule semantics, and manufacturing output were not accepted. The test page was closed, and the 0.10.150 package retained its original SHA without repacking the same version.
+
+Version 0.20.0 removes `schematic.getComponentUpdatePlan` and `schematic.updateComponents`. Those commands are unavailable in this version; complete replacement uses existing atomic commands and the workflow described by the current installed help. The 0.10.150 host evidence above applies only to that earlier installation and does not establish host testing of 0.20.0.

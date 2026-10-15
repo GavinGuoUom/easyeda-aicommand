@@ -204,6 +204,4 @@ schematic.setPinNoConnect
 schematic.setWireNet
 task.get
 task.list
-schematic.getComponentUpdatePlan
-schematic.updateComponents
 lib.footprintGetSource

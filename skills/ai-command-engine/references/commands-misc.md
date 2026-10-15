@@ -11,7 +11,7 @@ Commands used infrequently and not listed in detail in the main documentation ar
 | `schematic.getPrimitiveAtPoint` | Find a primitive at the specified coordinates (returns ID and type); useful for checking “what is at this location?” |
 | `schematic.setAttribute` | Change a component attribute (e.g. reference designator R? → R4, with `key=Designator`). ⚠️ Can only change an existing attribute. Do not set `Footprint` to a bare name or an empty string (see pitfalls G1/G2). |
 
-## Library management (`lib.*`; remember across all families: UUID may change after Modify—since 0.10.62 all three Modify commands perform a built-in lookup and return `uuid`/`uuidChanged`/`verify`; Copy/Delete still trust the returned value, so verify failures by name)
+## Library management (`lib.*`; remember across all families: UUID may change after Modify—since 0.10.62 all three Modify commands perform a built-in lookup and return `uuid/uuidChanged/verify`; Copy/Delete still trust the returned value, so verify failures by name)
 
 | Command | Description |
 | --- | --- |

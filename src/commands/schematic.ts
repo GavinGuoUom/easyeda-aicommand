@@ -2024,7 +2024,7 @@ export const schematicCommands: Array<ICommandDef> = [
 		params: [
 			{ name: 'primitiveId', type: 'string', required: true, description: '待检查的原理图器件实例 primitiveId' },
 		],
-		returns: '{ diagnosticOnly: true, placementVerified: false, documentUuid, projectUuid, focusStart, focusEnd, focusUnchanged, instanceFootprintUuid, resourceListState, resourceCount, resources, projectResource, complete }',
+		returns: '{ diagnosticOnly: true, placementVerified: false, documentUuid, projectUuid, focusStart, focusEnd, focusUnchanged, instanceFootprintUuid, typedFootprint, projectLibraryUuid, projectLibraryUuidError?, resourceListState, resourceCount, resources, projectResource, complete }',
 		example: { cmd: 'schematic.getPlacementResourcesDiagnostic', params: { primitiveId: 'a1b2c3d4' } },
 		handler: async (params) => {
 			const primitiveId = String(params.primitiveId ?? '').trim()
@@ -2039,6 +2039,9 @@ export const schematicCommands: Array<ICommandDef> = [
 			let focusStart: any
 			let focusEnd: any
 			let instanceFootprintUuid: string | null = null
+			let typedFootprint: { uuid: string | null; libraryUuid: string | null } | null = null
+			let projectLibraryUuid: string | null = null
+			let projectLibraryUuidError: string | undefined
 			let focusReadError: string | undefined
 			let instanceReadError: string | undefined
 			let resourceReadError: string | undefined
@@ -2071,8 +2074,13 @@ export const schematicCommands: Array<ICommandDef> = [
 					const footprint = getFootprint.call(component)
 					if (footprint == null)
 						instanceFootprintUuid = null
-					else if (typeof footprint === 'object' && typeof footprint.uuid === 'string' && footprint.uuid)
-						instanceFootprintUuid = footprint.uuid
+					else if (typeof footprint === 'object' && !Array.isArray(footprint)) {
+						typedFootprint = { uuid: typeof footprint.uuid === 'string' ? footprint.uuid : null, libraryUuid: typeof footprint.libraryUuid === 'string' ? footprint.libraryUuid : null }
+						if (typeof footprint.uuid === 'string' && footprint.uuid)
+							instanceFootprintUuid = footprint.uuid
+						else
+							throw new Error('实例 Footprint 结构缺少有效 uuid')
+					}
 					else
 						throw new Error('实例 Footprint 结构缺少有效 uuid')
 				}
@@ -2083,6 +2091,18 @@ export const schematicCommands: Array<ICommandDef> = [
 			}
 			else {
 				complete = false
+			}
+			if (hasValidStartIdentity) {
+				try {
+					const value = await eda.lib_LibrariesList.getProjectLibraryUuid()
+					if (typeof value !== 'string' || !value.trim())
+						throw new Error('getProjectLibraryUuid 返回值不是非空字符串')
+					projectLibraryUuid = value
+				}
+				catch (error: any) {
+					complete = false
+					projectLibraryUuidError = String(error?.message ?? error)
+				}
 			}
 			if (hasValidStartIdentity) {
 				try {
@@ -2188,6 +2208,9 @@ export const schematicCommands: Array<ICommandDef> = [
 				focusEnd: end,
 				focusUnchanged,
 				instanceFootprintUuid,
+				typedFootprint,
+				projectLibraryUuid,
+				...(projectLibraryUuidError ? { projectLibraryUuidError } : {}),
 				...(focusReadError ? { focusReadError } : {}),
 				...(instanceReadError ? { instanceReadError } : {}),
 				resourceListState,

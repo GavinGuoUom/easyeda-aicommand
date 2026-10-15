@@ -46,7 +46,7 @@
 
 已有原理图也可按指定器件或区域预览整理方案，再执行重排和连线重建。适合重复通道、MCU 外围、接口模块等具有明确连接关系的绘制任务。
 
-现有器件也可通过 `schematic.getComponentUpdatePlan` 预览封装及属性变更，再用 `schematic.updateComponents` 执行完整计划并逐项读回。此流程支持原位更换封装和批量属性补丁，保留原理图器件本身。v0.10.143 在隔离 EDA 工程中完成批量属性更新和真实 0402→0805 封装更新；保存、关闭、重开后读回确认请求内容持久化，器件身份、位置、符号和导线保持。本轮没有同步 PCB；应另行按正常 PCB 导入流程操作并检查实际焊盘与网络。
+完整换件使用新临时实例，并按配套技能完成核验、删除旧实例、属性修改、身份转移和持久性检查。这不是保留旧实例 ID 的原位更新；具体步骤和字段来源以[原理图指令说明](skills/ai-command-engine/references/zh/commands-schematic.md#完整器件更换)为准。v0.10.143 的器件更新指令已移除。若需把原理图变更同步到已有 PCB，由使用者在 EDA 界面发起并确认导入；AI 只在操作前后做只读检查。
 
 ### 5. 批量连线、网络标签与连接核对
 
@@ -83,7 +83,7 @@
 
 ## 实际操作演示
 
-以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.10.143 的实机验收记录。
+以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.20.0 的实机验收记录。
 
 ### 原理图：多脚 MCU、外围元件、短连线与标签
 
@@ -109,18 +109,20 @@
 
 ## 版本状态
 
-**v0.10.143 于 2026-10-13 正式发布。**隔离 EDA 工程中，批量属性更新和真实 0402→0805 原位换封装的正常路径均取得完整成功回执；保存、关闭、重开后读回确认修改保留，器件身份、位置、符号和导线未变。旧封装名称缓存修复分支本轮没有触发，只有回归证据。本轮没有同步 PCB；v0.10.138 由人工确认的 PCB 导入证据仍属历史记录，不能与本轮验收混为一谈。其他命令和场景未全部验证。v0.10.116 扩展于 2026-10-12 在 EDA 市场显示为已上架；v0.10.143 已提交市场审核，当前显示“审核中”；审核通过前公开页面仍可能显示旧版。详见 [v0.10.143 版本说明](docs/releases/v0.10.143_ZH.md)。
+**v0.20.0 为 GitHub 正式发布版本。**本版移除 `schematic.getComponentUpdatePlan` 和 `schematic.updateComponents`；完整更换器件改用配套技能说明的现有原子指令组合流程。候选包检查已通过，但 v0.20.0 尚未安装到真实 EDA 宿主，也未完成实机验证。中文嘉立创 EDA 市场包已备好，由使用者上传；目前尚未上传或审批。详见 [v0.20.0 版本说明](docs/releases/v0.20.0_ZH.md)和[英文版](docs/releases/v0.20.0.md)。
 
 页面展示的“小机器人画电路板”图标是项目 Logo；市场发布图标文件为 `images/logo-marketplace.png`。
 
-## v0.10.143 下载与安装
+## v0.20.0 下载与安装
 
-此正式版本的扩展包、技能包、校验文件和源码包均按 tag `v0.10.143` 获取：
+此 GitHub 正式版本的扩展包、技能包、校验文件和源码包均按 tag `v0.20.0` 获取：
 
-- [扩展包 ai-command-engine_v0.10.143.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine_v0.10.143.eext)
-- [配套技能包 ai-command-engine-skill_en-zh_v0.10.143.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/ai-command-engine-skill_en-zh_v0.10.143.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.143/SHA256SUMS.txt)
-- [v0.10.143 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.143.zip)
+- [扩展包 ai-command-engine_v0.20.0.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine_v0.20.0.eext)
+- [配套技能包 ai-command-engine-skill_en-zh_v0.20.0.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine-skill_en-zh_v0.20.0.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/SHA256SUMS.txt)
+- [v0.20.0 源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.0.zip)
+
+
 
 新版技能包以英文 `SKILL.md` 和参考文件为主，中文备用位于 `SKILL_ZH.md` 与 `references/zh/`。两种说明共用一个技能目录，不需安装两个自动触发技能。请用 `SHA256SUMS.txt` 校验本次发布附件。
 

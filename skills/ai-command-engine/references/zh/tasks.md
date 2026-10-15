@@ -49,9 +49,9 @@
 
 ## E. 原理图 → PCB
 
-1. 按任务需要运行原理图DRC并报告结果；导入失败或结果未知时停止依赖步骤，不自动重试。
-2. `pcb.importChanges` 由插件读取来源原理图并核对目标PCB的器件身份、封装关联和焊盘网络；内容匹配时正常返回成功，允许原本已匹配而没有变化。SDK返回true但内容尚未应用、只应用部分变更或读取无法确认时，保留pending-verification/unknown并停止依赖写入，不自动重发。宿主仍可能要求应用修改；本次新增内容核对尚待安装实测，成功范围不包含保存持久性或成套模块布局验收。
-3. 对账：`pcb.listComponents` + 逐器件 `pcb.getComponentPads` 比焊盘网络。
+1. 按任务需要运行原理图DRC并报告结果；普通导入不要求先清零DRC。
+2. 用户在EDA界面亲自发起“原理图更新到 PCB”并确认变更。AI 不调用 `pcb.importChanges` 或官方导入接口，只在用户操作前后做只读核对。插件导入核对会比较器件身份、封装关联和焊盘网络；内容已匹配时即使没有新变化也可能返回成功。SDK返回true但内容尚未应用、只应用部分变更或读回无法确认时，保留 pending-verification/unknown，停止依赖写入，不自动重发。宿主仍可能要求用户确认应用。本次新增内容核对尚待安装实测；成功不代表保存重开持久性或成套模块布局已验收。
+3. 用户完成导入后，对账：用 `pcb.listComponents` 和逐器件 `pcb.getComponentPads` 比对焊盘网络。
 4. 布局：`pcb.groupBySchematicRegions`（先 dryRun）/ `pcb.moveComponent`；摆完 `pcb.checkPlacement`。
 5. 布线：`pcb.routeTrack`（大电流先 `knowledge.widthForCurrent` 算线宽）+ `pcb.placeVia`；GND 整面 `pcb.pourCopper`。
 6. `pcb.runDrc` → 清零 → `pcb.save`。

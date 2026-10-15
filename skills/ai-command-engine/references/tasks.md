@@ -49,12 +49,12 @@ Choose a command sequence by **what you want to do**, not by object type. **Run 
 
 ## E. Convert schematic to PCB
 
-1. Run schematic DRC when the task calls for it and report the result. Ordinary import does not require clearing DRC first. A failed or uncertain import stops dependent work; do not retry automatically.
-2. The plugin reads the source schematic and checks component identity, footprint association, and pad nets on the target PCB. If the contents match, `pcb.importChanges` may return success, including when everything was already matched and no changes were needed. If the SDK returns `true` but the changes are not applied, only partly applied, or cannot be confirmed by readback, the result remains `pending-verification`/`unknown`; stop dependent writes and do not automatically retry. The host may still require the user to click “Apply Changes.” This content check still awaits installed-build verification; success does not establish persistence after save/reopen or complete module-layout acceptance.
+1. Run schematic DRC when the task calls for it and report the result. If the import fails or its result is uncertain, stop dependent steps and do not retry automatically.
+2. The user starts “Update Schematic to PCB” in the EDA UI and confirms the change. AI must not call `pcb.importChanges` or the official import API. The plugin's import check compares component identity, footprint association, and pad nets on the target PCB. A content match can return success even when nothing changed. If the SDK returns `true` but the changes are not applied, are only partly applied, or cannot be confirmed by readback, preserve `pending-verification`/`unknown`, stop dependent writes, and do not resend. The host may still require the user to apply the changes. The new content check still awaits installed-build verification; success does not establish save/reopen persistence or acceptance of a complete module layout.
 3. Reconcile pad nets with `pcb.listComponents` and `pcb.getComponentPads` for each component.
 4. Placement: use `pcb.groupBySchematicRegions` after `dryRun`, or `pcb.moveComponent`; then run `pcb.checkPlacement`.
-5. Routing: use `pcb.routeTrack` and `pcb.placeVia`; query `knowledge.widthForCurrent` first for high-current nets. Use `pcb.pourCopper` for a full-board ground pour.
-6. Run `pcb.runDrc`, clear violations, and save with `pcb.save`.
+5. Routing: use `pcb.routeTrack`; for high-current nets, calculate width with `knowledge.widthForCurrent` first. Use `pcb.placeVia` and a full-board `pcb.pourCopper` for GND.
+6. Run `pcb.runDrc`, report violations, and save with `pcb.save`.
 
 ## F. PCB-specific work and manufacturing exports
 

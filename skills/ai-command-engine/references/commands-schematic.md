@@ -6,32 +6,33 @@ Four groups: **① batch generation and organization (primary entry) → ② bas
 
 ## ① Batch generation and organization (primary entry)
 
-### Replace a footprint in place and batch-update properties
+### Complete component replacement
 
-Use these commands to retain schematic components while updating their footprint association, part identity, or purchasing attributes. They support changes such as 0603 to 0402, batch updates to resistance/rating/manufacturer/part number, and edits to module instances already placed in the project.
+There is currently no single command for a complete component replacement. Combine the existing library lookup, placement, readback, deletion, and property-edit commands. Verify each step before relying on the next one.
 
-A footprint update preserves the component ID, designator, unique ID, symbol, and schematic position; it does not delete and recreate the component. Changing the entire part or symbol also requires handling pins and wires, which these two commands do not do.
+First back up the native project with `project.exportFile` and `fileType:"epro2"`. In an EDA 4.1.78 test, the schematic component had been replaced but the PCB had not yet been synchronized; exporting legacy `.epro` produced mixed old and new component data. Do not treat that legacy-format file as a valid recovery package for this state.
 
-Testing history: v134 verified batch property updates to two existing components, loading an external 0805 resource, in-place association, and save-close-reopen; actual PCB pad dimensions and net mapping were correct. In v136, a new component property update returned full success and passed save-close-reopen. In v138, the in-place footprint change and two property writes passed save-close-reopen; after native confirmation for PCB import, actual pad dimensions, nets, and save-close-reopen passed. The final check falsely reported failure because the host added a footprint name; v139 accepts only UUIDs and names matching the verified resource. v142 passed default-configuration checks and the 0805 association plus two properties passed save-close-reopen, but final receipt stopped because the host retained the old footprint name. In v143, updates to two components and a real combined 0402-to-0805 update returned success; names were correct and save-close-reopen passed. `footprintNameRepairs` was empty because the host refreshed the name normally. The new old-name fallback branch passed regression only and was not triggered separately on the host. A native confirmation dialog during PCB import was applied manually and does not count as automatic synchronization success.
+Each source record is `JSON header||JSON body` and may end with `|`. Split on the first `||` and preserve any `|` inside JSON strings. For each `(type,id)`, use the record with the highest `ticket`; a body of `""` means the record was deleted. Inspect only the effective records after replay. Use the public coordinates from `listComponents`; do not pass the sign-inverted source Y coordinate to placement commands. Read mirroring from `COMPONENT.isMirror`.
 
-| Command | Purpose | Parameters |
-| --- | --- | --- |
-| `schematic.getComponentUpdatePlan` | Read-only listing of footprint and property changes | `items:[{primitiveId,footprint?,properties?}]` |
-| `schematic.updateComponents` | Execute and read back each item | `plan`: the complete `data` object from the planning response |
-
-Workflow: activate the target schematic → inspect components and target footprints → create the plan → execute → save. To update the PCB, separately synchronize with the existing `pcb.importChanges` and verify actual footprints, pad nets, and tracks.
-
-The plan does not import library resources. During execution, the plugin creates or reuses helper devices in the current project library to load the target footprint; it does not delete, recreate, or add helper devices to the schematic. Helper library devices and any required empty symbols remain in the project library; the result reports their UUIDs. `copiedResources[].normalizedDefaultRecords` lists known default settings excluded from comparison; all other records are still checked. `footprintNameRepairs` records old cached names before and after repair, source writes, and read-back state.
-
-`primitiveId` must come from the current schematic. `footprint` is an explicit `{uuid,libraryUuid}` from footprint search or a target library device's footprint association. Pass only fields to change in `properties`; the plugin preserves all other properties. Supported fields are `manufacturer`, `manufacturerId`, `supplier`, `supplierId`, `name`, `designator`, `addIntoBom`, `addIntoPcb`, and `otherProperty`. Put custom fields such as resistance, tolerance, and voltage rating in `otherProperty`; these fields are merged rather than replacing the full property object. One item may change its footprint and properties together, and one plan can include multiple items.
-
-Example plan parameters:
+1. Activate the target page and identify the component uniquely by its full designator or LCSC number. Record its `primitiveId`, coordinates, orientation, mirror state, designator, Unique ID, Channel ID, Group ID, ReuseBlock, business properties to preserve, and for every pin number its absolute position, NC state, and existing net. Use `schematic.listComponents`, `schematic.getAttributes`, `schematic.listPins`, `schematic.listWires`, and `project.getDocumentSource`. The latter reads source data for the active document. Parse header/body records, match the component by the `id` in the `COMPONENT` header, then collect `ATTR` bodies whose `parentId` is that ID. `COMPONENT` provides fields such as `isMirror`; `ATTR` provides identity and business properties. Stop and explain the gap if the format is unknown or a required field cannot be matched uniquely. Do not edit source data directly.
+2. Find the replacement using `lib.deviceGetByLcscIds` or `lib.deviceSearch`, then read its full details with `lib.deviceGet`. Confirm the specific Device and Symbol, its Footprint association, part model, manufacturer, and supplier part number. These replacement details must come from the new component; do not inherit them from the old one.
+3. Place a temporary instance of the new device. Use `schematic.placeDevice` with its LCSC number, or pass `deviceUuid` and `libraryUuid`. Supply `x` and `y`; as needed, also pass `rotation`, `mirror`, `subPartName`, `addIntoBom`, and `addIntoPcb`. Do not reuse the old designator or association IDs yet.
 
 ```json
-{"items":[{"primitiveId":"current resistor ID","footprint":{"uuid":"target 0402 footprint UUID","libraryUuid":"target library UUID"},"properties":{"otherProperty":{"Resistance":"10k","Tolerance":"1%"}}},{"primitiveId":"another device ID","properties":{"manufacturerId":"new manufacturer part number"}}]}
+{"instanceId":"active schematic window ID","cmd":"schematic.placeDevice","params":{"deviceUuid":"new device UUID","libraryUuid":"new device library UUID","x":300,"y":300,"rotation":0,"mirror":false,"addIntoBom":true,"addIntoPcb":true}}
 ```
 
-Build the execution request as `{instanceId:currentInstanceId,cmd:"schematic.updateComponents",params:{plan:planResponse.data}}`. A successful result confirms the schematic update and immediate read-back only; persistence and PCB synchronization require separate checks. `copiedResources` retains its existing field names and reports imported or reused footprints, helper devices, source, and verification scope. Library-source content, project-resource presence, and old-format serialized geometry are reported separately; resource presence does not prove arbitrary pin mapping. Partial failure identifies imported resources, updated items, and skipped items. If a write is unknown, inspect read-only before retrying; do not reuse the old plan.
+For a multi-part device, pass `subPartName` if needed. Choose position and orientation so each replacement pin lands at the recorded position of its corresponding old pin.
+
+4. Read the new instance back with `schematic.listComponents`, `schematic.getAttributes`, `schematic.listPins`, and `project.getDocumentSource`. Verify the new Device, Symbol, Footprint, model, and part number. Compare old and new pin positions by pin number, including the original net. If business properties must be retained, overlay only those selected keys on the new instance's full properties with `schematic.modifyComponent`; keep its temporary designator and identity at this stage. Do not replace the new device properties with the old property table. NC pins must remain unconnected. Do not delete the old component if any pin mapping, wire endpoint, net, or resource association differs.
+5. Only after the replacement passes every check, delete the old `primitiveId` with `schematic.delete`. Read back and confirm it is gone. Then restore the new instance's existing `Designator` and `Unique ID`, plus only the necessary `Channel ID`, `Group ID`, or `Reuse Block`, using `schematic.setAttribute`. This command edits existing attributes; it cannot fabricate Device, Symbol, or Footprint associations.
+6. Re-read the old-to-new ID mapping, pins, wires, net labels, and nets. Confirm that original connections remain and unrelated primitives did not change. Save the page, close and reopen it, then verify component identity, resource association, properties, pin positions, and nets again.
+
+If a write result is unknown at any step, inspect the current state read-only and stop later writes. Do not retry blindly or assume automatic rollback. If existing commands cannot preserve a required property or net association, report the specific limitation and stop. The user starts and confirms PCB updates in the EDA UI; AI must not call `pcb.importChanges` or the official import API.
+
+`schematic.modifyComponent` requires all 14 fields: `x,y,rotation,mirror,addIntoBom,addIntoPcb,designator,name,uniqueId,manufacturer,manufacturerId,supplier,supplierId,otherProperty`. Get position and rotation from the new instance's `listComponents`, and mirroring from `COMPONENT.isMirror`. Read the other values from effective `ATTR` records on the new instance: `Designator/Name/Unique ID/Manufacturer/Manufacturer Part/Supplier/Supplier Part` map to the corresponding top-level fields. Convert `yes/no` values from `Add into BOM` and `Convert to PCB` to booleans. Keep ordinary properties from the new instance in `otherProperty`, overlaying only business keys explicitly selected for preservation. Do not include system keys for `Device/Symbol/Footprint`, `Reuse Block/Group ID/Channel ID`, `3D Model/3D Model Title/3D Model Transform`, or fields already represented by the top-level fields above. Compare the full properties with `getAttributes` and the readback; do not infer values from library display names.
+
+Historical checks apply only to the installed versions named here. v0.10.143 passed two-component updates and a combined 0402-to-0805 update, including save-close-reopen. Its old-name fallback branch passed regression but was not triggered separately on the host. Manual confirmation of the native PCB-import dialog did not count as automatic synchronization. These records do not verify the removed v0.20.0 commands or the v0.20.0 package; v0.20.0 has not been installed or host-verified.
 ### `schematic.buildBlock` — Generate a functional block from scratch
 
 Components list + connection table → auto region frame (default origin 0,0, black dashed; `color`/`lineType` can override) → row/column placement (cw32 template: 60 horizontal spacing, 90 row spacing; title centered at the bottom of the frame, font size 20) → wire from `nets` → netlist and DRC self-check.
@@ -221,6 +222,7 @@ Use `cmd:"macro"`; `steps` execute in order. After assigning a step `id`, later 
 	}
 }
 ```
+
 
 
 

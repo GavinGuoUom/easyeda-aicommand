@@ -74,13 +74,13 @@
 | `pcb.runDfm` | 嘉立创 PCB 下单检查（18 项；材料、板厚及本次外/内铜厚选择为必填） | `material`, `thickness`, `outerCopperOz`, `innerCopperOz` |
 | `pcb.runSmtDfm` | 嘉立创 SMT 下单检查（7 项；经济/标准、板厚为必填） | `standard`, `thickness` |
 | `pcb.checkSameNetPadSpacing` | 同网络焊盘间距检查（1 项） | `minSpacingMm` |
-| `pcb.importChanges` | 从原理图导入；可能弹出应用对话框，按实际界面处理 |
+| `pcb.importChanges` | 从原理图导入；当前用户改由本人在 EDA 界面发起并确认，AI 不调用此命令或官方导入接口 |
 | `pcb.save` | 保存（⚠️ 无修改时官方返回 false，非失败） |
 
 下单检查参数、铜厚输入与图纸对照、结果完整性和覆盖限制见[嘉立创下单检查说明](commands-dfm.md)。0.10.92 铜厚参数已通过本地及实机命令对照，菜单定位与导出对话框待实机验收。
 
-- `pcb.importChanges` 由插件读取来源原理图并核对目标PCB的器件身份、封装关联和焊盘网络；内容匹配时正常返回成功，允许原本已匹配而没有变化。SDK返回true但内容尚未应用、只应用部分变更或读取无法确认时，保留pending-verification/unknown并停止依赖写入，不自动重发。宿主仍可能要求应用修改；本次新增内容核对尚待安装实测，成功范围不包含保存持久性或成套模块布局验收。
-- 导入后 `listComponents`+逐器件 `getComponentPads` 比对焊盘网络与网表。
+- 按任务需要运行原理图DRC并报告结果；普通导入不要求先清零DRC。用户在EDA界面亲自发起并确认原理图导入PCB，AI不调用`pcb.importChanges`或官方导入接口。用户操作前后，AI可只读核对器件身份、封装关联、焊盘网络与网表；即使已安装版本提供导入指令，也必须遵守此操作方式。
+- 用户确认导入后，用`listComponents`和逐器件`getComponentPads`比对焊盘网络与网表。只读检查不会应用修改；读回成功也不能单独证明保存重开持久化或完整模块布局验收。
 - `runDrcDetailed` 偶发超时一次后自恢复——先重试，勿判插件失效。`editor.openDocument` 切页偶发超时同理。
 - `project.renameBoard` 按名字匹配，重名会改错——改名前先 `project.getBoardInfo`。
 
@@ -153,3 +153,9 @@
 
 - 0.10.106 候选：`autoRouteStart` 仅返回 `outcome:start-request-submitted,stateVerified:false`，不再把提交请求称为 RUNNING。 启动调用失败也会保留 jobId 并返回 partial、retryable:false，禁止重提；先查询原任务或取消后核对状态。用 `autoRouteStatus` 的 `noImport:true` 先读取实际状态；目标及内容核对后再允许回灌。本地回归已通过，候选尚未安装。
 - EDA 4.1.71 本轮含既有布线的 DSN 在 FreeRouting 2.2.3 中触发递归溢出，未回灌。不能将宿主原生布线修复视为此插件流程通过。
+
+封装核验要求网表工程封装UUID、PCB有效Footprint属性和epro资源HEAD.uuid一致。SDK引用必须完整匹配工程封装UUID与当前工程UUID，或匹配资源记录中的源封装UUID与源库UUID。名称和相同几何不能代替关联；错误库、属性冲突和缺失资源仍拒绝。无关且缺少有效HEAD/source的资源不建立映射，不额外阻断本次核验。
+
+150候选修正pcb.importChanges对工程封装UUID和源库UUID的混比。2026-10-15最终源码已通过14项回归、类型检查、定向lint、专家复审及官方API真实五器件只读核验。150安装版正式指令尚待复验。149原理图更新已通过，F09的149 PCB指令partial保留；PCB绑定、网络和位置保存重开通过，规则/显示字段的五项变化语义、整页视觉和制造输出未验收。
+
+2026-10-15安装版150已在专用测试工程通过正式pcb.importChanges：contentsVerified/completionVerified为true，5个托管器件逐项匹配，differences为空，PCB-only保持。此轮为当前已同步内容的正常匹配验证，没有新变更应用证据。保存true、真实关闭并重开后，除DOCHEAD时间版本外全部有效记录字段相等，R2焊盘和网络保持。F09旧partial及五条规则/显示观察保留；整页视觉、规则语义与制造输出仍未验收。测试图页已关闭。150安装包保持原SHA，不重打同版本。

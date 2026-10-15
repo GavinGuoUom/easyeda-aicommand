@@ -1,5 +1,17 @@
 # 更新记录
 
+## v0.20.0 — Formal release (2026-10-15)
+
+- Removed `schematic.getComponentUpdatePlan` and `schematic.updateComponents`. For complete component replacement, the companion skill now guides a checked sequence of existing atomic commands.
+- PCB import from schematic changes must be started and confirmed by the user in the EDA interface. AI performs read-only checks before and after; it does not invoke the import.
+- The Chinese EDA marketplace package is prepared for user upload. It has not been uploaded or approved. The v0.20.0 candidate package checks passed, but installation and live-host verification are pending.
+- The v0.10.143 component-update implementation and host evidence below are historical; its two commands are unavailable in v0.20.0.
+## v0.20.0 — 正式发布（2026-10-15）
+
+- 移除 `schematic.getComponentUpdatePlan` 和 `schematic.updateComponents`；完整换件改用配套技能说明的现有原子指令组合流程。
+- 原理图变更需同步到 PCB 时，由使用者在 EDA 界面发起并确认导入；AI 只在操作前后进行只读检查。
+- 中文嘉立创 EDA 市场包已准备好，由使用者上传，尚未上传或审批。候选包检查已通过；安装和实机验证尚未完成。
+- 下方 v0.10.143 器件更新实现及宿主记录仅供历史参考；其两项器件更新指令在 v0.20.0 中不可用。
 ## v0.10.143 — 正式发布（2026-10-13）
 
 - 新增原理图器件封装与属性原位更新流程：`schematic.getComponentUpdatePlan` 先只读预览，`schematic.updateComponents` 按完整计划执行并逐项读回，保留原器件身份。

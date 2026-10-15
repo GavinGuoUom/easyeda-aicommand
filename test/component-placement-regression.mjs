@@ -26,6 +26,7 @@ function fixture(options = {}) {
 	let createCalls = 0;
 	let resourceCalls = 0;
 	let projectExportCalls = 0;
+	let projectLibraryUuidCalls = 0;
 	let writeCalls = 0;
 	let instanceFootprintUuid = options.instanceFootprint === undefined ? projectUuid : options.instanceFootprint?.uuid ?? null;
 	const created = {
@@ -33,7 +34,7 @@ function fixture(options = {}) {
 		getState_Designator: () => 'TP1',
 	};
 	const back = {
-		getState_Footprint: () => instanceFootprintUuid ? { uuid: instanceFootprintUuid } : null,
+		getState_Footprint: () => instanceFootprintUuid ? { uuid: instanceFootprintUuid, libraryUuid: options.instanceFootprint?.libraryUuid ?? 'project-library-1' } : null,
 	};
 	const device = options.device ?? {
 		uuid: 'device-1',
@@ -42,6 +43,12 @@ function fixture(options = {}) {
 	};
 	const api = {
 		dmt_SelectControl: { getCurrentDocumentInfo: async () => options.initialFocusError ? Promise.reject(new Error('focus unavailable')) : focus },
+		lib_LibrariesList: { getProjectLibraryUuid: async () => {
+			projectLibraryUuidCalls++;
+			if (options.projectLibraryUuidError)
+				throw new Error('project library UUID unavailable');
+			return options.projectLibraryUuid ?? 'project-library-1';
+		} },
 		lib_Device: {
 			getByLcscIds: async () => [{ uuid: 'device-1', libraryUuid }],
 			get: async () => device,
@@ -120,6 +127,7 @@ function fixture(options = {}) {
 		get createCalls() { return createCalls; },
 		get resourceCalls() { return resourceCalls; },
 		get projectExportCalls() { return projectExportCalls; },
+	get projectLibraryUuidCalls() { return projectLibraryUuidCalls; },
 		get writeCalls() { return writeCalls; },
 	};
 }
@@ -168,11 +176,14 @@ async function main() {
 			assert.equal(result.placementVerified, false, `${label}: does not claim placement verified`);
 			assert.equal(result.documentUuid, 'page-1', `${label}: page UUID is returned`);
 			assert.equal(result.projectUuid, 'project-1', `${label}: project UUID is returned`);
+			assert.deepEqual(result.typedFootprint, { uuid: projectUuid, libraryUuid: 'project-library-1' }, `${label}: complete SDK footprint reference is returned`);
+			assert.equal(result.projectLibraryUuid, 'project-library-1', `${label}: project library UUID is returned`);
 			assert.equal(result.resources[0]?.rawFootprintUuid ?? null, expectedUuid, `${label}: returns raw resource ID`);
 			assert.equal(f.resourceCalls, 1, `${label}: calls getDocumentFootprintSources once`);
 			assert.equal(f.createCalls, 0, `${label}: create is never called`);
 			assert.equal(f.writeCalls, 0, `${label}: no modify/save/export writes`);
 			assert.equal(f.projectExportCalls, label === 'focus changes during resource read' ? 0 : 1, `${label}: project epro read count matches focus guard`);
+			assert.equal(f.projectLibraryUuidCalls, 1, `${label}: project library UUID is read once for a valid schematic focus`);
 			if (label === 'empty resource list') {
 				assert.equal(result.resourceCount, 0);
 				assert.equal(result.resourceListState, 'empty-returned', 'empty API result is distinguished from a missing project identity');
@@ -190,10 +201,22 @@ async function main() {
 		}
 
 		{
+			const f = fixture({ projectLibraryUuidError: true });
+			globalThis.eda = f.api;
+			const result = await inspectCommand.handler({ primitiveId: 'component-1' });
+			assert.equal(result.projectLibraryUuid, null);
+			assert.equal(result.projectLibraryUuidError, 'project library UUID unavailable');
+			assert.equal(result.complete, false, 'project library UUID retrieval failure marks the diagnostic incomplete');
+			assert.equal(result.typedFootprint.libraryUuid, 'project-library-1', 'the SDK typed footprint reference remains available on library UUID failure');
+			assert.equal(f.writeCalls, 0);
+		}
+
+		{
 			const f = fixture({ instanceFootprint: null });
 			globalThis.eda = f.api;
 			const result = await inspectCommand.handler({ primitiveId: 'component-1' });
 			assert.equal(result.instanceFootprintUuid, null, 'missing instance footprint is reported');
+			assert.equal(result.typedFootprint, null, 'missing instance footprint has no typed SDK reference');
 			assert.deepEqual(result.projectResource, { state: 'no-instance-footprint' });
 			assert.equal(result.focusUnchanged, true);
 			assert.equal(result.complete, true, 'valid focus with no footprint is a complete diagnostic');

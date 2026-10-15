@@ -6,48 +6,31 @@
 
 ## ① 批量生成与整理（第一入口）
 
-### 原位换封装与批量更新属性
+### 完整器件更换
 
-用于保留已画好的原理图器件，更新其封装关联、型号或采购属性。
-适合把0603改0402、批量整理阻值/耐压/厂家/料号，以及修改放入项目后的模块实例。
-封装更新保留原器件ID、位号、唯一ID、符号和原理图位置；不是删除旧器件再放新器件。
-更换整个型号或符号还需处理引脚和导线，不由这两条指令完成。
-134已验证两颗已有器件的批量属性更新、外部0805资源载入、原位关联和保存重开，PCB实际焊盘尺寸及网络对应正确。136新器件属性更新已返回完整成功并保存重开。138原位封装与两项属性实际写入已保存重开，PCB经原生确认后实际焊盘尺寸、网络及保存重开均通过。最终核对因宿主补入封装名称误报；139只接受与已验证资源一致的UUID和名称。142已通过默认配置核对，0805关联与两项属性已保存重开；最终回执因宿主保留旧封装名称停止。143已取得两器件属性更新及真实0402→0805组合更新成功回执，名称正确、保存关闭重开通过。本轮footprintNameRepairs为空，宿主正常刷新名称；新增旧名兜底修正分支仅回归通过，未单独触发实机。PCB导入中的原生确认框已手动应用，不计为自动同步通过。
+当前没有一条完整替换指令。按以下步骤组合既有物料查询、放置、读回、删除和属性修改指令，逐步核对后再依赖下一步。
 
-| 指令 | 用途 | 参数 |
-| --- | --- | --- |
-| `schematic.getComponentUpdatePlan` | 只读列出封装与属性变化 | `items:[{primitiveId,footprint?,properties?}]` |
-| `schematic.updateComponents` | 执行并逐项读回 | `plan`为规划响应的完整`data` |
+先用`project.exportFile`传`fileType:"epro2"`备份原生工程。4.1.78测试中，原理图已换件但PCB尚未同步时，旧格式`.epro`导出出现了新旧器件信息混合，不能将该旧格式文件当作本次正确恢复包。
 
-流程：激活目标原理图 → 查器件和目标封装 → 生成计划 → 执行 → 保存。
-需要更新PCB时，再用现有`pcb.importChanges`同步，并核对实际封装、焊盘网络及走线。
-计划不导入库资源。执行时在当前工程库建立或复用辅助器件，以载入目标封装；原理图里的器件不删除、不重建，也不额外放置辅助器件。辅助库器件及必要的空符号保留在工程库，结果会报告其UUID。`copiedResources[].normalizedDefaultRecords`列出比较时排除的已知默认配置；其余记录继续核对。`footprintNameRepairs`记录旧名称缓存的修正前后值、源码写入和读回状态。
+源码每条记录为`JSON头||JSON体`，末尾可带`|`。按首个`||`分开头体，保留JSON字符串内部的`|`。按`(type,id)`取最高`ticket`，体为`""`的记录表示删除；只检查重放后的有效记录。坐标和旋转采用`listComponents`的公开坐标，不能直接把源码中符号相反的Y坐标传给放置指令；镜像可从`COMPONENT.isMirror`读取。
 
-`primitiveId`来自当前原理图；`footprint`为明确的`{uuid,libraryUuid}`，来自封装搜索或目标库器件的封装关联。
-`properties`只传要改的字段，其余属性由插件保留。
-支持`manufacturer`、`manufacturerId`、`supplier`、`supplierId`、`name`、`designator`、`addIntoBom`、`addIntoPcb`、`otherProperty`。
-阻值、容差和耐压等自定义字段放在`otherProperty`；这些字段合并更新，不覆盖整份旧属性。
-同一项可同时换封装和更新属性，多项可在一次计划中处理。
-
-规划参数示例：
+1. 激活目标图页，按完整器件位号或立创编号唯一确定对象。用`schematic.listComponents`、`schematic.getAttributes`、`schematic.listPins`、`schematic.listWires`和`project.getDocumentSource`记录旧器件的`primitiveId`、坐标、方向、镜像、位号、Unique ID、Channel ID、Group ID、ReuseBlock、需保留的业务属性，以及每个引脚号的绝对坐标、NC状态和原网络。`project.getDocumentSource`只读返回当前激活文档的源码；按头/体记录解析并以`COMPONENT`头的`id`匹配器件，再收集`ATTR`体中`parentId`为该ID的属性。`COMPONENT`记录提供`isMirror`等组件字段，`ATTR`提供身份和业务属性。未知格式或无法唯一匹配所需字段时停止并说明缺口，不直接改写源码。
+2. 用`lib.deviceGetByLcscIds`或`lib.deviceSearch`定位新物料，再用`lib.deviceGet`读取完整器件资料。确认具体Device、Symbol、Footprint关联、器件型号、制造商及供应商料号；这些新物料资料必须来自新器件，不能从旧器件继承。
+3. 用新器件放置一个临时实例。`schematic.placeDevice`按立创编号调用，或传`deviceUuid`和`libraryUuid`；同时给出`x`、`y`，按需要传`rotation`、`mirror`、`subPartName`、`addIntoBom`和`addIntoPcb`。新器件暂不占用旧位号或旧关联ID。
 
 ```json
-{
-  "items": [
-    {
-      "primitiveId": "当前电阻ID",
-      "footprint": {"uuid":"目标0402封装UUID","libraryUuid":"目标库UUID"},
-      "properties": {"otherProperty":{"Resistance":"10k","Tolerance":"1%"}}
-    },
-    {"primitiveId":"另一个器件ID","properties":{"manufacturerId":"新厂家料号"}}
-  ]
-}
+{"cmd":"schematic.placeDevice","params":{"deviceUuid":"新器件UUID","libraryUuid":"新器件库UUID","x":300,"y":300,"rotation":0,"mirror":false,"addIntoBom":true,"addIntoPcb":true}}
 ```
 
-执行请求组装为`{instanceId:currentInstanceId,cmd:"schematic.updateComponents",params:{plan:planResponse.data}}`。
-成功结果只确认原理图更新和即时读回，保存持久性与PCB同步分别检查。
-`copiedResources`保留原字段名，报告实际导入或复用的封装、辅助器件、来源及检查范围。库源码内容核验、工程资源存在和旧格式序列化几何核验分别报告；不能把资源存在当作任意引脚映射正确。
-部分失败会说明已导入资源、已更新项目和未执行项目；写入未知时先只读检查，不重复执行旧计划。
+多部件器件按需加`subPartName`；坐标和方向应使新器件的目标引脚落在记录的原引脚位置。
+
+4. 用`schematic.listComponents`、`schematic.getAttributes`、`schematic.listPins`和`project.getDocumentSource`读回新实例。逐项确认新Device、Symbol、Footprint、型号和物料号，并按引脚号比较新旧引脚的绝对落点与原网络。需要保留业务属性时，用`schematic.modifyComponent`在新实例完整属性上叠加这些键，此时仍保留新件临时位号和身份。不能用旧属性表覆盖新属性。NC引脚应保持未连接。若任何引脚映射、导线端点、网络或资源关联不一致，不得删除旧器件。
+5. 新器件全部通过后，才用`schematic.delete`删除旧`primitiveId`。读回确认旧器件已不存在，再用`schematic.setAttribute`恢复新实例已有的`Designator`、`Unique ID`及确需保留的`Channel ID`、`Group ID`、`Reuse Block`。它只修改已有属性，不能用它伪造Device、Symbol或Footprint关联。
+6. 重新读取新旧器件ID映射、引脚、导线、网标和网络，确认原连接保留且非目标图元未变化。保存图页，关闭并重新打开后再次核对器件身份、资源关联、属性、引脚落点和网络。
+
+任一步写入结果未知时，先只读检查现场并停止后续写入；不盲目重试，不假设自动回滚。现有指令无法保留必要属性或网络关联时，报告具体缺口并停止。PCB更新由用户在EDA界面手动发起并确认；AI不调用`pcb.importChanges`或官方导入接口。
+
+`schematic.modifyComponent`必须提交完整14字段：`x,y,rotation,mirror,addIntoBom,addIntoPcb,designator,name,uniqueId,manufacturer,manufacturerId,supplier,supplierId,otherProperty`。位置和旋转来自新实例`listComponents`，镜像来自`COMPONENT.isMirror`。其余从新实例有效ATTR读取：`Designator/Name/Unique ID/Manufacturer/Manufacturer Part/Supplier/Supplier Part`分别对应顶层同义字段；`Add into BOM`和`Convert to PCB`的`yes/no`转为布尔值。`otherProperty`保留新实例普通属性，仅叠加明确选择的业务键；不放入`Device/Symbol/Footprint`、`Reuse Block/Group ID/Channel ID`、`3D Model/3D Model Title/3D Model Transform`和上述已有顶层字段的系统键。用`getAttributes`和读回结果对照完整属性，不凭目标库的显示名称猜值。
 
 ### `schematic.buildBlock` — 从零生成功能区
 
@@ -238,3 +221,7 @@
 	}
 }
 ```
+
+149候选在148安装版失败现场上增加限定的旧资源名称观察：仅真实换封装且新旧关联、资源来源、PAD及几何全部核验通过时，允许缓存名精确等于已验证的旧实际资源名称，返回retained-previous-resource-name、previousResourceName及evidence.previousResource，不写源码修名。未知第三个名称仍拒绝。2026-10-14官方API整窗重开后的完整入口已实际触发该分支并通过；保存关闭重开与资源几何通过。图框动态时间读值和一条新属性首次保存zIndex调整单独记证据，不放宽通用比较。148安装版失败记录保留；149安装版复验待完成，PCB同步、制造及视觉显示验收未完成。
+
+2026-10-14安装版149已在专用测试工程完成两批四器件正式指令验收：首批实际触发retained-previous-resource-name并成功；第二批反向切换、文本清空、数值和布尔均成功。保存、真实关闭到Start Page、重开后的值、持久ID、原有格式及三条导线保持；封装来源、完整可比几何与焊盘读回通过。本次新建Installed149Number（afb6ac7a27dfa1ca）和Installed149Boolean（512ffd2cf4f8c6d9）仅首次保存zIndex变化，专家限定认可；原严格比较false保留，不普遍放宽规则。测试页已关闭。148失败partial仍保留；PCB同步、制造及视觉显示未验收。149包按构建时内容保持原SHA，不重新打包同版本。

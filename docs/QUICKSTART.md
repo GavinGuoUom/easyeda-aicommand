@@ -14,10 +14,10 @@
 
 ## 1. 下载仓库并安装代理依赖
 
-从 [v0.10.116 源代码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.10.116.zip) 下载并解压到固定目录，或检出同一 tag：
+从 [v0.20.0 正式版源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.0.zip) 下载并解压到固定目录，或检出同一发布 tag：
 
 ```powershell
-git clone --branch v0.10.116 --depth 1 https://github.com/quhuii-lgtm/easyeda-aicommand.git
+git clone --branch v0.20.0 --depth 1 https://github.com/quhuii-lgtm/easyeda-aicommand.git
 Set-Location easyeda-aicommand
 ```
 
@@ -44,16 +44,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bridge\install-url-sch
 
 ## 2. 安装并连接 EDA 插件
 
-1. 从 [v0.10.116 预发布](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/tag/v0.10.116) 下载 `ai-command-engine_v0.10.116.eext`。源代码 ZIP 与 `.eext` 用途不同。
+1. 从 [v0.20.0 GitHub 正式发布](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/tag/v0.20.0) 下载 [扩展包 `ai-command-engine_v0.20.0.eext`](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine_v0.20.0.eext)。若从中文嘉立创 EDA 市场安装，请由使用者上传市场包；市场审核和上架状态以市场页面为准。
 2. 在 EDA 的扩展/插件管理界面导入该 `.eext`，启用插件并勾选“允许外部交互”。不同 EDA 版本菜单位置可能不同，以当前客户端的插件导入入口为准。
 3. 新建一个用于试用的空白工程及原理图页，打开该页。
 4. 在“AI Command”菜单使用“启动桥接”“停止桥接”或“重新连接桥接”。启动已连接的窗口是幂等操作；重新连接会先排空本窗口已有请求，再换连。停止会拒绝排队中的新写请求，交付已派发请求的结果后再断开本窗口。partial 或结果不确定时停止会明确报告并保留写保护。
 
-v0.10.116 附件校验值见 [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.10.116/SHA256SUMS.txt)。
+v0.20.0 附件校验值见 [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/SHA256SUMS.txt)。
 
 可用 PowerShell `Get-FileHash -Algorithm SHA256 -LiteralPath '<下载的 eext 路径>'` 核对。校验值只适用于本次发布附件，不适用于自行重新打包的文件。
 
-v0.10.116 是预发布候选。安装记录读回 218 条命令，并核对 4 项已移除入口；这不表示所有功能均已测试。此次未做真实 EDA 写入，不能据此宣称所有功能和场景通过。历史市场问题 `103014` 未重新验证。升级后先在试用工程核对，详细范围见 [v0.10.116 版本说明](releases/v0.10.116.md)。从旧版升级需关闭并重新打开 EDA 窗口，代理和技能也应更新到同一标签。
+v0.20.0 是 GitHub 正式版，不是预发布。该版本的类型检查、构建、16 组相关回归和候选包检查已通过；尚未安装到真实 EDA 宿主，不能据此声称完成实机验证。代理从 v0.20.0 源码包安装，技能请下载[同版本英文主版、中文备用技能 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine-skill_en-zh_v0.20.0.zip)，与扩展保持同一版本。细节见 [v0.20.0 版本说明](releases/v0.20.0_ZH.md)。升级后先在试用工程核对；从旧版升级需关闭并重新打开 EDA 窗口。
 
 ## 3. 完成第一次只读调用
 

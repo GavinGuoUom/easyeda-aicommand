@@ -1,80 +1,126 @@
-# Project and Board Commands (`project.*`)
+# Projects and pages
 
-> The tables and parameter objects on this page describe commands and `params`; they are not complete HTTP requests. A `/command` request must include outer `cmd`, top-level `instanceId`, and required `params`. A macro routes only at the outer level; its steps inherit the instance. See [setup](setup.md) for a complete example.
+# Project and board management commands (`project.*`)
 
-Create, copy, delete, and associate projects, boards, and schematic pages. Always read document-tree UUIDs from `project.getInfo`; do not guess them.
+> This page preserves use cases and limitations. Use `/help?cmd=<command-name>` from the verified target window version for parameters, return fields, and examples.
+> A `/command` request must include outer `cmd`, top-level `instanceId`, and the required `params`.
+> A macro routes only at the outer level; its steps inherit the instance.
+> See [setup](setup.md) for a complete example.
 
-## Unclear result from project import (0.10.106 candidate)
+Commands for creating, copying, deleting, and associating projects, boards, and schematic pages.
 
-If the SDK call to `project.importFile` returns empty, throws, or provides no valid project UUID, report `partial:true`, `retryable:false`, `outcome:unknown`. This means the import result cannot be confirmed; it does not mean that no project was created. Check the target name and directory from the error first; do not automatically import again. Invalid parameters before the call remain an ordinary rejection. A successful return still requires independent verification of project contents.
+Always get document-tree UUIDs from `project.getInfo`; do not guess them.
+
+## Verify projects by team
+
+`project.list` accepts an optional non-empty string `teamUuid`; when supplied, it is passed to the SDK unchanged.
+
+When omitted, the host's default query scope is used.
+
+The response is an array of project UUIDs.
+
+With `detail:true`, the command returns an ordered array of `{ uuid, info }`.
+
+If the host returns `undefined`, `null`, a non-array, or an array containing a non-string or empty-string item, report an explicit error; do not treat it as “no projects.”
+
+Preserve project IDs as returned by the host; do not guess their format.
+
+A genuine empty array still returns `[]`, but compare it with a known project from the same team.
+
+Do not infer from an empty list alone that a previous import did not happen.
+
+This command is read-only. It does not clear unknown-write protection or automatically retry an import.
+
+```json
+{"instanceId":"currently verified window ID","cmd":"project.list","params":{"teamUuid":"target team UUID recorded from the import result","detail":true}}
+```
 
 ## Project-level commands
 
-| Command | Description | Key parameters |
-| --- | --- | --- |
-| `project.getInfo` | Current project info (name + document-tree UUID) | None |
-| `project.getInfoOf` | Info for a specified project | `projectUuid` |
-| `project.list` | List projects; may be scoped to a team (`detail:true` reads each project's info and is slower) | `teamUuid?`, `detail?` |
-| `project.create` | Create a project | `name`, `projectName?` (English internal name), `description?` |
-| `project.open` | Open/switch to a project. ⚠️ The official API fails directly when the current project has unsaved changes (“工程打开失败” / project open failed); run `schematic.save` before switching. | `projectUuid` |
-| `project.moveToFolder` | Move a project to a folder (empty means root) | `projectUuid`, `folderUuid?` |
-| `project.exportFile` | Export `.epro`/`.epro2` (decode base64 to disk for backup/migration) | `fileName?`, `fileType?` (epro\|epro2) |
-| `project.importFile` | Import an external file as a new project (since 0.10.35; `.PcbDoc`/`.SchDoc`/`.epro` etc. infer `fileType`; if omitted, automatically use the current team and create a New Project) | `base64`, `fileName`, `fileType?`, `newProjectName?` |
-| `project.getDocumentSource` | Read JSON source data for the active document (read-only; faster for whole-document analysis than querying primitives one by one) | None |
-| `project.modifyTitleBlock` | Modify title block (⚠️ `data` keys must exist in the current frame; read `titleBlockData` using `getPageInfo` first. Page Size/Symbol cannot be changed through the API.) | `showTitleBlock?`, `data?` |
-
-## Verify projects by team (0.10.117)
-
-`project.list` accepts an optional non-empty string `teamUuid`. When supplied, it is passed unchanged to the SDK; when omitted, the host's default query scope is used. The result is an array of project UUID strings. With `detail:true`, the result is an ordered array of `{ uuid, info }` objects.
-
-On 2026-10-11, the installed 0.10.117 build on EDA 4.1.71 returned 21 projects and their details for a specified team, with a known project from that team used as a comparison. Rejection of malformed responses passed local simulation; no exception was injected into the host.
-
-The command explicitly errors if the host returns `undefined`, `null`, a non-array, or an array containing a non-string or empty-string item; it does not treat these as “no projects.” Preserve project IDs as host strings and do not infer their format. A real empty array still returns `[]`; compare it with a known project in the same team before concluding that a prior import did not occur. This command is read-only; it does not clear protection for an uncertain write and does not automatically retry an import.
-
-```json
-{"instanceId":"verified window ID","cmd":"project.list","params":{"teamUuid":"target team UUID recorded in the import result","detail":true}}
-```
+| Command | Purpose | When to use | Limitation |
+| --- | --- | --- | --- |
+| `project.getInfo` | Current project information (name and document-tree UUIDs) | Confirm the current project before an operation. | Check available parameters in the target instance's help. |
+| `project.getInfoOf` | Information for a specified project | Verify the document tree of a specified project. | Check available parameters in the target instance's help. |
+| `project.list` | List projects. Can specify a team (`detail:true` fetches each project's information and is slower). | Find projects for a target team. | Check available parameters in the target instance's help. |
+| `project.create` | Create a project. | Start a separate project. | If the write result is unknown, stop later writes. |
+| `project.open` | Open a specified project and switch the current project. The official API fails with “project open failed” when the current project has unsaved changes; run `schematic.save` before switching. | Switch to a specified project or document. | Save unsaved changes in the current project first. |
+| `project.moveToFolder` | Move a project into a folder (empty means root). | Organize project folders. | If the write result is unknown, stop later writes. |
+| `project.exportFile` | Export `.epro` or `.epro2` (save the base64 locally for backup or migration). | Backup, delivery, or independent inspection. | Successful export does not prove content acceptance. |
+| `project.importFile` | Import an external file as a new project (since 0.10.35; `.PcbDoc`, `.SchDoc`, `.epro`, etc. infer `fileType`; if omitted, uses the current team and `New Project`). | Receive an external design or synchronize content. | Treat empty return or exception as an unknown result; do not resend. |
+| `project.getDocumentSource` | Read JSON source data of the active document (faster for whole-document read-only analysis than querying primitives individually). | Verify effective records read-only. | Source coordinates cannot be used directly as public API coordinates. |
+| `project.modifyTitleBlock` | Modify the title block. `data` keys must already exist in the frame; check `titleBlockData` with `getPageInfo` first. The API cannot switch `Page Size` or `Symbol`. | Update existing title-block fields. | Only modifies existing fields; does not change paper size. |
 
 ## Boards and associations
 
-| Command | Description | Key parameters |
-| --- | --- | --- |
-| `project.getBoardInfo` | Current board info and schematic/PCB association state; use to diagnose a detached PCB when `pcb.importChanges` reports import failure | None |
-| `project.associateBoard` | Associate a schematic and PCB with a board (repair a detached PCB) | `schematicUuid`, `pcbUuid` |
-| `project.copyBoard` | Copy a board | `boardName` |
-| `project.deleteBoard` | Delete a board; if the official API returns failure, the response includes current target information. No automatic retry. | `boardName` |
-| `project.renameBoard` | Rename a board (⚠️ matches by name and may rename the wrong board if names collide; verify with `getBoardInfo` first) | `boardName`, `newName` |
+| Command | Purpose | When to use | Limitation |
+| --- | --- | --- | --- |
+| `project.getBoardInfo` | Current board information and schematic/PCB association status. Use to diagnose an orphan PCB after `pcb.importChanges` reports failure. | Verify or create a schematic-to-PCB association. | Check available parameters in the target instance's help. |
+| `project.associateBoard` | Associate a schematic and PCB with a board (repair an orphan PCB). | Verify or create a schematic-to-PCB association. | If the write result is unknown, stop later writes. |
+| `project.copyBoard` | Copy a board. | Reuse existing design content. | If the write result is unknown, stop later writes. |
+| `project.deleteBoard` | Delete a specified board. On official API failure, includes current target information and does not retry automatically. | Remove a verified target. | Verify the target and back up first. |
+| `project.renameBoard` | Rename a board. Matches by name, so duplicate names can select the wrong board; verify with `getBoardInfo` first. | Rename an unambiguous board. | If the write result is unknown, stop later writes. |
 
 ## Schematics and pages
 
-| Command | Description | Key parameters |
-| --- | --- | --- |
-| `project.createSchematic` | Create a schematic (`boardName` must name an existing board; if omitted when creating, associate later with `associateBoard`) | `boardName?` |
-| `project.createSchematicPage` | Create a page under the specified schematic (the UUID is the Schematic node, not a page) | `schematicUuid` |
-| `project.deleteSchematicPage` | Delete a page | `pageUuid` |
-| `project.copySchematicPage` | Copy a page (omit `schematicUuid` to copy within the same schematic; since 0.10.37 readback verifies the copy and returns name/parentSchematicUuid/sourcePageUuid; ownership anomalies carry a warning; the host deriving a new name as “sourceName_N” is normal) | `pageUuid`, `schematicUuid?` |
-| `project.renameSchematicPage` | Rename a page by UUID (hardened in 0.10.59: compare snapshots before/after; `renamed` is based only on snapshots). ⚠️ The target page must be open and active in this window, and its document must have been saved at least once in this window; otherwise the official API can falsely fail. In a new window that has never renamed a page, it may permanently reject pages created in other windows; successfully rename a page created in this window once to unlock it. | `pageUuid`, `name` |
-| `project.listSchematicPages` | List all pages | None |
-| `project.reorderSchematicPages` | Reorder pages (⚠️ must include every page) | `schematicUuid`, `pageUuids[]` |
+| Command | Purpose | When to use | Limitation |
+| --- | --- | --- | --- |
+| `project.createSchematic` | Create a schematic. If `boardName` is provided, it must be an existing board; if omitted, associate it later with `associateBoard`. | Add a schematic to a project. | Any supplied `boardName` must already exist. |
+| `project.createSchematicPage` | Create a page under a specified schematic (`uuid` is the Schematic node, not a page). | Add a page to an existing schematic. | `schematicUuid` must refer to the parent schematic, not a page. |
+| `project.deleteSchematicPage` | Delete a page. | Remove a verified target. | Verify the target and back up first. |
+| `project.copySchematicPage` | Copy a page. | Reuse existing design content. | If the write result is unknown, stop later writes. |
+| `project.renameSchematicPage` | Rename a page by UUID. | Organize page names and order. | Activate the target in this window and save the document once first. |
+| `project.listSchematicPages` | List all schematic pages. | Select or verify a schematic page. | Check available parameters in the target instance's help. |
+| `project.reorderSchematicPages` | Change page order. Must include every page. | Organize page names and order. | Supply UUIDs for all pages. |
 
-## PCB commands
+### Additional notes for `project.copySchematicPage`
 
-| Command | Description | Key parameters |
-| --- | --- | --- |
-| `project.createPcb` | Create a PCB (same `boardName` rule as above) | `boardName?` |
-| `project.copyPcb` | Copy a PCB; `boardName` names the target Board for the copy, not the copy itself | `pcbUuid`, `boardName?` |
-| `project.deletePcb` | Delete a PCB | `pcbUuid` |
-| `project.listPcbs` | List all PCBs | None |
+- If the target `schematicUuid` is omitted, the page is copied within the same schematic.
+- Since 0.10.37, the copy is read back and verified. The response includes `name`, `parentSchematicUuid`, and `sourcePageUuid`; an ownership anomaly includes a warning.
+- The new page name may be generated as `source-name_N`.
 
-- **`project.copyPcb`:** If `boardName` is omitted, creates a detached PCB; prior proof of board ownership is not required. If a nonexistent board name is specified and the SDK returns empty, the cause is unknown. On an empty SDK return or exception, the result is unconfirmed; the plugin returns `error.cause.partial=true` and stops dependent macro steps. Do not retry automatically. Inspect with read-only `project.getInfo` and `project.listPcbs`. A successful return identifies the copy with `pcbUuid`.
+### Additional notes for `project.renameSchematicPage`
+
+- Renames by UUID. Since 0.10.59, it compares snapshots before and after renaming and trusts `renamed` only when the snapshot confirms it.
+- ⚠️ The target page must be open and active in this window, and its document must have been saved once in this window; otherwise the official API may falsely fail.
+- An older host once failed to rename an old page from another window.
+- That sample recovered after successfully renaming a new page in this window.
+- Do not treat this historical behavior as a universal prerequisite for all windows.
+
+## PCBs
+
+| Command | Purpose | When to use | Limitation |
+| --- | --- | --- | --- |
+| `project.createPcb` | Create a PCB. If `boardName` is provided, it must be an existing board. | Add a PCB to a project. | Any supplied `boardName` must already exist. |
+| `project.copyPcb` | Copy a PCB. `boardName` is the destination Board name for the copy, not the copy's name. | Reuse existing design content. | If omitted, creates an orphan PCB. |
+| `project.deletePcb` | Delete a PCB. | Remove a verified target. | Verify the target and back up first. |
+| `project.listPcbs` | List all PCBs. | Select or verify a PCB document. | Check available parameters in the target instance's help. |
+
+- **`project.copyPcb`:** if `boardName` is omitted, an orphan PCB is created.
+- You do not need to prove an existing Board association in advance.
+- If a nonexistent Board name is supplied and the SDK returns an empty result, the underlying cause is unknown.
+- If the SDK returns empty or throws, the outcome is unconfirmed. The plugin returns `error.cause.partial=true` and stops dependent macro steps.
+- Do not retry automatically.
+- First inspect with `project.getInfo` and `project.listPcbs` (read-only).
+- A successful copy is identified by the returned `pcbUuid`.
 
 ```json
 {
   "instanceId": "current project window ID",
   "cmd": "project.copyPcb",
-  "params": { "pcbUuid": "source PCB UUID", "boardName": "target Board name for the copy" }
+  "params": { "pcbUuid": "source PCB UUID", "boardName": "destination Board name for the copy" }
 }
 ```
 
-If `error.cause.partial=true` is returned, do not copy again; inspect using the read-only checks above.
+If `error.cause.partial=true`, do not copy again. Follow the read-only checks above.
 
+## Unknown result from project import
+
+If `project.importFile` returns empty, throws, or does not return a valid project UUID after calling the SDK, report `partial:true`, `retryable:false`, and `outcome:unknown`.
+
+This means the import result cannot be confirmed; it does not mean no project was created.
+
+First inspect using the target name and folder from the error. Do not automatically import again.
+
+Parameter errors before the call are ordinary rejections.
+
+Even a successful response requires a separate check of project contents.

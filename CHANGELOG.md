@@ -1,5 +1,17 @@
 # 更新记录
 
+## v0.20.1 — Formal release (2026-10-16)
+
+- Removed the extension's cbb.* and module.* command namespaces. The independent module-reuse extension remains a separate project and is unchanged.
+- Reorganized the companion skill around schematic and PCB task frequency; the English skill is primary and the Chinese skill is the fallback.
+- TypeScript checking, the production build, and 15 existing regression suites passed. The runtime matches the original v0.20.1 candidate except for publication metadata and path labels. 205 commands are registered, without cbb/module commands or duplicate names. Installation and live EDA host verification are pending. The Chinese marketplace package is prepared for user upload; upload and approval are pending.
+
+## v0.20.1 — 正式发布（2026-10-16）
+
+- 移除扩展对外的 cbb.* 与 module.* 指令命名空间。独立“模块复用”扩展仍是单独项目，本次没有修改。
+- 配套技能按原理图和 PCB 任务频率重组；英文技能为主，中文技能为备用。
+- 类型检查、正式构建和 15 组现有回归通过；运行程序与原始 v0.20.1 候选包对照，仅发布元数据和路径标记不同。实际注册 205 条指令，不含 cbb/module 指令且无重名。安装和真实 EDA 宿主验证尚待完成。中文市场包已准备好，由使用者上传；上传和审批状态待定。
+
 ## v0.20.0 — Formal release (2026-10-15)
 
 - Removed `schematic.getComponentUpdatePlan` and `schematic.updateComponents`. For complete component replacement, the companion skill now guides a checked sequence of existing atomic commands.
@@ -321,7 +333,7 @@
 - 增加只读计划 `pcb.getFanoutPlan`、`pcb.getAutoCopperPlan`，以及接收完整 `plan` 执行的 `pcb.fanout`、`pcb.autoCopper`。计划使用 mil，绑定 PCB 文档 UUID、设计源码与 DRC 规则基线；执行前核对焦点、基线和目标/几何计划。
 - 扇出按焊盘、器件或网络择一规划线段与通孔；铜皮按网络和目标铜层分组，沿用上游边界生成、规则间距、几何裁剪与退化诊断。铜皮默认创建覆铜、重建填充并读回；`generationType: "fill"` 创建固定填充。
 - 扇出线长、线宽、过孔外径、孔径和安全间距须全部以 mil 明确提供，不从未核实的 DRC 字段猜默认值。椭圆、长圆和圆角矩形焊盘按采样弓高保守膨胀；曲线焊盘复杂多边形、曲线铜面/区域及弧形板框/板内孔边界不可执行，单独圆弧走线仍按误差膨胀处理。
-- 来源：`JLCEDA/eext-pad-fanout` commit `7c88e571457e6d63463b7cb391e1e62bdbdd02d7`；`JLCEDA/eext-auto-copper-shape` commit `98317b6b5941977a3ae90948a05295f9d8b1169f`。覆盖范围、几何近似和计划字段见[几何命令说明](skills/ai-command-engine/references/commands-geometry.md)。
+- 来源：`JLCEDA/eext-pad-fanout` commit `7c88e571457e6d63463b7cb391e1e62bdbdd02d7`；`JLCEDA/eext-auto-copper-shape` commit `98317b6b5941977a3ae90948a05295f9d8b1169f`。覆盖范围、几何近似和计划字段见当前[PCB 专项指令](skills/ai-command-engine/references/commands-pcb-special.md)。
 - 本条记录为本地候选说明；真实安装、宿主操作及保存关闭重开验收状态另行记录。命令不自动保存；写入失败停止后续步骤，不自动回滚或重试。
 - 本地扇出11项、自动铜皮15项、host15项、DFM命令/菜单8项、DFM核心31项、owner17项及问题上报回归通过；TypeScript 检查与构建通过。六组固定上游几何差分验证了完整多边形、孔、裁剪和窄颈修复诊断一致。独立审查问题已修正；不把模拟或算法对照当作真实 PCB 验收。
 
@@ -473,4 +485,3 @@
 文档守卫收紧、写保护和写队列补强，详见 [面向用户的版本说明](docs/releases/v0.10.73.md)。
 
 构建框架此前的 1.x 版本历史属于 SDK，移至 [SDK-CHANGELOG](docs/SDK-CHANGELOG.md)，与本插件 0.10.x 版本无关。
-

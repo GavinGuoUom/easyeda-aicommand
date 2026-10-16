@@ -1,15 +1,3 @@
-cbb.copy
-cbb.create
-cbb.delete
-cbb.exportFile
-cbb.get
-cbb.listLibraries
-cbb.openProject
-cbb.openSymbolInEditor
-cbb.placePcb
-cbb.placeSchematicPage
-cbb.placeSymbol
-cbb.search
 editor.listTabs
 editor.openDocument
 editor.screenshot
@@ -43,8 +31,6 @@ lib.symbolSearch
 lib.symbolUpdateSource
 library.getDeviceByLcsc
 library.searchDevice
-module.getContext
-module.getStatus
 pcb.addCustomLayer
 pcb.addNetToClass
 pcb.addNetToEqualLengthGroup

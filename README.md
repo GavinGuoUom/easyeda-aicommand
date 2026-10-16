@@ -47,7 +47,7 @@ Place components by JLC part number, read their actual pins, edit reference desi
 
 For an existing schematic, preview an organization plan for selected components or regions before rearranging them and rebuilding connections. This is suitable for repeated channels, MCU peripherals, interface modules, and other drawing tasks with clear connection relationships.
 
-Complete component replacement uses a temporary new instance and the companion skill's full verification, deletion, property-update, identity-transfer, and persistence procedure. It does not preserve the old instance ID through an in-place update; follow the [current Chinese schematic command guide](skills/ai-command-engine/references/zh/commands-schematic.md#完整器件更换) for the exact steps and field sources. The v0.10.143 update commands are removed. If an existing PCB must reflect schematic changes, the user starts and confirms import in the EDA interface; AI only performs read-only checks before and after.
+Complete component replacement uses a temporary new instance and the companion skill's full verification, deletion, property-update, identity-transfer, and persistence procedure. It does not preserve the old instance ID through an in-place update; follow the [current schematic workflow](skills/ai-command-engine/references/commands-schematic.md#complete-component-replacement) for the exact steps and field sources. The v0.10.143 update commands are removed. If an existing PCB must reflect schematic changes, the user starts and confirms import in the EDA interface; AI only performs read-only checks before and after.
 
 ### 5. Batch wiring, net labels, and connection checks
 
@@ -72,19 +72,19 @@ These capabilities work together with the local proxy and companion AI skill. Th
 
 ### 8. JLC manufacturing checks (DFM)
 
-PCB DFM, SMT, and same-net spacing checks return 18, 7, and 1 check items respectively, along with completeness and geometry coverage information. A DFM run requires explicit outer and inner copper thickness inputs: `outerCopperOz` and `innerCopperOz`. Copper thickness read from the design is reported separately and does not replace these inputs. Results do not constitute manufacturing approval or a complete online DFM service. See [DFM check details](skills/ai-command-engine/references/commands-dfm.md).
+PCB DFM, SMT, and same-net spacing checks return 18, 7, and 1 check items respectively, along with completeness and geometry coverage information. A DFM run requires explicit outer and inner copper thickness inputs: `outerCopperOz` and `innerCopperOz`. Copper thickness read from the design is reported separately and does not replace these inputs. Results do not constitute manufacturing approval or a complete online DFM service. See [DFM check details](skills/ai-command-engine/references/commands-frequency.md).
 
 ### 9. Pad fanout and local copper generation
 
-`pcb.getFanoutPlan` and `pcb.getAutoCopperPlan` first produce read-only plans. `pcb.fanout` and `pcb.autoCopper` execute the complete plans. Fanout length, track width, via outer diameter, drill diameter, and clearance must all be specified explicitly in mils. Supported geometry, conservative approximations, and rejection conditions are described in [Geometry command details](skills/ai-command-engine/references/commands-geometry.md). Historical isolated-project checks cover selected larger-MCU fanout samples; they do not establish a pass for every package shape, every board, or a complete MCU fanout workflow. The separate fill-readback path has also been verified on a specific copper area after save/close/reopen. These records are scoped to those tested objects and do not replace review of the current plan, geometry, or manufacturing output.
+`pcb.getFanoutPlan` and `pcb.getAutoCopperPlan` first produce read-only plans. `pcb.fanout` and `pcb.autoCopper` execute the complete plans. Fanout length, track width, via outer diameter, drill diameter, and clearance must all be specified explicitly in mils. Supported geometry, conservative approximations, and rejection conditions are described in [Geometry command details](skills/ai-command-engine/references/commands-pcb-special.md). Historical isolated-project checks cover selected larger-MCU fanout samples; they do not establish a pass for every package shape, every board, or a complete MCU fanout workflow. The separate fill-readback path has also been verified on a specific copper area after save/close/reopen. These records are scoped to those tested objects and do not replace review of the current plan, geometry, or manufacturing output.
 
 ### 10. Pad expansion and net-name silkscreen text
 
-Use `pcb.getPadExpansionPlan` / `pcb.expandPads` to plan and perform pad expansion. Use `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` to create editable silkscreen text for pad nets. Supported shapes, region splitting and persistence limits for expansion, and placement and clearance limits for net text are described in [Geometry command details](skills/ai-command-engine/references/commands-geometry.md). These features do not replace checks of the actual graphics, clearances, or manufacturing output.
+Use `pcb.getPadExpansionPlan` / `pcb.expandPads` to plan and perform pad expansion. Use `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` to create editable silkscreen text for pad nets. Supported shapes, region splitting and persistence limits for expansion, and placement and clearance limits for net text are described in [Geometry command details](skills/ai-command-engine/references/commands-pcb-special.md). These features do not replace checks of the actual graphics, clearances, or manufacturing output.
 
 ## Operation demonstrations
 
-Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not acceptance records for v0.20.0.
+Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not acceptance records for v0.20.1.
 
 ### Schematic: multi-pin MCU, supporting parts, short wires, and labels
 
@@ -106,24 +106,22 @@ The animation uses screenshots from real EDA operations; command descriptions ar
 
 The extension, proxy, and AI skill are installed separately. The proxy runs locally by default at `http://127.0.0.1:49720`. An optional issue-reporting tool can collect the information needed for a report and submit a GitHub Issue using the user’s authenticated local [GitHub CLI](https://cli.github.com/). The AI informs the user before submission. Issue reporting is never triggered automatically by an EDA command and does not upload project data in the background.
 
-Commands in the `module.*` namespace are a narrow proxy to the separate module-reuse extension. That companion extension must be installed independently; it is not bundled in or published as part of this extension package. Only the module operations exposed by the installed companion are available.
-
 ## Release status
 
-**v0.20.0 is the formal GitHub release.** The release removes `schematic.getComponentUpdatePlan` and `schematic.updateComponents`; complete replacement now uses a sequence of existing atomic commands documented in the companion skill. The candidate package checks passed before release, but v0.20.0 has not been installed or verified in a live EDA host. The Chinese EDA marketplace package is prepared for the user to upload; it has not been uploaded or approved. See the [v0.20.0 release notes](docs/releases/v0.20.0.md) and [Chinese release notes](docs/releases/v0.20.0_ZH.md).
+**v0.20.1 is the current release.** This version removes the `cbb.*` and `module.*` command namespaces from the extension. The independent module-reuse extension remains a separate project and is unchanged. TypeScript checking, production build, and 15 existing regression suites passed. The runtime matches the original v0.20.1 candidate except for publication metadata and path labels. A total of 205 commands are registered, with no `cbb.*` or `module.*` commands and no duplicate names. v0.20.1 has not been installed in a live EDA host. The Chinese EDA marketplace package is prepared for user upload; upload and approval are pending. See the [v0.20.1 release notes](docs/releases/v0.20.1.md) and [Chinese release notes](docs/releases/v0.20.1_ZH.md).
 
 The “little robot drawing a circuit board” shown on the page is the project logo. The marketplace icon file is `images/logo-marketplace.png`.
 
 <a id="v0200-downloads-and-installation"></a>
 
-## v0.20.0 downloads and installation
+## v0.20.1 downloads and installation
 
-Download the formal v0.20.0 release files:
+Download the v0.20.1 release files:
 
-- [Extension package: ai-command-engine_v0.20.0.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine_v0.20.0.eext)
-- [Companion skill package: ai-command-engine-skill_en-zh_v0.20.0.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine-skill_en-zh_v0.20.0.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/SHA256SUMS.txt)
-- [v0.20.0 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.0.zip)
+- [Extension package: ai-command-engine_v0.20.1.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine_v0.20.1.eext)
+- [Companion skill package: ai-command-engine-skill_en-zh_v0.20.1.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine-skill_en-zh_v0.20.1.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/SHA256SUMS.txt)
+- [v0.20.1 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.1.zip)
 
 
 

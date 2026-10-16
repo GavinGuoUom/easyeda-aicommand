@@ -14,13 +14,11 @@ import { createBridgeOwnerCoordinator } from './bridge/owner';
  */
 import { getBridgeLifecycleStatus, reconnectBridgeClient, startBridgeClient, stopBridgeClient } from './bridge/client';
 import { autoCopperCommands } from './commands/autoCopper';
-import { cbbCommands } from './commands/cbb';
 import { dfmCommands } from './commands/dfm';
 import { editorCommands } from './commands/editor';
 import { fanoutCommands } from './commands/fanout';
 import { knowledgeCommands } from './commands/knowledge';
 import { libCommands } from './commands/lib';
-import { moduleReuseCommands } from './commands/moduleReuse';
 import { netSilkscreenCommands } from './commands/netSilkscreen';
 import { padExpansionCommands } from './commands/padExpand';
 import { pcbCommands } from './commands/pcb';
@@ -50,9 +48,7 @@ function registerAllCommands(): void {
 		...pcbGroupingCommands,
 		...knowledgeCommands,
 		...systemCommands,
-		...cbbCommands,
 		...libCommands,
-		...moduleReuseCommands,
 	])
 		registerCommand(def);
 }

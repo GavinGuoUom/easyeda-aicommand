@@ -1,19 +1,34 @@
-### 知识库
+# 知识库
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+# 设计知识与SMT物料查询
 
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `knowledge.query` | 检索布线规则/经验 | `query`, `limit?` |
-| `knowledge.listRules` | 列出全部规则主题 | 无 |
-| `knowledge.widthForCurrent` | 载流→线宽换算 | `currentA` |
+## 1. 查询设计资料
 
-## 嘉立创开放平台（代理本地执行，无需 EDA 在线）
+> 本页表格保留选用场景和限制；参数、返回字段与示例以已核对所选窗口版本的 `/help?cmd=<命令名>` 为准。
+> 发往EDA的请求必须带cmd、instanceId和所需params。
+> 宏仅外层路由，步骤继承实例。
+> 完整示例见 [setup](setup.md)。
 
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `smt.queryComponent` | 查询 SMT 可贴装物料 | `queryString`, `pageNum?`, `pageSize?` |
+| 指令 | 作用 | 使用时机 | 限制 |
+| --- | --- | --- | --- |
+| `knowledge.query` | 检索设计规则和经验。 | 需要查找设计依据时。 | 结果应结合项目与器件资料判断。 |
+| `knowledge.listRules` | 列出知识库规则主题。 | 选择查询主题时。 | 主题列表不等于具体设计结论。 |
+| `knowledge.widthForCurrent` | 根据电流初估线宽。 | 初选PCB线宽时。 | 估算不能代替完整温升与制造校核。 |
+
+## 2. 查询SMT可贴装物料
+
+smt.queryComponent由代理本地执行。
+不要求EDA在线或提供instanceId。
+代理仍须运行并配置本机凭证。
+
+| 指令 | 作用 | 使用时机 | 限制 |
+| --- | --- | --- | --- |
+| `smt.queryComponent` | 查询可贴装物料。 | 需要按工艺选料时。 | 代理须已配置本机开放平台凭证。 |
 
 - 返回 `components[].code` 即立创编号，可直接用于 `schematic.placeDevice`。
-- 首次使用：让用户打开 `http://127.0.0.1:49720/smt` 填 appId / accessKey / secretKey（存于 `bridge/jlc-credentials.json`，升级不丢失，保存即时生效不用重启代理）；该页面也支持人工查询。
-- **密钥获取**（遇到"未配置嘉立创开放平台密钥"报错时引导用户）：https://open.jlc.com → 登录嘉立创账号 →「快速接入」→「创建应用」，一键生成三件套（appId / accessKey / secretKey），约 1 分钟；密钥只存本机（代理目录 jlc-credentials.json，.gitignore 已排除），勿提交 git、勿外发。
+- 首次使用：让用户打开 `http://127.0.0.1:49720/smt` 填 appId / accessKey / secretKey（存于 `bridge/jlc-credentials.json`，升级不丢失，保存即时生效不用重启代理）。
+- 该页面也支持人工查询。
+- 缺少密钥时，让用户打开https://open.jlc.com。
+- 登录后选择“快速接入→创建应用”。
+- 创建后取得appId、accessKey和secretKey。
+- 密钥只存本机（代理目录 jlc-credentials.json，.gitignore 已排除），勿提交 git、勿外发。

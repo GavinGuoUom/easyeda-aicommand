@@ -71,19 +71,19 @@
 
 ### 8. 嘉立创下单检查（DFM）
 
-提供 PCB DFM、SMT 和同网间距检查，分别返回 18、7、1 项结果，并保留完整性和几何覆盖信息。运行 DFM 时必须明确输入外层铜厚 `outerCopperOz` 与内层铜厚 `innerCopperOz`；图纸读取到的铜厚单独报告，不能代替输入值。结果不等于制造放行，也不代表完整在线 DFM 服务。详见[下单检查说明](skills/ai-command-engine/references/zh/commands-dfm.md)。
+提供 PCB DFM、SMT 和同网间距检查，分别返回 18、7、1 项结果，并保留完整性和几何覆盖信息。运行 DFM 时必须明确输入外层铜厚 `outerCopperOz` 与内层铜厚 `innerCopperOz`；图纸读取到的铜厚单独报告，不能代替输入值。结果不等于制造放行，也不代表完整在线 DFM 服务。详见[下单检查说明](skills/ai-command-engine/references/zh/commands-frequency.md)。
 
 ### 9. 焊盘扇出与自动局部铜皮
 
-`pcb.getFanoutPlan` 和 `pcb.getAutoCopperPlan` 先生成只读计划；`pcb.fanout` 与 `pcb.autoCopper` 按完整计划执行。扇出线长、线宽、过孔外径、孔径和安全间距都须以 mil 明确输入。几何支持范围、保守近似和拒绝条件见[几何命令说明](skills/ai-command-engine/references/zh/commands-geometry.md)。历史隔离工程验收覆盖了部分较大 MCU 扇出样本，不代表所有封装形状、所有板子或完整 MCU 扇出流程均已通过。独立的填充读回路径也曾对特定铺铜区完成保存、关闭、重开后的核验；证据仅适用于对应测试对象，实际操作仍须审查计划、几何和生产输出。
+`pcb.getFanoutPlan` 和 `pcb.getAutoCopperPlan` 先生成只读计划；`pcb.fanout` 与 `pcb.autoCopper` 按完整计划执行。扇出线长、线宽、过孔外径、孔径和安全间距都须以 mil 明确输入。几何支持范围、保守近似和拒绝条件见[几何命令说明](skills/ai-command-engine/references/zh/commands-pcb-special.md)。历史隔离工程验收覆盖了部分较大 MCU 扇出样本，不代表所有封装形状、所有板子或完整 MCU 扇出流程均已通过。独立的填充读回路径也曾对特定铺铜区完成保存、关闭、重开后的核验；证据仅适用于对应测试对象，实际操作仍须审查计划、几何和生产输出。
 
 ### 10. 焊盘外扩与网络文字丝印
 
-可用 `pcb.getPadExpansionPlan` / `pcb.expandPads` 规划并执行焊盘外扩，也可用 `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` 为焊盘网络生成可编辑丝印文字。外扩的支持形状、区域拆分与持久性限制，以及网络文字的放置和避让限制，见[几何命令说明](skills/ai-command-engine/references/zh/commands-geometry.md)；本功能不替代对实际图形、间距和生产结果的检查。
+可用 `pcb.getPadExpansionPlan` / `pcb.expandPads` 规划并执行焊盘外扩，也可用 `pcb.getNetSilkscreenPlan` / `pcb.generateNetSilkscreen` 为焊盘网络生成可编辑丝印文字。外扩的支持形状、区域拆分与持久性限制，以及网络文字的放置和避让限制，见[几何命令说明](skills/ai-command-engine/references/zh/commands-pcb-special.md)；本功能不替代对实际图形、间距和生产结果的检查。
 
 ## 实际操作演示
 
-以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.20.0 的实机验收记录。
+以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.20.1 的实机验收记录。
 
 ### 原理图：多脚 MCU、外围元件、短连线与标签
 
@@ -105,22 +105,20 @@
 
 扩展、代理和 AI 技能是分别安装的组成部分。代理默认在本机运行，默认地址为 `http://127.0.0.1:49720`。可选的问题上报工具可整理必要问题信息，使用本机 [GitHub CLI](https://cli.github.com/) 登录身份提交 GitHub Issue；提交前由 AI 告知使用者。问题上报不会由 EDA 指令自动触发，也不会在后台上传工程数据。
 
-`module.*` 命令只是对独立“模块复用”扩展的窄代理调用。该配套扩展必须另外安装，不包含在本扩展安装包中，也不由本项目随扩展包一并发布；可用操作取决于已安装的配套扩展。
-
 ## 版本状态
 
-**v0.20.0 为 GitHub 正式发布版本。**本版移除 `schematic.getComponentUpdatePlan` 和 `schematic.updateComponents`；完整更换器件改用配套技能说明的现有原子指令组合流程。候选包检查已通过，但 v0.20.0 尚未安装到真实 EDA 宿主，也未完成实机验证。中文嘉立创 EDA 市场包已备好，由使用者上传；目前尚未上传或审批。详见 [v0.20.0 版本说明](docs/releases/v0.20.0_ZH.md)和[英文版](docs/releases/v0.20.0.md)。
+**v0.20.1 为当前版本。**本版移除扩展对外的 `cbb.*` 与 `module.*` 指令命名空间。独立“模块复用”扩展仍是单独项目，本次没有修改。类型检查、正式构建和 15 组现有回归通过；运行程序与原始 v0.20.1 候选包对照，仅发布元数据和路径标记不同。实际注册 205 条指令，不含 `cbb.*` 或 `module.*`，且没有重名。v0.20.1 尚未安装到真实 EDA 宿主。中文嘉立创 EDA 市场包已准备好，由使用者上传；上传和审批状态待定。详见 [v0.20.1 版本说明](docs/releases/v0.20.1_ZH.md)和[英文版](docs/releases/v0.20.1.md)。
 
 页面展示的“小机器人画电路板”图标是项目 Logo；市场发布图标文件为 `images/logo-marketplace.png`。
 
-## v0.20.0 下载与安装
+## v0.20.1 下载与安装
 
-此 GitHub 正式版本的扩展包、技能包、校验文件和源码包均按 tag `v0.20.0` 获取：
+v0.20.1 版本的扩展包、技能包、校验文件和源码包均按 tag `v0.20.1` 获取：
 
-- [扩展包 ai-command-engine_v0.20.0.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine_v0.20.0.eext)
-- [配套技能包 ai-command-engine-skill_en-zh_v0.20.0.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/ai-command-engine-skill_en-zh_v0.20.0.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.0/SHA256SUMS.txt)
-- [v0.20.0 源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.0.zip)
+- [扩展包 ai-command-engine_v0.20.1.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine_v0.20.1.eext)
+- [配套技能包 ai-command-engine-skill_en-zh_v0.20.1.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine-skill_en-zh_v0.20.1.zip)
+- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/SHA256SUMS.txt)
+- [v0.20.1 源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.1.zip)
 
 
 

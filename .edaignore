@@ -28,8 +28,6 @@ __pycache__/
 *.tsbuildinfo
 /images/logo.png
 /skills/ai-command-engine/tests/
-
 /AGENTS.md
 /.sdk-manifest.json
 /.edaignore
-

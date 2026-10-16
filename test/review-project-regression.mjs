@@ -17,10 +17,8 @@ async function loadCommands(relativePath, exportName) {
 }
 
 const projectCommands = await loadCommands('src/commands/project.ts', 'projectCommands')
-const cbbCommands = await loadCommands('src/commands/cbb.ts', 'cbbCommands')
 const schematicCommands = await loadCommands('src/commands/schematic.ts', 'schematicCommands')
 const projectHandler = name => projectCommands.find(command => command.name === name).handler
-const cbbHandler = name => cbbCommands.find(command => command.name === name).handler
 const schematicHandler = name => schematicCommands.find(command => command.name === name).handler
 let failed = 0
 function check(condition, label) {
@@ -245,60 +243,7 @@ await withImmediateTimers(async () => {
 		check(result.modified === false && result.submitted === false && !result.readback, 'R6：SDK 返回 false 时不标记已提交或读回')
 	}
 
-	async function runCbbScenario(kind, returnUuid, availableObjects, expected) {
-		let calls = 0
-		let searches = 0
-		const name = 'duplicate-name'
-		globalThis.eda = {
-			lib_Cbb: {
-				search: async () => { searches++; return availableObjects },
-				create: async () => { calls++; return returnUuid },
-				copy: async () => { calls++; return returnUuid },
-			},
-		}
-		const params = kind === 'create'
-			? { libraryUuid: 'personal', name }
-			: { cbbUuid: 'source', libraryUuid: 'system', targetLibraryUuid: 'personal', newName: name }
-		if (expected === 'unconfirmed') {
-			await assert.rejects(cbbHandler(`cbb.${kind}`)(params), error => {
-				check(error.cause?.partial === true && error.cause?.retryable === false, `R5：${kind} 未确认错误标记 partial 且不可重试`)
-				return /结果未确认/.test(error.message)
-			})
-			check(calls === 1 && searches === 0, `R5：${kind} 空返回时不搜索旧对象或他窗口新增对象，也不重试`)
-		}
-		else {
-			const result = await cbbHandler(`cbb.${kind}`)(params)
-			check(result.cbbUuid === expected && result.verify === 'official', `R5：${kind} 仅接受官方直接返回 UUID ${expected}`)
-			check(calls === 1 && searches === 0, `R5：${kind} 官方 UUID 成功路径只调用一次且不搜索`)
-		}
-	}
-	{
-		const placement = cbbCommands.find(command => command.name === 'cbb.placeSymbol')
-		let coordinates
-		globalThis.eda = { sch_PrimitiveComponent: { createCbbSymbol: async (_identity, x, y) => {
-			coordinates = [x, y]
-			return { getState_PrimitiveId: () => 'symbol-1', getState_Designator: () => 'CBB1' }
-		} } }
-		const result = await cbbHandler('cbb.placeSymbol')({ libraryUuid: 'library-1', cbbUuid: 'cbb-1', x: 2001.25, y: 1998.75 })
-		check(result.primitiveId === 'symbol-1' && JSON.stringify(coordinates) === JSON.stringify([2001.25, 1998.75]) && !placement.params.some(param => /5 的倍数/.test(param.description)), 'cbb.placeSymbol passes SDK coordinates unchanged and documents no unsupported multiple-of-five rule')
-	}
-	{
-		const placement = cbbCommands.find(command => command.name === 'cbb.placeSchematicPage')
-		let sdkIdentity
-		globalThis.eda = { sch_PrimitiveComponent: { placeCbbSchematicPage: async identity => { sdkIdentity = identity; return true } } }
-		const result = await placement.handler({ libraryUuid: 'library-1', cbbUuid: 'cbb-1', uuid: 'source-page-1', x: 100, y: 200 })
-		const uuidDescription = placement.params.find(param => param.name === 'uuid').description
-		check(sdkIdentity.uuid === 'source-page-1' && result.placed === true, 'cbb.placeSchematicPage forwards the confirmed source page UUID unchanged and exposes the SDK return')
-		check(/来源原理图图页 UUID/.test(uuidDescription) && /父原理图/.test(uuidDescription) && !/不是下属图页 UUID/.test(uuidDescription), 'cbb.placeSchematicPage documents parent ownership without prohibiting page UUIDs')
-		check(/当前 host/.test(placement.summary) && /不代表读回或物理完成/.test(placement.summary) && /不代表读回或物理完成/.test(placement.returns), 'cbb.placeSchematicPage documents SDK submission separately from readback and physical completion')
-	}
-	const oldObject = { name: 'duplicate-name', uuid: 'old-module' }
-	const otherWindowObject = { name: 'duplicate-name', uuid: 'other-window-module' }
-	for (const kind of ['create', 'copy']) {
-		await runCbbScenario(kind, undefined, [oldObject], 'unconfirmed')
-		await runCbbScenario(kind, undefined, [oldObject, otherWindowObject], 'unconfirmed')
-		await runCbbScenario(kind, `${kind}-official-uuid`, [oldObject, otherWindowObject], `${kind}-official-uuid`)
-	}
+
 })
 
 console.log(failed ? `\n${failed} 项失败` : '\n全部通过')

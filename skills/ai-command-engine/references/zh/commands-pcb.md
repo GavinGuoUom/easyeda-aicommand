@@ -1,161 +1,38 @@
-# PCB 指令全表
+# PCB操作流程
 
-> 本页表格/参数对象描述命令及 `params`，不是完整 HTTP 请求。发送 `/command` 时外层必须带 `cmd`、顶层 `instanceId` 和所需 `params`；宏仅外层路由，步骤继承实例。完整示例见 [setup](setup.md)。
+先按[连接与环境](setup.md)核对窗口、工程、PCB 文档和单位。常用入口见[PCB高频](commands-pcb-high.md)，专项入口见[PCB低频](commands-pcb-low.md)。参数与返回字段查已核对所选窗口版本的 `/help?cmd=<命令名>`；`/help` 使用代理当前选中的窗口。
 
-**① 布局 → ② 布线 → ③ 结构与层 → ④ 检查导入导出 → ⑤ 图元读改**，附录 **⑥ 低频（等长组/层叠/实时DRC）→ ⑦ 自动布线闭环**。陷阱见 [pitfalls.md](pitfalls.md)。
+## 接收设计与核对现状
 
-## ① 布局
+原理图到 PCB 的更新由用户在 EDA 界面发起并确认。AI 不调用 `pcb.importChanges` 或官方导入接口；更新前后用 `pcb.listComponents`、`getComponentPads`、`listNets` 核对器件身份、封装关联、逐焊盘网络和非目标对象。插件回执成功不代替保存重开或整板检查。
 
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `pcb.listComponents` | 列器件 | `layer?` |
-| `pcb.moveComponent` | 移动/旋转（ID 或位号；内部分步+读回验证） | `primitiveId` 或 `designator`, `x?`, `y?` |
-| `pcb.getComponentPads` | 读焊盘（编号/网络/坐标/形状）——**验证导入后网络** | `primitiveId` |
-| `pcb.checkPlacement` | 间距检查（按焊盘包围盒报重叠/间距不足+返回外形尺寸；⚠️ DRC 不查本体挤压，布局完必跑） | `minClearance?`, `margin?`, `designators?` |
-| `pcb.groupBySchematicRegions` | **【宏·唯一自动布局】按原理图区框聚合分组 PCB 器件**（0.10.55 起替代已删除的 autoPlace；源码 append-only 管线） | `pageUuid?`, `dryRun?`, `origin?`, `boardSize?`, `gap?`, `groupGap?` |
-| `pcb.sourceRollback` | 源码备份列出/恢复 | `list?`, `backupId?` |
-| `pcb.delete` | 删图元（同 schematic.delete 加固） | `primitiveIds`, `batchSize?` |
+## 板框、图层和布局
 
-- **DRC 只查铜皮间距，不查本体/丝印重叠**——大本体器件（连接器、电解电容）DRC 过也可能互压；checkPlacement 按焊盘包围盒，大本体加 `margin`（10~30mil）近似。
-- `pcb.checkPlacement` 对任意角度矩形、椭圆（含圆形）、胶囊形焊盘计算保守外包盒；NGON 使用外接圆包围盒。包围盒保留小数。遇到不支持的形状或无效焊盘数据时跳过该整器件，列入 `skippedUnsupported` 并返回 `complete:false`；无焊盘器件列入 `skippedNoPads`，同样不算完整检查。
-- **groupBySchematicRegions**：读全图页区框（`pageUuid` 限定），按位号文本位置归属、多框取面积最小；组内位号前缀分行（U>R>C>L>D>Q>其他）；组间货架 packing 强制收进板框，摆不下报错并附诊断（板框宽高、可用宽、rowLimit、各组 bbox）。布局引擎是官方原版移植（X86 主板验证）：组按估算面积升序货架横排（rowLimit=min(官方值,可用宽)，组缝 120），贪心避让 gap 10/15，R/C/L 强制 angle=0。避让既有器件（实测 bbox 作 obstacles，绕不开记 `blockedBy` 出口闸报错）。测量链三级（封装源码→实测→兜底），placements 带 `measured/measureSource`（fallback 项宽高可能有偏差）。组边框+组名生成 `spg_` 前缀文档层（layerId=13），重复执行先清场，实跑后源码回读核销。**五步管线**：版本化备份（`backups/<工程>/<时间戳>.txt` 留 5 份）→写源码→回读比对（容差 0.001）→失败整份恢复→全过才保存。**dryRun 默认 true**。⚠️ 调用前焦点在 PCB，执行中短暂切焦点读原理图再切回。（0.10.55 起为唯一自动布局指令，autoPlace 已删除。）
-- **sourceRollback**：`list:true` 列备份；否则恢复（默认最近或按 `backupId`），恢复前校验 pcbUuid 匹配，恢复后回读+保存。
-- **pcb.delete**：插件按类型顺序删除并读回。已确认仍存在的失败项记入结果后继续处理其他目标；写入超时或读回未知时停止后续写入。批量参数不表示操作数量上限。
+- `pcb.drawOutline` 的公开坐标以左下角为基准，单位 mil。重复板框前先查实际图元类型和 ID，不预设一定为 Region。
+- 层数和层叠分别核对。`getStackingConfig` 读完整配置，`applyStackingConfig` 后重新读回。设默认层叠不等于当前 PCB 已应用；自定义层变更后重新激活 PCB。未知层名或层号不猜测。
+- `pcb.moveComponent` 后用 `checkPlacement` 检查间距。后者基于焊盘包围盒，不能代替器件本体、丝印和机械尺寸检查；`complete:false` 或跳过对象不能报告布局全部通过。
+- `pcb.groupBySchematicRegions` 用于明确要求按原理图功能区整理时。先看 `dryRun`、板框容纳情况和尺寸来源，再执行并读回。它不是普通单件移动的入口。
 
-## ② 布线
+## 扇出、布线和自动布线
 
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `pcb.routeTrack` | 走线（折线自动拆段） | `net`, `points`, `layer?`, `width?` 或 `currentA?` |
-| `pcb.placeVia` | 过孔 | `net`, `x`, `y`, `holeDiameter`, `diameter` |
-| `pcb.pourCopper` | 矩形铺铜（只创建覆铜边框，不保证同步填充） | `net`, `layer?`, `x`, `y`, `width`, `height` |
-| `pcb.getFanoutPlan` / `pcb.fanout` | 只读规划并按计划创建焊盘扇出线与通孔 | 规划参数、完整 `plan` 执行；详见[几何命令说明](commands-geometry.md) |
-| `pcb.getAutoCopperPlan` / `pcb.autoCopper` | 只读规划并按计划创建局部覆铜或固定填充 | 规划参数、完整 `plan` 执行；详见[几何命令说明](commands-geometry.md) |
-| `pcb.rebuildPour` | 重建铺铜填充并读回 | `primitiveId?`（留空=全板） |
-| `pcb.listLines`/`listVias`/`listPours` | 读回自查（listPours 传 `withFill:true` 可读回填充状态） | `net?` |
-| `pcb.listNets` | 列全部网络 | 无 |
-| `pcb.importAutoRouteSes` | 导入并回灌 SES 自动布线结果 | `base64`（SES 文件内容的 Base64 编码，必填）, `fileName?`（默认 `autoroute.ses`） |
+密脚器件位置确定后，先用 `pcb.getFanoutPlan` 检查目标、层、尺寸和 `executable`，再把完整 `data` 作为 `pcb.fanout` 的 `params.plan`。几何范围见[PCB几何命令](commands-pcb-special.md)。
 
-- `pcb.listPours` 的 `withFill:true` 返回 `filled:boolean|null` 与 `fillStatus:filled|empty|unknown`，并可带 `fillRegions`、`fillPrimitiveId`、`fillReadError`。无填充区域，或有效填充对象的 `PourFills` 数组为空时，结果为 `false/empty` 且区域数为 0；必须有有效填充对象和非空区域数组才是 `true/filled`。读取失败、超时、对象结构无效或数组元素无效时返回 `null/unknown` 并附错误；`null` 不可当作未填充判断。
-- `pcb.routeTrack` 成功返回 `segmentIds`。写入开始后的分段错误若由处理器捕获，`error.cause.partial=true` 并含 `segmentIds`、一基 `failedSegmentIndex`、`failedSegmentAttempted`、`unprocessedSegments` 和 `phase`。`failedSegmentAttempted:true` 表示失败段已发出、可能已生效，`unprocessedSegments` 只计其后的段；为 `false` 表示失败段尚未发出，计数包含该段。外层通用熔断可能只返回通用 `partial`，不保证有分段字段。即使末段已返回有效 ID，共享预算耗尽时仍可能保守返回 `partial`；处理器会保留已知 ID，不表示一定缺段或未落地。失败不自动回滚或重试；宏停止，先读回现场再决定后续写入。
-- 扇出与自动局部铜皮均先调用只读计划命令，再把完整返回对象作为执行命令的 `params.plan`。两类计划与执行细节、覆盖限制及来源见[几何命令说明](commands-geometry.md)。
-- **0.10.87 实机范围（2026-10-08）**：隔离PCB已验证铺铜 empty→filled、矩形焊盘45°与圆形焊盘外接框、三段走线；保存关闭重开后走线及填充保持，原有器件和线段不变。非圆椭圆、OVAL、NGON、未知形状及故障超时分支仍仅有本地模拟回归，不能据此宣称全部形状或生产验收通过。
+人工布线用 `pcb.routeTrack`，换层用 `pcb.placeVia`。先确认网络存在，按电流、规则和板层确定线宽及孔径。分段写入失败可能已有部分线段生效；依据返回 ID 和当前图元核对，不能直接重发。等长组只记录分组，不证明实际等长。
 
-- **rebuildPour（0.10.82 源码）**：单框、全板和逐框重建共用既有总预算。超时、拒绝或写后读回未知返回失败及 `error.cause.partial=true`，停止后续重建和宏写入；不能凭旧填充掩盖本次错误。`completed` 仅表示调用未报错且有效读回存在填充，`freshnessVerified:false`，不证明填充新鲜度、保存态或制造可用。超时不代表取消，先只读复核，勿盲目重试。安装宿主验证须单列。
-- 大电流先 `knowledge.widthForCurrent` 换算线宽（`currentA?` 传电流时插件按 IPC-2221 自动换算）；GND 优先整层铺铜。
-- 自动布线闭环（锁电源网→FreeRouting→回灌）见附录 ⑦。
-- 等长组管理见附录 ⑥。
-- 修线心法：自动布线后审查，不合理局部 `pcb.delete`+`routeTrack` 重修。
+自动布线仅在任务需要时使用：锁定要保留的网络，提交 `autoRouteStart`，用 `autoRouteStatus` 确认任务和回灌结果，再检查实际走线与 DRC。提交成功不等于正在运行。自动回灌可能清除未锁定走线；回灌前必须确认原任务和目标。外部 DSN/SES 导入是另一条流程，不能推断具有同样的清线行为。
 
-## ③ 结构与层
+## 覆铜和丝印
 
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `pcb.drawOutline` | 矩形板框（⚠️ x,y 是**左下角**，官方接口左上角、插件内部换算） | `x`, `y`, `width`, `height`（mil） |
-| `pcb.getPrimitivesInRegion` | 区域扫描（语义 left<right、top>bottom） | `left/right/top/bottom` |
-| `pcb.getPrimitiveAtPoint` | 点查 | `x`, `y` |
-| `pcb.listLayers` | 列全部层 | 无 |
-| `pcb.getCurrentLayer` / `pcb.selectLayer` | 查/切当前激活层 | select: `layer`（层 ID、`top`/`t`、`bottom`/`b`，以及 `inner2`/`inner-2`/`inner_2` 等宽层别名；数字输入保持原行为） |
-| `pcb.setCopperLayers` | 设铜层数（2/4/6…，⚠️ 改层数影响叠层，谨慎） | `count` |
-| `pcb.setLayerVisible` / `setLayerLocked` | 层显示/隐藏、锁定 | `layers[]`, `visible?`/`locked?` |
-| `addCustomLayer` / `removeCustomLayer` / `modifyLayer` / `setPcbType` | 自定义层与板型（刚性 NORMAL / 柔性 FPC；⚠️ 加删层触发文档重载，需重新 openDocument，守卫会自愈） | 层名/板型 |
+`pcb.pourCopper` 创建的是边框；用 `rebuildPour` 重建，再用 `listPours` 或 `getPourFillReadback` 确认实际填充。填充状态为 `empty` 或 `unknown` 时不能报告铺铜完成。`rebuildPour` 的 `completed` 不证明填充新鲜、已保存或制造合格。修改边框、优先级或周边布线后再次检查填充；结果不明时停止，不以旧填充冒充本次结果。
 
-- 不预设板框一定是 Region。2026-10-10 隔离实测中，`drawOutline` 创建的是板框层 Polyline，源码类型为 POLY。处理重复板框前先核对实际类型与图元 ID，再对已确认对象操作。
-- `getPrimitivesInRegion` **查不到丝印文字**（只返回 Line/Via/Pad/Region 等铜类）。
-- **层参数严格化**：不认识的层名/层号一律报错（列出合法值），不静默回退；只有未传才用缺省。合法值：top(1)/bottom(2)/top-silk(3)/bottom-silk(4)/top-mask(5)/bottom-mask(6)/top-paste(7)/bottom-paste(8)/top-assembly(9)/bottom-assembly(10)/outline(11)/multi(12)/document(13)/mechanical(14)/inner1~32(15~46)/custom1~200(71~270)，数字字符串亦识别。
-- 层叠配置管理（多层板）见附录 ⑥。
+局部铜皮先区分 `pour`（随规则裁剪）与 `fill`（固定填充），按[几何命令](commands-pcb-special.md)规划再执行。`modifyPour` 的任意优先级值不保证都可达到，以写后源码读回为准，不据 API 返回值假定成功。
 
-## ④ 检查与导入导出
+`placeString`、`modifyString` 后检查可读性、镜像、方向、焊盘遮挡及板边。网络丝印仍须通过计划命令，并检查实际图面。
 
-| 指令 | 说明 |
-| --- | --- |
-| `pcb.runDrc` | DRC |
-| `pcb.runDrcDetailed` | 逐条明细（官方树形分组，插件拍平提 type/rule/message/net/primitiveId/x/y，raw 保留原样，聚合 fatalCount/warnCount） |
-| `pcb.runDfm` | 嘉立创 PCB 下单检查（18 项；材料、板厚及本次外/内铜厚选择为必填） | `material`, `thickness`, `outerCopperOz`, `innerCopperOz` |
-| `pcb.runSmtDfm` | 嘉立创 SMT 下单检查（7 项；经济/标准、板厚为必填） | `standard`, `thickness` |
-| `pcb.checkSameNetPadSpacing` | 同网络焊盘间距检查（1 项） | `minSpacingMm` |
-| `pcb.importChanges` | 从原理图导入；当前用户改由本人在 EDA 界面发起并确认，AI 不调用此命令或官方导入接口 |
-| `pcb.save` | 保存（⚠️ 无修改时官方返回 false，非失败） |
+## 检查、保存和生产导出
 
-下单检查参数、铜厚输入与图纸对照、结果完整性和覆盖限制见[嘉立创下单检查说明](commands-dfm.md)。0.10.92 铜厚参数已通过本地及实机命令对照，菜单定位与导出对话框待实机验收。
+布线与覆铜后运行 `pcb.runDrc`；定位具体问题时用 `runDrcDetailed`。DRC 不覆盖器件本体、全部机械或制造要求。`runDfm`、`runSmtDfm` 与同网焊盘间距检查的材料、单位及覆盖范围见[下单检查](commands-pcb-special.md)。检查未完整覆盖时不报告通过。
 
-- 按任务需要运行原理图DRC并报告结果；普通导入不要求先清零DRC。用户在EDA界面亲自发起并确认原理图导入PCB，AI不调用`pcb.importChanges`或官方导入接口。用户操作前后，AI可只读核对器件身份、封装关联、焊盘网络与网表；即使已安装版本提供导入指令，也必须遵守此操作方式。
-- 用户确认导入后，用`listComponents`和逐器件`getComponentPads`比对焊盘网络与网表。只读检查不会应用修改；读回成功也不能单独证明保存重开持久化或完整模块布局验收。
-- `runDrcDetailed` 偶发超时一次后自恢复——先重试，勿判插件失效。`editor.openDocument` 切页偶发超时同理。
-- `project.renameBoard` 按名字匹配，重名会改错——改名前先 `project.getBoardInfo`。
+各阶段保存后核对目标与非目标对象。需要证明持久性时，关闭重开后再次读回。Gerber、贴片坐标和网表导出后还需检查文件对应的 PCB 版本、格式、单位和实际内容；见[网络与导出](commands-pcb-special.md)。
 
-## ⑤ 图元读改
-
-| 指令 | 说明 |
-| --- | --- |
-| `pcb.modifyLine`/`modifyVia`/`modifyPour`/`modifyString` | 改线/孔/铺铜/丝印（分步+读回验证） |
-| `pcb.placeString`/`listStrings` | 丝印放/读 |
-| `pcb.getPrimitivesInRegion`/`getPrimitiveAtPoint` | ⚠️ 查不到丝印文字；区域语义 left<right、top>bottom |
-
-- **`modifyPour` 的 `order`（0.10.89 候选）**：逐项写入后独立读取 PCB source 核对 `sourceOrder`；验收以请求数值与 source 读回相符为准，`apiPriority` 仅作辅助信息。宿主 API 的正数 `setOrder` 是插入位置，不是直接设置源数据 `order`：priority 1 作用于原顺序 `[2,3]` 时仍可能读回 `3`。查询 `get`/`getAll` 时，源 `order:0` 会回退为 `maxOrder+1`，因此改用这些查询方式无法修正此行为。`order:0` 可用 source 读回验证，但不能保证任意指定顺序。
-- 每项抛错、空返回、source 读回失败或不匹配时立即停止后续项，并返回 `error.cause.partial=true` 及 `attemptedFields`、`verifiedFields`、`unverifiedFields`、`notAttemptedFields`、`readback`、`sourceOrders`。`readbackStatus` / `sourceOrdersStatus` 为 `lastKnown` 时只代表旧观测；写后读回失败或迟到时，不保留当前“已验证”标记。沿用单指令总时限，超时不能取消已发出的修改，但不继续发出后续读取或修改。不得自动重试；先按返回字段只读核对。候选不保证任意指定 `order`，不修复宿主排序算法，不自动删除重建、归一化或重排其他覆铜，也不自动保存。本地模拟回归通过；2026-10-09 在隔离工程验证源 order 0/1、非零改0、组合字段不一致停止及宏停止，并经保存关闭重开核对持久性。priority 99 实际读回3时返回 partial；不代表任意顺序值可达。当前宿主 getCurrentLayer 为空实现，本轮选层按独立 UI 激活标记验证 inner2 与数字15，不能以 null 判定选择失败。
-
-调用仍使用普通 `/command` 外层格式；source 读回由插件在写入后独立完成：
-
-```json
-{
-  "instanceId": "当前 PCB 窗口 ID",
-  "cmd": "pcb.modifyPour",
-  "params": { "primitiveId": "目标覆铜 ID", "pourPriority": 1 }
-}
-```
-
-插件会用独立 source 读回来核对 `sourceOrder`。若收到 `error.cause.partial=true`，宏已停止；用 `project.getDocumentSource` 只读核对现场，不重复提交。
-
-## ⑥ 低频附录（用到再查）
-
-### 等长组管理
-
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `pcb.createEqualLengthGroup` | 建等长组 | 组名/网络名 |
-| `pcb.listEqualLengthGroups` | 列全部等长组 | 无 |
-| `pcb.addNetToEqualLengthGroup` / `removeNetFromEqualLengthGroup` | 组内增删网络 | `name*`, `nets*` |
-| `pcb.renameEqualLengthGroup` | 改名 | `oldName*`, `newName*` |
-| `pcb.deleteEqualLengthGroup` | 删除组 | `name*` |
-
-### 层叠配置（多层板叠层设置入口）
-
-读改写闭环：`getStackingConfig` 读回 → 改 `configuration` 对象 → `applyStackingConfig` 写回。
-
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `pcb.listStackingConfigs` | 列全部层叠配置（含当前生效与默认配置名） | 无 |
-| `pcb.getStackingConfig` | 读指定配置完整定义（层序/厚度/介质；不传 name 读当前生效；⚠️ 双层板 list 空、get null 是官方行为） | `name?` |
-| `pcb.applyStackingConfig` | 配置对象应用到当前 PCB | `configuration*` |
-| `pcb.saveStackingConfig` | 另存为命名配置 | `configuration*`, `name*`, `allowOverwrite?` |
-| `pcb.renameStackingConfig` / `deleteStackingConfig` / `setDefaultStackingConfig` | 改名/删除/设为默认 | rename: `oldName*`,`newName*`；delete/setDefault: `name*` |
-
-### 实时 DRC
-
-| 指令 | 说明 |
-| --- | --- |
-| `pcb.startRealTimeDrc` | 开实时 DRC（布线即时报违规；⚠️ 官方 @beta） |
-| `pcb.stopRealTimeDrc` / `getRealTimeDrcStatus` | 关/查状态（需 EDA v4.2+，低版本恒返回 enabled:false） |
-
-## ⑦ 自动布线闭环（FreeRouting）
-
-⚠️ **标准工艺流程（电源先行）**：① AI 用 `pcb.routeTrack`/`pourCopper` 按知识库规则布完电源主路径 → ② `pcb.setNetLock` 锁定电源网络（`autoRouteStatus` 完成时的自动 SES 回灌会清除全部**未锁定**线段、圆弧和过孔，不锁就被冲掉）→ ③ `pcb.autoRouteStart` 启动 → ④ `pcb.autoRouteStatus` 轮询（完成自动回灌+DRC）→ ⑤ AI 审查走线，不合理的局部 `pcb.delete`+`routeTrack` 重修。此清除范围仅适用于该自动布线状态流程，不代表普通 `importAutoRouteSes` 会手动清线。
-
-前置：本地 FreeRouting V2.2.3+ 服务运行（端口 37864），可跑 `bridge/start-freerouting.bat` 一键拉起。
-
-| 指令 | 说明 | 关键参数 |
-| --- | --- | --- |
-| `pcb.setNetLock` | 锁定/解锁指定网络的全部走线/过孔/圆弧（布线前保护电源线） | `net` 或 `nets`, `locked?` |
-| `pcb.autoRouteStart` | 启动自动布线（导出 DSN→FreeRouting 服务→启动任务） | `maxPasses?`, `viaCosts?`, `maxThreads?`, `skipDrc?` |
-| `pcb.autoRouteStatus` | 查进度；COMPLETED 时自动清未锁定走线+回灌 SES+DRC，返回统计 | `jobId?`, `noImport?` |
-| `pcb.autoRouteStop` | 停止任务（保留当前结果） | `jobId?` |
-
-- 0.10.106 候选：`autoRouteStart` 仅返回 `outcome:start-request-submitted,stateVerified:false`，不再把提交请求称为 RUNNING。 启动调用失败也会保留 jobId 并返回 partial、retryable:false，禁止重提；先查询原任务或取消后核对状态。用 `autoRouteStatus` 的 `noImport:true` 先读取实际状态；目标及内容核对后再允许回灌。本地回归已通过，候选尚未安装。
-- EDA 4.1.71 本轮含既有布线的 DSN 在 FreeRouting 2.2.3 中触发递归溢出，未回灌。不能将宿主原生布线修复视为此插件流程通过。
-
-封装核验要求网表工程封装UUID、PCB有效Footprint属性和epro资源HEAD.uuid一致。SDK引用必须完整匹配工程封装UUID与当前工程UUID，或匹配资源记录中的源封装UUID与源库UUID。名称和相同几何不能代替关联；错误库、属性冲突和缺失资源仍拒绝。无关且缺少有效HEAD/source的资源不建立映射，不额外阻断本次核验。
-
-150候选修正pcb.importChanges对工程封装UUID和源库UUID的混比。2026-10-15最终源码已通过14项回归、类型检查、定向lint、专家复审及官方API真实五器件只读核验。150安装版正式指令尚待复验。149原理图更新已通过，F09的149 PCB指令partial保留；PCB绑定、网络和位置保存重开通过，规则/显示字段的五项变化语义、整页视觉和制造输出未验收。
-
-2026-10-15安装版150已在专用测试工程通过正式pcb.importChanges：contentsVerified/completionVerified为true，5个托管器件逐项匹配，differences为空，PCB-only保持。此轮为当前已同步内容的正常匹配验证，没有新变更应用证据。保存true、真实关闭并重开后，除DOCHEAD时间版本外全部有效记录字段相等，R2焊盘和网络保持。F09旧partial及五条规则/显示观察保留；整页视觉、规则语义与制造输出仍未验收。测试图页已关闭。150安装包保持原SHA，不重打同版本。
+删除前查目标图元 ID 并备份。`pcb.delete` 读回未知时停止后续删除。`pcb.sourceRollback` 仅用于确认需要恢复的备份，恢复前核对 PCB UUID，恢复后读回并保存。关闭页签不等于可靠回滚。

@@ -27,6 +27,13 @@ async function resolveLibraryUuid(params: Record<string, any>): Promise<string> 
 	return uuid
 }
 
+function searchPageNumber(value: unknown, fallback: number, field: 'itemsOfPage' | 'page'): number {
+	const number = value === undefined ? fallback : Number(value)
+	if (!Number.isSafeInteger(number) || number <= 0)
+		throw new Error(`${field} 必须是正整数`)
+	return number
+}
+
 /**
  * modify 后回查（0.10.62，消 pitfalls H1/H2）：官方 modify 后 uuid 可能变化，
  * 且 get 对已变化/不存在 uuid 会 reject 对象而非返回空（0.10.38 实测）。
@@ -70,6 +77,147 @@ async function verifyLibModify(
 	}
 	return { modified: true, uuid, uuidChanged: false, verify: 'none',
 		warning: `modify 官方返回成功，但按旧 uuid 回查失败（官方 modify 后 uuid 可能变化，0.10.38 实测）${newName ? `；按名「${newName}」回搜未执行成功，请按名字搜索确认` : '；未传新名无法按名回搜，请按名字搜索确认'}` }
+}
+
+function cloneLibValue(value: any): any {
+	if (Array.isArray(value))
+		return value.map(cloneLibValue)
+	if (value && typeof value === 'object')
+		return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneLibValue(item)]))
+	return value
+}
+
+function canonicalLibValue(value: any): any {
+	if (Array.isArray(value))
+		return value.map(canonicalLibValue)
+	if (value && typeof value === 'object')
+		return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalLibValue(value[key])]))
+	return value
+}
+
+function libValuesEqual(a: any, b: any): boolean {
+	return JSON.stringify(canonicalLibValue(a)) === JSON.stringify(canonicalLibValue(b))
+}
+
+function symbolModifyExpected(before: any, params: Record<string, any>): Record<string, any> {
+	const otherProperty = cloneLibValue(before.otherProperty ?? {})
+	if (params.otherProperty && typeof params.otherProperty === 'object' && !Array.isArray(params.otherProperty)) {
+		for (const [key, value] of Object.entries(params.otherProperty)) {
+			if (value === null)
+				delete otherProperty[key]
+			else if (value !== undefined)
+				otherProperty[key] = cloneLibValue(value)
+		}
+	}
+	return {
+		name: params.name === undefined ? before.name : params.name,
+		libraryUuid: before.libraryUuid,
+		libraryType: before.libraryType,
+		cbbUuid: before.cbbUuid,
+		description: params.description === undefined ? before.description : params.description === null ? null : String(params.description),
+		classification: params.classification === undefined ? before.classification : params.classification,
+		type: before.type,
+		subPartNames: before.subPartNames,
+		otherProperty,
+	}
+}
+
+function symbolModifyDifferences(expected: Record<string, any>, actual: any): Array<Record<string, any>> {
+	if (!actual)
+		return [{ field: 'readback', expected: 'fresh symbol readback', actual: null }]
+	const differences: Array<Record<string, any>> = []
+	for (const field of ['name', 'libraryUuid', 'libraryType', 'cbbUuid', 'description', 'classification', 'type', 'subPartNames', 'otherProperty']) {
+		const expectedValue = field === 'otherProperty' ? expected[field] ?? {} : expected[field]
+		const actualValue = field === 'otherProperty' ? actual[field] ?? {} : actual[field]
+		const clearRequested = (field === 'description' && expectedValue === null)
+			|| (field === 'classification' && expectedValue === null)
+		if (clearRequested ? actualValue !== undefined && actualValue !== null : !libValuesEqual(expectedValue, actualValue))
+			differences.push({ field, expected: cloneLibValue(expectedValue), actual: cloneLibValue(actualValue) })
+	}
+	return differences
+}
+
+async function verifySymbolModify(
+	params: Record<string, any>,
+	libraryUuid: string,
+	before: any,
+): Promise<Record<string, any>> {
+	const api: any = eda.lib_Symbol
+	const symbolUuid = String(params.symbolUuid)
+	const expected = symbolModifyExpected(before, params)
+	let after: any
+	let candidateUuid: string | undefined
+	let readbackIssue: Record<string, any> | undefined
+	let verify: 'get' | 'search' | 'none' = 'get'
+	try {
+		after = await api.get(symbolUuid, libraryUuid)
+	}
+	catch {
+		after = undefined
+	}
+	if (after && (after.uuid !== symbolUuid || after.libraryUuid !== libraryUuid)) {
+		readbackIssue = { field: 'identity', expected: { uuid: symbolUuid, libraryUuid }, actual: { uuid: after.uuid, libraryUuid: after.libraryUuid } }
+		candidateUuid = undefined
+		after = undefined
+	}
+	if (!after) {
+		verify = 'search'
+		try {
+			const candidates = new Map<string, any>()
+			const pageSize = 20
+			for (let page = 1; ; page++) {
+				const results = await api.search(String(expected.name), libraryUuid, undefined, undefined, pageSize, page)
+				if (!Array.isArray(results))
+					throw new Error('符号搜索返回非数组结果')
+				for (const item of results) {
+					if (item && item.libraryUuid === libraryUuid && item.name === expected.name && typeof item.uuid === 'string' && item.uuid)
+						candidates.set(item.uuid, item)
+				}
+				if (results.length < pageSize)
+					break
+				if (page >= 1000)
+					throw new Error('同名符号候选超过安全分页上限')
+			}
+			if (candidates.size === 1) {
+				candidateUuid = [...candidates.keys()][0]
+				after = await api.get(candidateUuid, libraryUuid)
+				if (!after || after.uuid !== candidateUuid || after.libraryUuid !== libraryUuid) {
+					readbackIssue = { field: 'candidateIdentity', expected: { uuid: candidateUuid, libraryUuid }, actual: after ? { uuid: after.uuid, libraryUuid: after.libraryUuid } : null }
+					after = undefined
+				}
+			}
+			else
+				readbackIssue = { field: 'candidateCount', expected: 1, actual: candidates.size, candidateUuids: [...candidates.keys()] }
+		}
+		catch (error) {
+			readbackIssue = { field: 'candidateSearch', expected: { name: expected.name, libraryUuid }, actual: String((error as Error)?.message ?? error) }
+			after = undefined
+		}
+	}
+	const differences = symbolModifyDifferences(expected, after)
+	if (!after && readbackIssue)
+		differences.unshift(readbackIssue)
+	if (differences.length) {
+		const uuid = after?.uuid ?? candidateUuid ?? symbolUuid
+		const cause = {
+			partial: true,
+			retryable: false,
+			sdkModified: true,
+			before: cloneLibValue(before),
+			after: cloneLibValue(after ?? null),
+			differences,
+			candidateUuid: candidateUuid ?? null,
+			uuid,
+			verify,
+		}
+		throw new Error('符号修改已提交，但读回属性不一致或身份无法确认；不要自动重试', { cause })
+	}
+	return {
+		modified: true,
+		uuid: after.uuid,
+		uuidChanged: after.uuid !== symbolUuid,
+		verify,
+	}
 }
 
 export const libCommands: Array<ICommandDef> = [
@@ -141,14 +289,16 @@ export const libCommands: Array<ICommandDef> = [
 		returns: '符号列表 [{ uuid, name, description, ... }]',
 		example: { cmd: 'lib.symbolSearch', params: { key: 'resistor' } },
 		handler: async (params) => {
+			const itemsOfPage = searchPageNumber(params.itemsOfPage, 20, 'itemsOfPage')
+			const page = searchPageNumber(params.page, 1, 'page')
 			const libraryUuid = await resolveLibraryUuid(params)
 			return await eda.lib_Symbol.search(
 				String(params.key ?? ''),
 				libraryUuid,
 				params.classification as any,
 				params.symbolType !== undefined ? Number(params.symbolType) as any : undefined,
-				Number(params.itemsOfPage ?? 20),
-				Number(params.page ?? 1),
+				itemsOfPage,
+				page,
 			)
 		},
 	},
@@ -210,23 +360,38 @@ export const libCommands: Array<ICommandDef> = [
 			{ name: 'description', type: 'string', required: false, description: '描述（null 清除）' },
 			{ name: 'otherProperty', type: 'object', required: false, description: '其它属性（值为 null 清除该项）' },
 		],
-		returns: '{ modified, uuid, uuidChanged, verify(get|search|none), warning? }——modify 后自动回查：官方 modify 后 uuid 可能变化（0.10.38 实测），返回的 uuid 是回查确认后的当前 uuid',
+		returns: '成功：{ modified, uuid, uuidChanged, verify }；读回属性不一致时抛出 partial 错误，cause 含 retryable:false、sdkModified:true、before/after/differences/candidateUuid/uuid/verify；不自动重试',
 		example: { cmd: 'lib.symbolModify', params: { symbolUuid: 'xxx', description: '新描述' } },
 		handler: async (params) => {
 			if (!params.symbolUuid)
 				throw new Error('缺少参数 symbolUuid')
+			if (params.name !== undefined && (typeof params.name !== 'string' || !params.name.trim()))
+				throw new Error('name 必须是非空字符串')
+			if (params.name === undefined && params.classification === undefined && params.description === undefined && params.otherProperty === undefined)
+				throw new Error('至少提供一个要修改的字段（name / classification / description / otherProperty）')
 			const libraryUuid = await resolveLibraryUuid(params)
+			const symbolUuid = String(params.symbolUuid)
+			let before: any
+			try {
+				before = await eda.lib_Symbol.get(symbolUuid, libraryUuid)
+			}
+			catch (error) {
+				throw new Error(`修改符号前无法读取并确认身份；未调用修改（symbolUuid=${symbolUuid}, libraryUuid=${libraryUuid}）`, { cause: error })
+			}
+			if (!before || before.uuid !== symbolUuid || before.libraryUuid !== libraryUuid || typeof before.name !== 'string')
+				throw new Error(`修改符号前无法确认 UUID / library 身份或名称；未调用修改（symbolUuid=${symbolUuid}, libraryUuid=${libraryUuid}）`)
+			before = cloneLibValue(before)
 			const modified = await eda.lib_Symbol.modify(
-				String(params.symbolUuid),
+				symbolUuid,
 				libraryUuid,
-				params.name ? String(params.name) : undefined,
+				params.name === undefined ? before.name : String(params.name),
 				params.classification as any,
 				params.description !== undefined ? (params.description === null ? null : String(params.description)) : undefined,
 				params.otherProperty as any,
 			)
 			if (modified !== true)
 				throw new Error(`修改符号失败：官方返回 ${String(modified)}`)
-			return await verifyLibModify('symbol', String(params.symbolUuid), libraryUuid, params.name ? String(params.name) : undefined)
+			return await verifySymbolModify(params, libraryUuid, before)
 		},
 	},
 	{
@@ -261,9 +426,17 @@ export const libCommands: Array<ICommandDef> = [
 			if (!params.symbolUuid)
 				throw new Error('缺少参数 symbolUuid')
 			const libraryUuid = await resolveLibraryUuid(params)
-			const tabId = await eda.lib_Symbol.openInEditor(String(params.symbolUuid), libraryUuid)
-			if (tabId == null)
-				throw new Error('打开符号编辑器失败：官方返回空')
+			let tabId: string | undefined
+			try {
+				tabId = await eda.lib_Symbol.openInEditor(String(params.symbolUuid), libraryUuid)
+			}
+			catch (error) {
+				if ((error as any)?.message === '[object Object]')
+					throw new Error(`打开符号编辑器失败：官方接口返回不可读错误（symbolUuid=${String(params.symbolUuid)}, libraryUuid=${libraryUuid}）`, { cause: error })
+				throw error
+			}
+			if (typeof tabId !== 'string' || !tabId.trim())
+				throw new Error(`打开符号编辑器失败：官方未返回有效页签 ID（${String(tabId)}）`)
 			return { tabId }
 		},
 	},
@@ -280,9 +453,17 @@ export const libCommands: Array<ICommandDef> = [
 			if (!params.footprintUuid)
 				throw new Error('缺少参数 footprintUuid')
 			const libraryUuid = await resolveLibraryUuid(params)
-			const tabId = await eda.lib_Footprint.openInEditor(String(params.footprintUuid), libraryUuid)
-			if (tabId == null)
-				throw new Error('打开封装编辑器失败：官方返回空')
+			let tabId: string | undefined
+			try {
+				tabId = await eda.lib_Footprint.openInEditor(String(params.footprintUuid), libraryUuid)
+			}
+			catch (error) {
+				if ((error as any)?.message === '[object Object]')
+					throw new Error(`打开封装编辑器失败：官方接口返回不可读错误（footprintUuid=${String(params.footprintUuid)}, libraryUuid=${libraryUuid}）`, { cause: error })
+				throw error
+			}
+			if (typeof tabId !== 'string' || !tabId.trim())
+				throw new Error(`打开封装编辑器失败：官方未返回有效页签 ID（${String(tabId)}）`)
 			return { tabId }
 		},
 	},
@@ -372,13 +553,15 @@ export const libCommands: Array<ICommandDef> = [
 		returns: '封装列表 [{ uuid, name, description, ... }]',
 		example: { cmd: 'lib.footprintSearch', params: { key: '0603' } },
 		handler: async (params) => {
+			const itemsOfPage = searchPageNumber(params.itemsOfPage, 20, 'itemsOfPage')
+			const page = searchPageNumber(params.page, 1, 'page')
 			const libraryUuid = await resolveLibraryUuid(params)
 			return await eda.lib_Footprint.search(
 				String(params.key ?? ''),
 				libraryUuid,
 				params.classification as any,
-				Number(params.itemsOfPage ?? 20),
-				Number(params.page ?? 1),
+				itemsOfPage,
+				page,
 			)
 		},
 	},
@@ -395,7 +578,15 @@ export const libCommands: Array<ICommandDef> = [
 			if (!params.footprintUuid)
 				throw new Error('缺少参数 footprintUuid')
 			const libraryUuid = await resolveLibraryUuid(params)
-			const item = await eda.lib_Footprint.get(String(params.footprintUuid), libraryUuid)
+			let item: any
+			try {
+				item = await eda.lib_Footprint.get(String(params.footprintUuid), libraryUuid)
+			}
+			catch (error) {
+				if ((error as any)?.message === '[object Object]')
+					throw new Error('封装读取失败：官方接口返回不可读错误，无法判断不存在、无权限或其他原因；请核对封装与库 UUID', { cause: error })
+				throw error
+			}
 			if (!item)
 				throw new Error('封装不存在或无权访问（官方返回空）')
 			return item
@@ -504,6 +695,14 @@ export const libCommands: Array<ICommandDef> = [
 				throw new Error('缺少参数 name')
 			if (!params.symbolUuid && params.symbolType === undefined)
 				throw new Error('缺少参数 symbolUuid 或 symbolType：提供已有符号，或指定新建符号类型')
+			const hasModel3DUuid = params.model3DUuid !== undefined
+			const hasModel3DLibraryUuid = params.model3DLibraryUuid !== undefined
+			if (hasModel3DUuid && (typeof params.model3DUuid !== 'string' || !params.model3DUuid.trim()))
+				throw new Error('model3DUuid 必须是非空字符串')
+			if (hasModel3DLibraryUuid && (typeof params.model3DLibraryUuid !== 'string' || !params.model3DLibraryUuid.trim()))
+				throw new Error('model3DLibraryUuid 必须是非空字符串')
+			if (hasModel3DLibraryUuid && !hasModel3DUuid)
+				throw new Error('提供 model3DLibraryUuid 时必须同时提供 model3DUuid')
 			const libraryUuid = await resolveLibraryUuid(params)
 			const association: any = params.symbolUuid
 				? { symbol: { uuid: String(params.symbolUuid), libraryUuid: params.symbolLibraryUuid ? String(params.symbolLibraryUuid) : libraryUuid } }
@@ -514,10 +713,26 @@ export const libCommands: Array<ICommandDef> = [
 					libraryUuid: params.footprintLibraryUuid ? String(params.footprintLibraryUuid) : libraryUuid,
 				}
 			}
-			if (params.model3DUuid) {
+			if (hasModel3DUuid) {
+				const model3DUuid = params.model3DUuid as string
+				const model3DLibraryUuid = hasModel3DLibraryUuid ? params.model3DLibraryUuid as string : libraryUuid
+				const modelApi = (eda as any).lib_3DModel
+				if (!modelApi || typeof modelApi.get !== 'function')
+					throw new Error('无法创建器件：当前 EDA SDK 不支持 lib_3DModel.get，不能核实 3D 模型 UUID 与库身份')
+				let model: any
+				try {
+					model = await modelApi.get(model3DUuid, model3DLibraryUuid)
+				}
+				catch (error) {
+					throw new Error(`无法创建器件：3D 模型验证失败（model3DUuid=${model3DUuid}, libraryUuid=${model3DLibraryUuid}）`, { cause: error })
+				}
+				if (!model)
+					throw new Error(`无法创建器件：3D 模型不存在或无权访问（model3DUuid=${model3DUuid}, libraryUuid=${model3DLibraryUuid}）`)
+				if (model.uuid !== model3DUuid || model.libraryUuid !== model3DLibraryUuid)
+					throw new Error(`无法创建器件：3D 模型身份不符（请求 ${model3DUuid}@${model3DLibraryUuid}，实际 ${String(model.uuid)}@${String(model.libraryUuid)}）`)
 				association.model3D = {
-					uuid: String(params.model3DUuid),
-					libraryUuid: params.model3DLibraryUuid ? String(params.model3DLibraryUuid) : libraryUuid,
+					uuid: model3DUuid,
+					libraryUuid: model3DLibraryUuid,
 				}
 			}
 			const deviceUuid = await eda.lib_Device.create(
@@ -567,14 +782,16 @@ export const libCommands: Array<ICommandDef> = [
 		returns: '器件列表 [{ uuid, name, supplierId, ... }]',
 		example: { cmd: 'lib.deviceSearch', params: { key: '0402' } },
 		handler: async (params) => {
+			const itemsOfPage = searchPageNumber(params.itemsOfPage, 20, 'itemsOfPage')
+			const page = searchPageNumber(params.page, 1, 'page')
 			const libraryUuid = await resolveLibraryUuid(params)
 			return await eda.lib_Device.search(
 				String(params.key ?? ''),
 				libraryUuid,
 				params.classification as any,
 				params.symbolType !== undefined ? Number(params.symbolType) as any : undefined,
-				Number(params.itemsOfPage ?? 20),
-				Number(params.page ?? 1),
+				itemsOfPage,
+				page,
 			)
 		},
 	},
@@ -604,21 +821,37 @@ export const libCommands: Array<ICommandDef> = [
 			{ name: 'lcscIds', type: 'string | array', required: true, description: '立创 C 编号，如 "C1523" 或 ["C1523","C17168"]' },
 			{ name: 'libraryUuid', type: 'string', required: false, description: '库 UUID，默认个人库' },
 			{ name: 'allowMultiMatch', type: 'boolean', required: false, description: '同一库内同 C 编号匹配多个时是否全部返回，默认 false' },
+			{ name: 'diagnostic', type: 'boolean', required: false, description: '设为 true 时附带 SDK 方法、实参快照和调用时间；默认 false' },
 		],
-		returns: '器件属性（或数组）',
+		returns: '默认返回器件属性（或数组）；diagnostic:true 且成功时返回 { result, diagnostic: { sdkMethod, sdkArgs, startedAt, finishedAt } }',
 		example: { cmd: 'lib.deviceGetByLcscIds', params: { lcscIds: ['C1523', 'C17168'] } },
 		handler: async (params) => {
 			if (!params.lcscIds)
 				throw new Error('缺少参数 lcscIds')
+			if (params.diagnostic !== undefined && typeof params.diagnostic !== 'boolean')
+				throw new Error('diagnostic 必须是布尔值')
+			const lcscIds = params.lcscIds
+			const allowMultiMatch = Boolean(params.allowMultiMatch ?? false)
 			const libraryUuid = await resolveLibraryUuid(params)
-			const result = await (eda.lib_Device.getByLcscIds as any)(
-				params.lcscIds,
-				libraryUuid,
-				Boolean(params.allowMultiMatch ?? false),
-			)
+			let result: any
+			let diagnostic: { sdkMethod: string, sdkArgs: { lcscIds: unknown, libraryUuid: string, allowMultiMatch: boolean }, startedAt: string, finishedAt: string } | undefined
+			if (params.diagnostic === true) {
+				const sdkArgs = {
+					lcscIds: Array.isArray(lcscIds) ? [...lcscIds] : lcscIds,
+					libraryUuid,
+					allowMultiMatch,
+				}
+				const startedAt = new Date().toISOString()
+				result = await (eda.lib_Device.getByLcscIds as any)(lcscIds, libraryUuid, allowMultiMatch)
+				const finishedAt = new Date().toISOString()
+				diagnostic = { sdkMethod: 'lib_Device.getByLcscIds', sdkArgs, startedAt, finishedAt }
+			}
+			else {
+				result = await (eda.lib_Device.getByLcscIds as any)(lcscIds, libraryUuid, allowMultiMatch)
+			}
 			if (result === undefined || (Array.isArray(result) && result.length === 0))
 				throw new Error('未匹配到器件（官方返回空）')
-			return result
+			return diagnostic ? { result, diagnostic } : result
 		},
 	},
 	{

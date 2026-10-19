@@ -137,8 +137,14 @@ function lookupVar(ref: string, ctx: ICommandContext): any {
 
 /** 深度替换 params 中的变量引用（仅完整字符串引用，不做字符串内插值） */
 export function resolveRefs<T>(value: T, ctx: ICommandContext): T {
-	if (typeof value === 'string' && value.startsWith('$'))
+	if (typeof value === 'string' && value.startsWith('$')) {
+		// $$ 显式表示字面量 $；EDA 导入自动网名 $1N1 也必须原样传给指令。
+		if (value.startsWith('$$'))
+			return value.slice(1) as T
+		if (/^\$\d+N\d+$/i.test(value))
+			return value
 		return lookupVar(value, ctx)
+	}
 	if (Array.isArray(value))
 		return value.map(item => resolveRefs(item, ctx)) as T
 	if (value !== null && typeof value === 'object') {

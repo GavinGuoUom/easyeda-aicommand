@@ -4,29 +4,332 @@
  * 注意：PCB 坐标默认单位为 mil（与 PCB 编辑器内部一致，界面显示 mm 时注意换算，1mm ≈ 39.37mil）
  */
 import type { ICommandDef } from '../engine/types'
+import { requireEda42 } from '../engine/edaVersion'
 import { assertSnapshotFocused, captureDocumentSnapshot, withDocumentRecovery } from '../engine/documentRecovery'
 import { widthForCurrent } from '../knowledge/rules'
 import { blobToBase64, fileToResult } from './util'
 import { beginTask, failTask, finishTask, taskProgress } from '../engine/tasks'
 import { parseSourceLog, resolveRecords } from '../pcb/sourcelog'
 import { importAndVerifyChanges } from '../engine/pcbImport'
+import { mapSesRoutes, parseAutoRouteSes, planSesImport, serializeSesSubset, verifySesImport, type SesImportPlan, type SesRouteExpected } from '../engine/autoRouteSes'
+import { readRouteSnapshot, verifySourceChanges, type HostRouteSnapshot } from '../engine/autoRouteSesHost'
+import { createSesRouteApplyContext } from '../engine/sesRouteApply'
 
 /** 0.10.42：给无保护 await 加超时（官方偶发永不 resolve，曾致整批删除挂死 300s 无结果） */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-	return Promise.race([
-		p,
-		new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label}超时（>${ms / 1000}s，官方无响应）`)), ms)),
-	])
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined
+	try {
+		return await Promise.race([
+			p,
+			new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label}超时（>${ms / 1000}s，官方无响应）`)), ms) }),
+		])
+	}
+	finally {
+		if (timer !== undefined) clearTimeout(timer)
+	}
 }
 
 // ---------- FreeRouting 自动布线（REST 客户端 + 任务状态） ----------
 const FR_API_BASE = 'http://127.0.0.1:37864/v1'
 let currentRouteJobId: string | undefined
+const routeJobDocumentUuids = new Map<string, string>()
 /** 已完成回灌消费（或回灌已作废）的任务集合（0.10.65）：COMPLETED 任务的清线+导入只执行一次，
  *  任一步抛错也不允许重复轮询再进清线分支（旧版会叠加删除未锁定走线/重复导入） */
 const consumedRouteJobs = new Set<string>()
 const routeJobRecoveryState = new Map<string, 'applying' | 'applied' | 'recoveryRequired'>()
-let routeSkipDrc = false
+const sesRecoveryRequiredDocuments = new Set<string>()
+
+const ROUTE_SOURCE_TYPES = new Set(['LINE', 'VIA', 'ARC', 'TRACK'])
+const MIN_ROUTE_SEGMENT_LENGTH_MIL = 1
+
+function assertMinimumRouteSegmentLength(a: { x: number, y: number }, b: { x: number, y: number }, label: string): void {
+	const lengthMil = Math.hypot(b.x - a.x, b.y - a.y)
+	if (lengthMil < MIN_ROUTE_SEGMENT_LENGTH_MIL)
+		throw new Error(`${label}长度 ${lengthMil} mil 小于最低允许 ${MIN_ROUTE_SEGMENT_LENGTH_MIL} mil`)
+}
+
+function decodeSesUtf8(encoded: string): string {
+	let binary: string
+	try { binary = atob(encoded) }
+	catch (error) { throw new Error(`SES 输出不是有效 Base64：${error instanceof Error ? error.message : String(error)}`, { cause: error }) }
+	const bytes = new Uint8Array(binary.length)
+	for (let index = 0; index < binary.length; index++)
+		bytes[index] = binary.charCodeAt(index)
+	try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes) }
+	catch (error) { throw new Error('SES 输出不是有效 UTF-8 文本', { cause: error }) }
+}
+
+function sesSnapshot(snapshot: HostRouteSnapshot) {
+	return { documentUuid: snapshot.documentUuid, lines: snapshot.lines, vias: snapshot.vias, source: snapshot.source }
+}
+
+function assertSesDocumentRecoverable(documentUuid: string): void {
+	if (sesRecoveryRequiredDocuments.has(documentUuid))
+		throw new Error(`PCB ${documentUuid} 的 SES 写入恢复未确认；已拒绝新的清线或导入`, {
+			cause: { partial: true, restored: false, retryable: false, documentUuid },
+		})
+}
+
+function sesCommandDeadline(params: Record<string, any>): number {
+	const requested = params._timeoutMs == null ? 290_000 : Number(params._timeoutMs)
+	if (!Number.isFinite(requested) || requested <= 0 || requested > 300_000)
+		throw new Error('_timeoutMs 必须是大于 0 且不超过 300000ms 的有限数值')
+	return Date.now() + requested
+}
+
+function sesRemaining(deadline: number): number {
+	const remaining = deadline - Date.now()
+	if (remaining <= 0)
+		throw new Error('SES 自动布线总预算已耗尽，拒绝继续写入')
+	return remaining
+}
+
+async function assertSesSnapshotWithinBudget(deadline: number, snapshot: Awaited<ReturnType<typeof captureDocumentSnapshot>>): Promise<void> {
+	const remaining = sesRemaining(deadline)
+	await withTimeout(assertSnapshotFocused(snapshot), remaining, 'SES 最终焦点/文档身份检查')
+}
+
+function syncSesApplyDiagnostic(diagnostic: any, context: Awaited<ReturnType<typeof createSesRouteApplyContext>>): void {
+	diagnostic.backend = context.backend
+	diagnostic.journal = JSON.parse(JSON.stringify(context.journal))
+	const native = context.journal.writes.find(item => item.kind === 'native-ses-import')
+	if (!native)
+		return
+	diagnostic.sdk = native.attempted
+		? native.settlement === 'returned'
+			? { attempted: true, returned: true, threw: false, result: native.result }
+			: native.settlement === 'threw' || native.settlement === 'unsettled'
+				? { attempted: true, returned: false, threw: native.settlement === 'threw' }
+				: { attempted: true, returned: false, threw: false }
+		: { attempted: false, returned: false, threw: false }
+}
+
+function hasUnconfirmedRecovery(error: unknown): boolean {
+	const cause = (error as any)?.cause
+	return cause?.partial === true && cause?.restored === false
+}
+
+let sesDiagnosticSequence = 0
+type SesDiagnostic = Record<string, unknown> & { ref: string, documentUuid: string, command: string, at: string, issues: string[] }
+const SES_DIAGNOSTIC_BUDGET_MS = 500
+
+async function sesDiagnosticPhase<T>(record: SesDiagnostic, phase: string, action: (active: () => boolean) => Promise<T>): Promise<{ state: 'done', value: T } | { state: 'error', error: unknown } | { state: 'timeout' }> {
+	let active = true
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const task = Promise.resolve().then(() => action(() => active)).then(
+		value => ({ state: 'done' as const, value }),
+		error => ({ state: 'error' as const, error }),
+	)
+	const timed = new Promise<{ state: 'timeout' }>((resolve) => {
+		timer = setTimeout(() => { active = false; resolve({ state: 'timeout' }) }, SES_DIAGNOSTIC_BUDGET_MS)
+	})
+	const result = await Promise.race([task, timed])
+	if (timer)
+		clearTimeout(timer)
+	if (result.state === 'timeout')
+		record.issues.push(`${phase}-timeout: exceeded ${SES_DIAGNOSTIC_BUDGET_MS}ms; later work in this phase was cancelled`)
+	else if (result.state === 'error')
+		record.issues.push(`${phase}-unavailable: ${result.error instanceof Error ? result.error.message : String(result.error)}`)
+	return result
+}
+
+function createSesDiagnostic(command: string, documentUuid: string): SesDiagnostic {
+	return {
+		ref: `ses-diagnostic-${Date.now()}-${++sesDiagnosticSequence}`,
+		command,
+		documentUuid,
+		at: new Date().toISOString(),
+		issues: [],
+		sdk: { attempted: false, returned: false, threw: false },
+	}
+}
+
+async function attachSesInputDiagnostic(record: SesDiagnostic, file: File): Promise<void> {
+	const textPhase = await sesDiagnosticPhase(record, 'sdk-input-text', async active => {
+		const text = await file.text()
+		if (!active())
+			return undefined
+		return text
+	})
+	if (textPhase.state !== 'done' || typeof textPhase.value !== 'string')
+		return
+	const text = textPhase.value
+	const bytes = new TextEncoder().encode(text)
+	record.sdkInput = { text, utf8Bytes: bytes.byteLength }
+	const hashPhase = await sesDiagnosticPhase(record, 'sdk-input-hash', async active => {
+		const cryptoApi = globalThis.crypto
+		if (!cryptoApi?.subtle)
+			throw new Error('Web Crypto subtle.digest 不可用')
+		const digest = await cryptoApi.subtle.digest('SHA-256', bytes)
+		if (!active())
+			return undefined
+		return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+	})
+	if (hashPhase.state === 'done' && hashPhase.value)
+		record.sdkInputHash = hashPhase.value
+}
+
+async function captureSesDiagnosticEvidence(record: SesDiagnostic, phase: 'beforeRecovery' | 'afterRecovery', snapshot: Awaited<ReturnType<typeof captureDocumentSnapshot>>): Promise<void> {
+	const evidence: Record<string, unknown> = { capturedAt: new Date().toISOString() }
+	const sourceResult = await sesDiagnosticPhase(record, `${phase}-source`, async active => {
+		await assertSnapshotFocused(snapshot)
+		if (!active())
+			return undefined
+		const source = await eda.sys_FileManager.getDocumentSource()
+		if (!active())
+			return undefined
+		await assertSnapshotFocused(snapshot)
+		if (!active())
+			return undefined
+		if (typeof source !== 'string' || !source.trim())
+			throw new Error('document source unavailable or empty')
+		return source
+	})
+	if (sourceResult.state === 'done' && typeof sourceResult.value === 'string') {
+		evidence.source = sourceResult.value
+		evidence.sourceUtf8Bytes = new TextEncoder().encode(sourceResult.value).byteLength
+	}
+	else if (sourceResult.state === 'timeout')
+		evidence.sourceUnavailable = 'diagnostic phase timed out; route snapshot read was not started'
+	else if (sourceResult.state === 'error')
+		evidence.sourceUnavailable = sourceResult.error instanceof Error ? sourceResult.error.message : String(sourceResult.error)
+	if (sourceResult.state !== 'timeout') {
+		const routeResult = await sesDiagnosticPhase(record, `${phase}-routes`, async active => {
+			const routes = await readRouteSnapshot(eda, async () => {
+				if (!active())
+					throw new Error('diagnostic phase expired; stopped before next host read')
+				await assertSnapshotFocused(snapshot)
+				if (!active())
+					throw new Error('diagnostic phase expired; stopped before next host read')
+			}, typeof evidence.source === 'string' ? evidence.source : undefined)
+			if (!active())
+				return undefined
+			return { documentUuid: routes.documentUuid, lines: routes.lines, vias: routes.vias, arcs: routes.arcs }
+		})
+		if (routeResult.state === 'done' && routeResult.value)
+			evidence.routeSnapshot = routeResult.value
+		else if (routeResult.state === 'error')
+			evidence.routeSnapshotUnavailable = routeResult.error instanceof Error ? routeResult.error.message : String(routeResult.error)
+		else if (routeResult.state === 'timeout')
+			evidence.routeSnapshotUnavailable = 'diagnostic phase timed out; later host reads stopped'
+	}
+	if (evidence.sourceUnavailable)
+		record.issues.push(`${phase}-source-unavailable: ${String(evidence.sourceUnavailable)}`)
+	if (evidence.routeSnapshotUnavailable)
+		record.issues.push(`${phase}-route-snapshot-unavailable: ${String(evidence.routeSnapshotUnavailable)}`)
+	record[phase] = evidence
+}
+
+async function persistSesDiagnostic(record: SesDiagnostic, stage: 'beforeRecovery' | 'afterRecovery'): Promise<{ ref: string, available: boolean, persisted: boolean, storageKey: string, issues: string[], record: SesDiagnostic }> {
+	const key = `ses-failure-diagnostic:${record.documentUuid}:${record.ref}:${stage}`
+	record.storageKey = key
+	record.storageKeys = [...((record.storageKeys as string[] | undefined) ?? []), key]
+	let text: string
+	try { text = JSON.stringify(record) }
+	catch (error) {
+		record.issues.push(`${stage}-storage-unavailable: diagnostic serialization failed: ${error instanceof Error ? error.message : String(error)}`)
+		return { ref: record.ref, available: true, persisted: false, storageKey: key, issues: [...record.issues], record }
+	}
+	const phase = await sesDiagnosticPhase(record, `${stage}-storage`, async active => {
+		const savedOk = await eda.sys_Storage.setExtensionUserConfig(key, text)
+		if (!active())
+			return { persisted: false, reason: 'storage write completed after diagnostic timeout' }
+		if (savedOk !== true)
+			throw new Error('diagnostic storage write returned false')
+		const saved = await eda.sys_Storage.getExtensionUserConfig(key)
+		if (!active())
+			return { persisted: false, reason: 'storage readback completed after diagnostic timeout' }
+		if (saved !== text)
+			throw new Error('diagnostic storage readback mismatch')
+		return { persisted: true }
+	})
+	const persisted = phase.state === 'done' && phase.value.persisted === true
+	if (!persisted && phase.state === 'error')
+		record.issues.push(`${stage}-storage-unavailable: ${phase.error instanceof Error ? phase.error.message : String(phase.error)}`)
+	return { ref: record.ref, available: true, persisted, storageKey: key, issues: [...record.issues], record }
+}
+
+function withSesDiagnostic(error: unknown, diagnostic: { ref: string, available: boolean, issues: string[] }): unknown {
+	if (error && typeof error === 'object') {
+		const cause = (error as any).cause
+		if (cause && typeof cause === 'object' && Object.isExtensible(cause)) {
+			try { Object.assign(cause, { sesDiagnostic: diagnostic }); return error }
+			catch { /* Preserve the original cause in the wrapper below. */ }
+		}
+		if ((error as any) instanceof Error) {
+			const copiedCause = cause && typeof cause === 'object' ? { ...cause, sesDiagnostic: diagnostic } : { sesDiagnostic: diagnostic }
+			const wrapped = new Error((error as Error).message, { cause: copiedCause })
+			wrapped.name = (error as Error).name
+			Object.assign(wrapped, error)
+			Object.defineProperty(wrapped, 'cause', { value: copiedCause, configurable: true, writable: true })
+			return wrapped
+		}
+	}
+	return error
+}
+
+function routeSourceRecord(snapshot: HostRouteSnapshot, id: string) {
+	const matches = snapshot.sourceRecords.filter(record => record.id === id && ROUTE_SOURCE_TYPES.has(record.type))
+	if (matches.length !== 1)
+		throw new Error(`路由图元 ${id} 在有效 PCB 源码中对应 ${matches.length} 条路由记录`)
+	return { type: matches[0].type, id: matches[0].id }
+}
+
+function sourceRouteDelta(
+	before: HostRouteSnapshot,
+	after: HostRouteSnapshot,
+	deletedIds: string[],
+): { verified: boolean, differences: Array<Record<string, unknown>> } {
+	const beforeIds = new Set([...before.lines, ...before.vias, ...before.arcs].map(item => item.id))
+	const afterIds = new Set([...after.lines, ...after.vias, ...after.arcs].map(item => item.id))
+	const newArcs = after.arcs.filter(item => !beforeIds.has(item.id))
+	if (newArcs.length)
+		return { verified: false, differences: newArcs.map(item => ({ code: 'unexpectedArcAdded', id: item.id })) }
+	const deleted = deletedIds.map(id => routeSourceRecord(before, id))
+	const added = [...after.lines, ...after.vias]
+		.filter(item => !beforeIds.has(item.id))
+		.map(item => routeSourceRecord(after, item.id))
+	return verifySourceChanges(before, after, deleted, added)
+}
+
+function requireRouteVerification(plan: SesImportPlan, after: HostRouteSnapshot, beforeSource: HostRouteSnapshot, deletedIds: string[]) {
+	const semantic = verifySesImport(plan, sesSnapshot(after))
+	if (!semantic.verified)
+		throw new Error(`SES 路由几何读回不匹配：${JSON.stringify(semantic.differences)}`)
+	const source = sourceRouteDelta(beforeSource, after, deletedIds)
+	if (!source.verified)
+		throw new Error(`SES 导入改变了计划外 PCB 源码记录：${JSON.stringify(source.differences)}`)
+	return semantic
+}
+
+function requireClearedSnapshot(before: HostRouteSnapshot, after: HostRouteSnapshot, plan: SesImportPlan, deletedArcIds: string[]) {
+	const actualLines = new Map(after.lines.map(item => [item.id, item]))
+	const actualVias = new Map(after.vias.map(item => [item.id, item]))
+	for (const item of plan.deleteLines) {
+		if (!item.id || actualLines.has(item.id))
+			throw new Error(`未锁定走线 ${item.id ?? '<missing-id>'} 清理后仍存在`)
+	}
+	for (const item of plan.deleteVias) {
+		if (!item.id || actualVias.has(item.id))
+			throw new Error(`未锁定过孔 ${item.id ?? '<missing-id>'} 清理后仍存在`)
+	}
+	for (const item of plan.retainedLines) {
+		if (!item.id || !actualLines.has(item.id) || JSON.stringify(actualLines.get(item.id)) !== JSON.stringify(item))
+			throw new Error(`保留走线 ${item.id ?? '<missing-id>'} 清理后缺失或属性变化`)
+	}
+	for (const item of plan.retainedVias) {
+		if (!item.id || !actualVias.has(item.id) || JSON.stringify(actualVias.get(item.id)) !== JSON.stringify(item))
+			throw new Error(`保留过孔 ${item.id ?? '<missing-id>'} 清理后缺失或属性变化`)
+	}
+	const afterArcIds = new Set(after.arcs.map(item => item.id))
+	for (const item of before.arcs) {
+		if (deletedArcIds.includes(item.id) ? afterArcIds.has(item.id) : !afterArcIds.has(item.id))
+			throw new Error(`圆弧 ${item.id} 清理后状态与 SDK 锁定计划不符`)
+	}
+	const source = sourceRouteDelta(before, after, [...plan.deleteLines, ...plan.deleteVias].flatMap(item => item.id ? [item.id] : []).concat(deletedArcIds))
+	if (!source.verified)
+		throw new Error(`清理阶段改变了计划外 PCB 源码记录：${JSON.stringify(source.differences)}`)
+}
 
 /** FreeRouting REST 请求（走 eda.sys_ClientUrl 绕开扩展网络限制，与官方集成扩展同款） */
 async function frRequest<T = unknown>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
@@ -58,6 +361,281 @@ function safeState<T>(obj: any, method: string): T | undefined {
 		// 忽略不支持的状态读取
 	}
 	return undefined
+}
+
+function heatWeldingReadback(pad: any): Record<string, unknown> {
+	const rawFieldNames = ['connectionMethod', 'divergenceSpacing', 'divergenceLineWidth', 'divergenceAngle'] as const
+	const safeMessage = (error: unknown) => {
+		let message = '读取异常'
+		try {
+			if (error instanceof Error && typeof error.message === 'string')
+				message = error.message
+			else if (typeof error === 'string')
+				message = error
+			else if (error && (typeof error === 'object' || typeof error === 'function')) {
+				const candidate = (error as any).message
+				if (typeof candidate === 'string')
+					message = candidate
+			}
+		}
+		catch { /* Keep a safe generic message when the thrown value is hostile. */ }
+		return message
+	}
+	const exceptionResult = (error: unknown) => {
+		return { status: 'exception', error: { message: safeMessage(error) } }
+	}
+	const readRawFields = (value: unknown) => {
+		const values: Record<string, unknown> = {}
+		const evidence: Record<string, unknown> = {}
+		for (const key of rawFieldNames) {
+			let field: unknown
+			try {
+				field = value !== null && (typeof value === 'object' || typeof value === 'function')
+					? (value as any)[key]
+					: undefined
+				values[key] = field
+			}
+			catch (error) {
+				const message = safeMessage(error)
+				values[key] = undefined
+				evidence[key] = { status: 'exception', type: 'exception', error: { message } }
+				continue
+			}
+			if (field === undefined) evidence[key] = { status: 'undefined', type: 'undefined' }
+			else if (field === null || typeof field === 'string' || typeof field === 'boolean') evidence[key] = { status: 'value', type: typeof field, value: field }
+			else if (typeof field === 'number') evidence[key] = Number.isFinite(field)
+				? { status: 'value', type: 'number', value: field }
+				: { status: 'value', type: 'number', finite: false }
+			else evidence[key] = { status: 'value', type: typeof field }
+		}
+		return { values, evidence }
+	}
+	let getter: unknown
+	try { getter = pad?.getState_HeatWelding }
+	catch (error) { return exceptionResult(error) }
+	if (typeof getter !== 'function')
+		return { status: 'unavailable' }
+	let raw: unknown
+	try { raw = getter.call(pad) }
+	catch (error) { return exceptionResult(error) }
+	if (raw === null)
+		return { status: 'null', value: null }
+	const returnedType = raw === undefined ? 'undefined' : Array.isArray(raw) ? 'array' : typeof raw
+	const fields = readRawFields(raw)
+	const invalid = (reason: string) => ({ status: 'invalid', returnedType, reason, rawFields: fields.evidence })
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+		return invalid(raw === undefined ? '读取接口返回 undefined' : '读取接口应返回 null 或配置对象')
+	const connectionMethodEvidence = fields.evidence.connectionMethod as { status?: string, error?: { message?: string } } | undefined
+	if (connectionMethodEvidence?.status === 'exception')
+		return { status: 'exception', error: { message: connectionMethodEvidence.error?.message ?? '读取异常' } }
+	const connectionMethod = fields.values.connectionMethod
+	if (connectionMethod !== 'Divergent' && connectionMethod !== 'Direct-connected' && connectionMethod !== 'Non-connected')
+		return invalid('connectionMethod 不是已知 SDK 枚举值')
+	const result: Record<string, unknown> = { connectionMethod }
+	for (const key of rawFieldNames.slice(1)) {
+		const fieldEvidence = fields.evidence[key] as { status?: string, error?: { message?: string } } | undefined
+		if (fieldEvidence?.status === 'exception')
+			return { status: 'exception', error: { message: fieldEvidence.error?.message ?? '读取异常' } }
+		const field = fields.values[key]
+		if (field === undefined)
+			continue
+		if (typeof field !== 'number' || !Number.isFinite(field))
+			return invalid(`${key} 必须是有限数值`)
+		result[key] = field
+	}
+	return { status: 'config', value: result }
+}
+
+function projectPadDirectValue(value: unknown, path: string, seen = new Set<object>()): unknown {
+	if (value === null || typeof value === 'string' || typeof value === 'boolean')
+		return value
+	if (typeof value === 'number') {
+		if (!Number.isFinite(value))
+			throw new Error(`${path} 含非有限数值`)
+		return value
+	}
+	if (Array.isArray(value)) {
+		if (seen.has(value))
+			throw new Error(`${path} 含循环引用`)
+		seen.add(value)
+		const result = value.map((item, index) => projectPadDirectValue(item, `${path}[${index}]`, seen))
+		seen.delete(value)
+		return result
+	}
+	if (typeof value === 'object' && value) {
+		if (seen.has(value))
+			throw new Error(`${path} 含循环引用`)
+		seen.add(value)
+		const result: Record<string, unknown> = {}
+		for (const key of Object.keys(value)) {
+			const item = (value as Record<string, unknown>)[key]
+			if (typeof item === 'function' || typeof item === 'symbol' || typeof item === 'bigint' || item === undefined)
+				throw new Error(`${path}.${key} 不是可安全读取的数据字段`)
+			result[key] = projectPadDirectValue(item, `${path}.${key}`, seen)
+		}
+		seen.delete(value)
+		return result
+	}
+	throw new Error(`${path} 返回了不可安全投影的值`)
+}
+
+function padDirectErrorMessage(error: unknown): string {
+	try {
+		if (error instanceof Error && typeof error.message === 'string')
+			return error.message
+		if (typeof error === 'string')
+			return error
+		if (error && (typeof error === 'object' || typeof error === 'function')) {
+			const message = (error as { message?: unknown }).message
+			if (typeof message === 'string')
+				return message
+		}
+	}
+	catch { /* hostile thrown values use a safe fallback */ }
+	return 'SDK operation failed with an unreadable error value'
+}
+
+function readPadDirectGetter(pad: any, method: string): unknown {
+	let getter: unknown
+	try { getter = pad?.[method] }
+	catch (error) { throw new Error(`${method} getter 访问异常：${padDirectErrorMessage(error)}`) }
+	if (typeof getter !== 'function')
+		throw new Error(`焊盘缺少必需 getter ${method}`)
+	let value: unknown
+	try { value = getter.call(pad) }
+	catch (error) { throw new Error(`${method} 读取异常：${padDirectErrorMessage(error)}`) }
+	return value
+}
+
+function readPadDirectSample(pad: any): Record<string, unknown> {
+	const parentComponentId = readPadDirectGetter(pad, 'getState_ParentComponentPrimitiveId')
+	const primitiveId = readPadDirectGetter(pad, 'getState_PrimitiveId')
+	const padNumber = readPadDirectGetter(pad, 'getState_PadNumber')
+	if (typeof parentComponentId !== 'string' || !parentComponentId.trim() || typeof primitiveId !== 'string' || !primitiveId.trim() || typeof padNumber !== 'string')
+		throw new Error('焊盘身份 getter 返回了无效数据')
+	const fields: Array<[string, string]> = [
+		['net', 'getState_Net'], ['layer', 'getState_Layer'], ['x', 'getState_X'], ['y', 'getState_Y'],
+		['rotation', 'getState_Rotation'], ['shape', 'getState_Pad'], ['hole', 'getState_Hole'],
+		['holeOffsetX', 'getState_HoleOffsetX'], ['holeOffsetY', 'getState_HoleOffsetY'],
+		['holeRotation', 'getState_HoleRotation'], ['primitiveLock', 'getState_PrimitiveLock'],
+	]
+	const sample: Record<string, unknown> = { primitiveId, parentComponentId, padNumber }
+	for (const [key, method] of fields) {
+		const value = readPadDirectGetter(pad, method)
+		if (value === undefined && method !== 'getState_Net' && method !== 'getState_Pad')
+			throw new Error(`${method} 返回 undefined，无法建立写前样本`)
+		sample[key] = value === undefined ? { status: 'undefined' } : projectPadDirectValue(value, method)
+	}
+	const heatWelding = readPadDirectGetter(pad, 'getState_HeatWelding')
+	if (heatWelding !== null && (!heatWelding || typeof heatWelding !== 'object' || Array.isArray(heatWelding)))
+		throw new Error('getState_HeatWelding 返回了非法数据')
+	if (heatWelding !== null) {
+		const method = readPadDirectValueField(heatWelding as Record<string, unknown>, 'connectionMethod')
+		if (method !== 'Divergent' && method !== 'Direct-connected' && method !== 'Non-connected')
+			throw new Error('getState_HeatWelding.connectionMethod 不是已知 SDK 枚举值')
+		const projected: Record<string, unknown> = { connectionMethod: method }
+		for (const key of ['divergenceSpacing', 'divergenceLineWidth', 'divergenceAngle']) {
+			const value = readPadDirectOptionalValueField(heatWelding as Record<string, unknown>, key)
+			if (value !== undefined) {
+				if (typeof value !== 'number' || !Number.isFinite(value))
+					throw new Error(`getState_HeatWelding.${key} 必须是有限数值`)
+				projected[key] = value
+			}
+		}
+		sample.heatWelding = projected
+	}
+	else
+		sample.heatWelding = null
+	return sample
+}
+
+function readPadDirectValueField(value: Record<string, unknown>, key: string): unknown {
+	return readPadDirectOptionalValueField(value, key)
+}
+
+function readPadDirectOptionalValueField(value: Record<string, unknown>, key: string): unknown {
+	try { return value[key] }
+	catch (error) { throw new Error(`热焊配置字段 ${key} 读取异常：${padDirectErrorMessage(error)}`) }
+}
+
+function padDirectSourceSnapshot(source: unknown, expectedUuid: string) {
+	if (typeof source !== 'string' || !source.trim())
+		throw new Error('getDocumentSource 返回空或非法 PCB 源码')
+	const doc = parseSourceLog(source)
+	if (doc.docType !== 'PCB' || doc.uuid !== expectedUuid)
+		throw new Error(`PCB 源码身份不符（docType=${doc.docType}, 源码 UUID=${doc.uuid}, 请求 UUID=${expectedUuid}）`)
+	return snapshotEffectiveSourceRecords(doc)
+}
+
+function padDirectSourceDiff(before: Array<[string, unknown]>, after: Array<[string, unknown]>) {
+	const diff = diffSourceRecordSnapshots(before, after)
+	const beforeMap = new Map(before)
+	const afterMap = new Map(after)
+	const decode = (key: string) => {
+		const [type, id] = key.split('\u0000')
+		return { type, id }
+	}
+	return {
+		added: diff.added.map(key => ({ ...decode(key), after: afterMap.get(key) })),
+		removed: diff.removed.map(key => ({ ...decode(key), before: beforeMap.get(key) })),
+		changed: diff.changed.map(item => ({ ...decode(item.key), before: item.before, after: item.after })),
+	}
+}
+
+function normalizeSourceData(value: unknown): unknown {
+	if (Array.isArray(value))
+		return value.map(normalizeSourceData)
+	if (value && typeof value === 'object') {
+		const object = value as Record<string, unknown>
+		return Object.fromEntries(Object.keys(object).sort().map(key => [key, normalizeSourceData(object[key])]))
+	}
+	return value
+}
+
+function snapshotEffectiveSourceRecords(doc: ReturnType<typeof parseSourceLog>, type?: string, excludedPourId?: string): Array<[string, unknown]> {
+	return Array.from(resolveRecords(doc, type).entries())
+		.filter(([key]) => !(excludedPourId && key === `POUR\u0000${excludedPourId}`))
+		.map(([key, record]): [string, unknown] => [key, normalizeSourceData(record.data)])
+		.sort(([a], [b]) => a.localeCompare(b))
+}
+
+function diffSourceRecordSnapshots(before: Array<[string, unknown]>, after: Array<[string, unknown]>) {
+	const beforeMap = new Map(before)
+	const afterMap = new Map(after)
+	return {
+		added: after.filter(([key]) => !beforeMap.has(key)).map(([key]) => key),
+		removed: before.filter(([key]) => !afterMap.has(key)).map(([key]) => key),
+		changed: before.filter(([key, data]) => afterMap.has(key) && JSON.stringify(data) !== JSON.stringify(afterMap.get(key)))
+			.map(([key, beforeData]) => ({ key, before: beforeData, after: afterMap.get(key) })),
+	}
+}
+
+/** Convert CSS-style hexadecimal input to the RGBA object required by the SDK. */
+function parsePcbColor(value: unknown): { r: number, g: number, b: number, alpha: number } {
+	const input = String(value).trim()
+	const match = /^#?([\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.exec(input)
+	if (!match)
+		throw new Error(`颜色格式无效：${input}（请使用 #RGB、#RGBA、#RRGGBB 或 #RRGGBBAA）`)
+	let hex = match[1]
+	if (hex.length === 3 || hex.length === 4)
+		hex = [...hex].map(char => char + char).join('')
+	const hasAlpha = hex.length === 8
+	const channels = hex.match(/.{2}/g)!.map(channel => Number.parseInt(channel, 16))
+	return {
+		r: channels[0],
+		g: channels[1],
+		b: channels[2],
+		alpha: hasAlpha ? channels[3] / 255 : 1,
+	}
+}
+
+function parseFiniteNumber(value: unknown, label: string): number {
+	if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim()))
+		throw new Error(`${label} 必须是有限数字`)
+	const number = Number(value)
+	if (!Number.isFinite(number))
+		throw new Error(`${label} 必须是有限数字`)
+	return number
 }
 
 /**
@@ -335,7 +913,7 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.routeTrack',
-		summary: 'PCB 走线（折线，自动拆成线段）；可按载流自动计算线宽。分段写入部分失败时返回 partial 证据并停止后续段；失败段可能已生效，先核对现场再处理',
+		summary: 'PCB 走线（折线，自动拆成线段）；每个相邻段必须至少 1 mil；可按载流自动计算线宽。每段创建后按 ID 读回并核对图元枚举、网络、层、端点和线宽，确认后才报告成功；按 PCB 焦点及共享总时限执行，分段失败时返回 partial 证据并停止后续段',
 		params: [
 			{ name: 'net', type: 'string', required: true, description: '网络名（须已存在于 PCB，可用 pcb.listNets 查看）' },
 			{ name: 'points', type: 'number[][]', required: true, description: '折点坐标 [[x1,y1],[x2,y2],...]' },
@@ -343,7 +921,7 @@ export const pcbCommands: Array<ICommandDef> = [
 			{ name: 'width', type: 'number', description: '线宽（与 currentA 二选一）' },
 			{ name: 'currentA', type: 'number', description: '载流（安培），由知识库自动换算线宽' },
 		],
-		returns: '{ segmentIds, width }；分段失败时 error.cause={partial:true,retryable:false,segmentIds,failedSegmentIndex,failedSegmentAttempted,unprocessedSegments,phase,operationError}',
+		returns: '{ segmentIds, width }；仅读回验证通过的段计入 segmentIds。分段失败时 error.cause={partial:true,retryable:false,segmentIds,failedSegmentIndex,failedSegmentAttempted,failedPrimitiveId?,unprocessedSegments,phase,operationError}；failedPrimitiveId 表示失败段可能已创建的候选 ID，不代表成功',
 		example: { cmd: 'pcb.routeTrack', params: { net: 'VCC', points: [[100, 100], [500, 100]], width: 12 } },
 		handler: async (params) => {
 			const monotonicStart = performance.now()
@@ -363,12 +941,42 @@ export const pcbCommands: Array<ICommandDef> = [
 				if (!Array.isArray(point) || point.length !== 2 || !point.every(value => typeof value === 'number' && Number.isFinite(value)))
 					throw new Error(`points[${i}] 必须是两个有限数值坐标`)
 			}
+			for (let i = 0; i < params.points.length - 1; i++) {
+				const a = params.points[i]
+				const b = params.points[i + 1]
+				assertMinimumRouteSegmentLength({ x: a[0], y: a[1] }, { x: b[0], y: b[1] }, `routeTrack 相邻段 ${i + 1}`)
+			}
 			let width = params.width != null ? Number(params.width) : undefined
 			if (width != null && (!Number.isFinite(width) || width <= 0))
 				throw new Error('width 必须是大于 0 的有限数值')
 			if (width == null && params.currentA != null && (!Number.isFinite(Number(params.currentA)) || Number(params.currentA) <= 0))
 				throw new Error('currentA 必须是大于 0 的有限数值')
 			const layer = resolveLayer(params.layer) as any
+			const awaitWithinDeadline = async <T>(operation: () => Promise<T> | T, phase: string): Promise<T> => {
+				const left = remaining()
+				if (left <= 0)
+					throw new Error(`${phase}超出 pcb.routeTrack 共享总时限`)
+				let timer: ReturnType<typeof setTimeout> | undefined
+				try {
+					return await Promise.race([
+						Promise.resolve().then(operation),
+						new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${phase}超出 pcb.routeTrack 共享总时限`)), left) }),
+					])
+				}
+				finally {
+					if (timer !== undefined)
+						clearTimeout(timer)
+				}
+			}
+			const assertRouteTrackFocus = async (phase: string) => {
+				const focused = await awaitWithinDeadline(() => eda.dmt_SelectControl.getCurrentDocumentInfo(), `${phase}焦点核对`)
+				if (focused?.documentType !== 3 || focused.uuid !== routeTrackDocumentUuid)
+					throw new Error(`${phase} PCB 焦点已变化（原文档=${routeTrackDocumentUuid}，当前=${focused?.uuid ?? '未知'}），已停止后续走线`)
+			}
+			const routeTrackDocument = await awaitWithinDeadline(() => eda.dmt_SelectControl.getCurrentDocumentInfo(), '初始 PCB 焦点读取')
+			if (routeTrackDocument?.documentType !== 3 || typeof routeTrackDocument.uuid !== 'string' || !routeTrackDocument.uuid.trim())
+				throw new Error('pcb.routeTrack 必须在有效 PCB 文档中运行')
+			const routeTrackDocumentUuid = routeTrackDocument.uuid
 			const readBudget = remaining()
 			if (readBudget <= 0)
 				throw new Error('pcb.routeTrack 在写入前超出总时限，未开始创建线段')
@@ -385,6 +993,7 @@ export const pcbCommands: Array<ICommandDef> = [
 			}
 			if (remaining() <= 0)
 				throw new Error('pcb.routeTrack 在写入前超出总时限，未开始创建线段')
+			await assertRouteTrackFocus('网络存在检查后')
 			if (width == null && params.currentA != null) {
 				const hit = widthForCurrent(Number(params.currentA))
 				if (!hit)
@@ -394,7 +1003,7 @@ export const pcbCommands: Array<ICommandDef> = [
 
 			const points = params.points as Array<Array<number>>
 			const segmentIds: string[] = []
-			const failPartial = (segmentIndex: number, error: unknown, attempted = true): never => {
+			const failPartial = (segmentIndex: number, error: unknown, attempted = true, failedPrimitiveId?: string): never => {
 				const operationError = error instanceof Error ? error.message : String(error)
 				const cause = {
 					partial: true,
@@ -402,6 +1011,7 @@ export const pcbCommands: Array<ICommandDef> = [
 					segmentIds: [...segmentIds],
 					failedSegmentIndex: segmentIndex,
 					failedSegmentAttempted: attempted,
+				...(typeof failedPrimitiveId === 'string' && failedPrimitiveId.trim() ? { failedPrimitiveId } : {}),
 					unprocessedSegments: points.length - 1 - segmentIndex + (attempted ? 0 : 1),
 					phase: 'pcb.routeTrack',
 					operationError,
@@ -418,28 +1028,68 @@ export const pcbCommands: Array<ICommandDef> = [
 					failPartial(i + 1, new Error('总时限已耗尽'), false)
 				}
 				let line: any
+				let candidateId: string | undefined
+				let createAttempted = false
 				try {
-					let timer: ReturnType<typeof setTimeout> | undefined
-					try {
-						line = await Promise.race([
-							eda.pcb_PrimitiveLine.create(String(params.net), layer, Number(x1), Number(y1), Number(x2), Number(y2), width),
-							new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`第 ${i + 1} 段创建超时（共享预算已耗尽）`)), left) }),
-						])
-					}
-					finally {
-						if (timer !== undefined)
-							clearTimeout(timer)
-					}
+					await assertRouteTrackFocus(`第 ${i + 1} 段创建前`)
+					line = await awaitWithinDeadline(() => {
+						createAttempted = true
+						return eda.pcb_PrimitiveLine.create(String(params.net), layer, Number(x1), Number(y1), Number(x2), Number(y2), width)
+					}, `第 ${i + 1} 段创建`)
+					candidateId = safeState<unknown>(line, 'getState_PrimitiveId') as string | undefined
+					await assertRouteTrackFocus(`第 ${i + 1} 段创建后`)
 				}
 				catch (err) {
-					failPartial(i + 1, wrapCreateError(`第 ${i + 1} 段走线创建`, err))
+					failPartial(i + 1, wrapCreateError(`第 ${i + 1} 段走线创建/焦点核对`, err), createAttempted, candidateId)
 				}
 				if (!line)
 					failPartial(i + 1, new Error('官方返回空'))
-				const id = safeState<unknown>(line, 'getState_PrimitiveId')
-				if (typeof id !== 'string' || !id)
+				if (typeof candidateId !== 'string' || !candidateId.trim())
 					failPartial(i + 1, new Error('官方返回对象缺少有效线段 ID'))
-				segmentIds.push(id as string)
+				const candidatePrimitiveId = candidateId as string
+				try {
+					await assertRouteTrackFocus(`第 ${i + 1} 段读回前`)
+					const readback = await awaitWithinDeadline(() => eda.pcb_PrimitiveLine.get(candidatePrimitiveId), `第 ${i + 1} 段按 ID 读回`)
+					await assertRouteTrackFocus(`第 ${i + 1} 段按 ID 读回后`)
+					if (!readback)
+						throw new Error('按 ID 读回为空')
+					const listedIds = await awaitWithinDeadline(() => eda.pcb_PrimitiveLine.getAllPrimitiveId(), `第 ${i + 1} 段 ID 枚举`)
+					await assertRouteTrackFocus(`第 ${i + 1} 段 ID 枚举后`)
+					if (!Array.isArray(listedIds) || listedIds.some(value => typeof value !== 'string' || !value.trim()))
+						throw new Error('getAllPrimitiveId 返回非数组或含无效 ID')
+					if (!listedIds.includes(candidatePrimitiveId))
+						throw new Error('新线段 ID 未出现在图元枚举中')
+					const actualId = safeState<unknown>(readback, 'getState_PrimitiveId')
+					const actualNet = safeState<unknown>(readback, 'getState_Net')
+					const actualLayer = safeState<unknown>(readback, 'getState_Layer')
+					const actualStartX = safeState<unknown>(readback, 'getState_StartX')
+					const actualStartY = safeState<unknown>(readback, 'getState_StartY')
+					const actualEndX = safeState<unknown>(readback, 'getState_EndX')
+					const actualEndY = safeState<unknown>(readback, 'getState_EndY')
+					const actualWidth = safeState<unknown>(readback, 'getState_LineWidth')
+					if (actualId !== candidatePrimitiveId || actualNet !== String(params.net) || actualLayer !== layer)
+						throw new Error(`读回身份不匹配（id=${String(actualId)} net=${String(actualNet)} layer=${String(actualLayer)}）`)
+					if (![actualStartX, actualStartY, actualEndX, actualEndY, actualWidth].every(value => typeof value === 'number' && Number.isFinite(value)) || Number(actualWidth) <= 0)
+						throw new Error('读回坐标或线宽不是有限有效数值')
+					const actualLength = Math.hypot(Number(actualEndX) - Number(actualStartX), Number(actualEndY) - Number(actualStartY))
+					if (actualLength <= 0)
+						throw new Error('读回线段长度为零')
+					const expectedLength = Math.hypot(Number(x2) - Number(x1), Number(y2) - Number(y1))
+					const coordinateTolerance = Math.min(0.001, expectedLength / 4)
+					const near = (a: number, b: number, tolerance: number) => Math.abs(a - b) <= tolerance
+					const direct = near(Number(actualStartX), Number(x1), coordinateTolerance) && near(Number(actualStartY), Number(y1), coordinateTolerance)
+						&& near(Number(actualEndX), Number(x2), coordinateTolerance) && near(Number(actualEndY), Number(y2), coordinateTolerance)
+					const reverse = near(Number(actualStartX), Number(x2), coordinateTolerance) && near(Number(actualStartY), Number(y2), coordinateTolerance)
+						&& near(Number(actualEndX), Number(x1), coordinateTolerance) && near(Number(actualEndY), Number(y1), coordinateTolerance)
+					if (!direct && !reverse)
+						throw new Error('读回端点与请求线段不匹配')
+					if (width != null && Math.abs(Number(actualWidth) - Number(width)) > 0.001)
+						throw new Error(`读回线宽不匹配（读回 ${String(actualWidth)}，请求 ${String(width)}）`)
+				}
+				catch (err) {
+					failPartial(i + 1, err, true, candidateId)
+				}
+				segmentIds.push(candidatePrimitiveId)
 				if (remaining() <= 0)
 					failPartial(i + 1, new Error('创建调用完成时共享预算已耗尽'))
 			}
@@ -482,7 +1132,7 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.pourCopper',
-		summary: '矩形铺铜（GND 平面等）',
+		summary: '矩形铺铜（GND 平面等）；preserveSilos 可选控制是否保留孤岛，省略时沿用 SDK 默认行为',
 		params: [
 			{ name: 'net', type: 'string', required: true, description: '网络名，通常为 GND（须已存在于 PCB）' },
 			{ name: 'layer', type: 'string', description: 'top | bottom，默认 top' },
@@ -490,13 +1140,68 @@ export const pcbCommands: Array<ICommandDef> = [
 			{ name: 'y', type: 'number', required: true, description: '矩形左下角 Y' },
 			{ name: 'width', type: 'number', required: true, description: '矩形宽度' },
 			{ name: 'height', type: 'number', required: true, description: '矩形高度' },
+			{ name: 'preserveSilos', type: 'boolean', description: '是否保留铺铜孤岛；省略时不传该SDK参数，使用宿主默认值' },
 		],
-		returns: '{ primitiveId }',
-		example: { cmd: 'pcb.pourCopper', params: { net: 'GND', layer: 'bottom', x: 0, y: 0, width: 2000, height: 1500 } },
+		returns: '{ primitiveId, readback: { verified, net, layer, preserveSilos, path } }；仅确认铺铜边框属性与源码，未触发填充/重建',
+		example: { cmd: 'pcb.pourCopper', params: { net: 'GND', layer: 'bottom', x: 0, y: 0, width: 2000, height: 1500, preserveSilos: true } },
 		handler: async (params) => {
+			const monotonicStart = performance.now()
+			const MAX_TIMER_MS = 2147483647
+			const requestedTimeout = params._timeoutMs == null ? 290_000 : Number(params._timeoutMs)
+			if (!Number.isFinite(requestedTimeout) || requestedTimeout > MAX_TIMER_MS)
+				throw new Error(`_timeoutMs 必须是有限且不超过 ${MAX_TIMER_MS}ms 的数值`)
+			const budgetMs = Math.max(1000, requestedTimeout)
+			const deadline = monotonicStart + budgetMs
+			const remaining = () => deadline - performance.now()
+			const budgetError = (label: string, cause?: unknown) => {
+				const error = new Error(`${label}超出单指令时间预算（${budgetMs}ms）；原调用可能仍在后台执行`, cause === undefined ? undefined : { cause })
+				;(error as any).budgetExceeded = true
+				return error
+			}
+			const awaitWithinBudget = async <T>(label: string, operation: () => Promise<T>): Promise<T> => {
+				const left = remaining()
+				if (left <= 0)
+					throw budgetError(label)
+				let pending: Promise<T>
+				try { pending = Promise.resolve(operation()) }
+				catch (error) {
+					if (remaining() <= 0)
+						throw budgetError(label, error)
+					throw error
+				}
+				let value: T
+				try { value = await withTimeout(pending, left, label) }
+				catch (error) {
+					if (remaining() <= 0)
+						throw budgetError(label, error)
+					throw error
+				}
+				if (remaining() <= 0)
+					throw budgetError(label)
+				return value
+			}
+			if (params.preserveSilos !== undefined && typeof params.preserveSilos !== 'boolean')
+				throw new Error('preserveSilos 必须是布尔值')
 			if (!params.net)
 				throw new Error('缺少参数 net')
-			await ensureNetExists(String(params.net))
+			const focus = await awaitWithinBudget('读取焦点文档', () => eda.dmt_SelectControl.getCurrentDocumentInfo())
+			if (focus?.documentType !== 3 || typeof focus?.uuid !== 'string' || !focus.uuid.trim())
+				throw new Error(`焦点文档不是有效 PCB（documentType=${focus?.documentType ?? '未知'}, uuid=${focus?.uuid ?? '无'}）`)
+			const assertFocus = async (phase: string) => {
+				const latest = await awaitWithinBudget(`${phase}复核焦点`, () => eda.dmt_SelectControl.getCurrentDocumentInfo())
+				if (latest?.documentType !== 3 || latest.uuid !== focus.uuid)
+					throw new Error(`${phase}时 PCB 焦点已变化（原页=${focus.uuid}, 当前=${latest?.uuid ?? '未知'}）`)
+			}
+			let netNames: Array<string> | undefined
+			try { netNames = (await awaitWithinBudget('读取 PCB 网络列表', () => eda.pcb_Net.getAllNetsName())) ?? [] }
+			catch (error) {
+				if ((error as any)?.budgetExceeded)
+					throw error
+				// 与既有 ensureNetExists 保持一致：普通读取故障时交给创建接口判断。
+			}
+			if (netNames && !netNames.includes(String(params.net)))
+				throw new Error(`网络 "${String(params.net)}" 在当前 PCB 中不存在（现有 ${netNames.length} 个网络${netNames.length ? ': ' + netNames.slice(0, 10).join(', ') + (netNames.length > 10 ? '…' : '') : ''}）。请先确认原理图中该网络已连接并从原理图导入（pcb.importChanges），或检查网络名拼写`)
+			await assertFocus('网络检查后')
 			// 官方 'R' 矩形的 (x,y) 是**左上角**（画布 +Y 向上，矩形向下延伸），
 			// 本指令对外约定 (x,y) 为**左下角**，此处换算：官方y = 左下角y + height
 			// （0.10.65 修复：此前未换算，铺铜整体偏移一个板高——与 drawOutline 同一约定）
@@ -506,17 +1211,144 @@ export const pcbCommands: Array<ICommandDef> = [
 				Number(params.width), Number(params.height),
 				0, 0,
 			])
+			if (!polygon || typeof polygon.getSource !== 'function')
+				throw new Error('矩形铺铜多边形创建失败或缺少源码读取接口')
+			const expectedPath = polygon.getSource()
+			const inspectRectanglePath = (raw: unknown) => {
+				let format: 'flat-R' | 'single-R-wrapper' | 'invalid' = 'invalid'
+				let candidate: unknown = raw
+				if (Array.isArray(raw) && raw.length === 1 && Array.isArray(raw[0])) {
+					format = 'single-R-wrapper'
+					candidate = raw[0]
+				}
+				else if (Array.isArray(raw))
+					format = 'flat-R'
+				const valid = Array.isArray(candidate) && candidate.length === 7 && candidate[0] === 'R'
+					&& candidate.slice(1).every(value => typeof value === 'number' && Number.isFinite(value))
+				return {
+					raw,
+					format: valid ? format : 'invalid' as const,
+					valid,
+					normalized: valid ? candidate as Array<string | number> : null,
+				}
+			}
+			const expectedPathInfo = inspectRectanglePath(expectedPath)
+			if (!expectedPathInfo.valid)
+				throw new Error('请求矩形轮廓不是合法的一维 R 或单个 R 外层包装格式')
 			const layer = resolveLayer(params.layer) as any
+			const readSource = async (phase: string) => {
+				await assertFocus(`${phase}前读取源码`)
+				const text = await awaitWithinBudget(`${phase}读取 PCB 源码`, () => eda.sys_FileManager.getDocumentSource())
+				await assertFocus(`${phase}后读取源码`)
+				if (typeof text !== 'string' || !text.trim())
+					throw new Error(`${phase}返回空或非法 PCB 源码`)
+				const doc = parseSourceLog(text)
+				if (doc.docType !== 'PCB' || doc.uuid !== focus.uuid)
+					throw new Error(`${phase}源码身份与当前 PCB 不符（docType=${doc.docType}, 源码 UUID=${doc.uuid}, 焦点 UUID=${focus.uuid}）`)
+				return { text, doc }
+			}
+			const before = await readSource('创建前')
+			const beforePours = resolveRecords<Record<string, any>>(before.doc, 'POUR')
+			const beforeNonTargetRecords = snapshotEffectiveSourceRecords(before.doc)
+			const failCandidate = (phase: string, error: unknown, candidateId?: string, details: Record<string, unknown> = {}): never => {
+				const message = error instanceof Error ? error.message : String(error)
+				throw new Error(`铺铜创建后${phase}未确认：${message}`, {
+					cause: {
+						partial: true,
+						retryable: false,
+						phase,
+						candidateId: candidateId ?? null,
+						candidateUuid: focus.uuid,
+						operationError: message,
+						...details,
+					},
+				})
+			}
 			let pour: any
+			await assertFocus('创建铺铜前')
+			let createAttempted = false
+			let pathComparison: Record<string, unknown> | undefined
 			try {
-				pour = await eda.pcb_PrimitivePour.create(String(params.net), layer, polygon as any)
+				pour = await awaitWithinBudget('创建铺铜', async () => {
+					createAttempted = true
+					pour = params.preserveSilos === undefined
+						? await eda.pcb_PrimitivePour.create(String(params.net), layer, polygon as any)
+						: await eda.pcb_PrimitivePour.create(String(params.net), layer, polygon as any, undefined, params.preserveSilos)
+					return pour
+				})
 			}
-			catch (err) {
-				throw wrapCreateError('铺铜创建', err)
+			catch (error) {
+				if (createAttempted)
+					failCandidate('创建调用', error, safeState<string>(pour, 'getState_PrimitiveId'))
+				throw error
 			}
-			if (!pour)
-				throw new Error('铺铜创建失败（官方返回空）')
-			return { primitiveId: safeState<string>(pour, 'getState_PrimitiveId') }
+			const primitiveId = safeState<string>(pour, 'getState_PrimitiveId')
+			if (typeof primitiveId !== 'string' || !primitiveId)
+				failCandidate('候选 ID 读取', new Error('官方创建接口未返回有效图元 ID'))
+			const candidateId = primitiveId as string
+			if (beforePours.has(`POUR\u0000${candidateId}`))
+				failCandidate('候选 ID 冲突', new Error(`创建前源码已存在 POUR ${candidateId}`), candidateId)
+			try {
+				await assertFocus('按 ID 读回铺铜前')
+				const fresh = await awaitWithinBudget('按 ID 读回铺铜', () => eda.pcb_PrimitivePour.get(candidateId))
+				await assertFocus('按 ID 读回铺铜后')
+				if (!fresh || typeof fresh.getState_PrimitiveId !== 'function' || typeof fresh.getState_Net !== 'function'
+					|| typeof fresh.getState_Layer !== 'function' || typeof fresh.getState_PreserveSilos !== 'function'
+					|| typeof fresh.getState_ComplexPolygon !== 'function')
+					throw new Error('按 ID 读回对象缺少图元 ID/网络/层/保孤岛/轮廓 getter')
+				const freshId = fresh.getState_PrimitiveId()
+				const net = fresh.getState_Net()
+				const readLayer = fresh.getState_Layer()
+				const preserveSilos = fresh.getState_PreserveSilos()
+				const readPolygon = fresh.getState_ComplexPolygon()
+				if (!readPolygon || typeof readPolygon.getSource !== 'function')
+					throw new Error('读回轮廓缺少 getSource 接口')
+				const readPath = readPolygon.getSource()
+				const after = await readSource('创建后')
+				const afterPours = resolveRecords<Record<string, any>>(after.doc, 'POUR')
+				const targetRecord = afterPours.get(`POUR\u0000${candidateId}`)
+				const targetData = targetRecord?.data && typeof targetRecord.data === 'object' && !Array.isArray(targetRecord.data) ? targetRecord.data : undefined
+				if (!targetData)
+					throw new Error('源码中缺少有效候选铺铜记录')
+				if (typeof freshId !== 'string' || freshId !== candidateId)
+					throw new Error(`图元 ID 读回不匹配（创建=${candidateId}, 读回=${String(freshId)}）`)
+				if (typeof net !== 'string' || net !== String(params.net) || targetData.netName !== String(params.net))
+					throw new Error(`网络读回不匹配（API=${String(net)}, source=${String(targetData.netName)}, 请求=${String(params.net)}）`)
+				if (readLayer !== layer || targetData.layerId !== layer)
+					throw new Error(`层读回不匹配（API=${String(readLayer)}, source=${String(targetData.layerId)}, 请求=${String(layer)}）`)
+				if (typeof preserveSilos !== 'boolean' || typeof targetData.keepIsland !== 'boolean' || preserveSilos !== targetData.keepIsland)
+					throw new Error(`保留孤岛读回不匹配（API=${String(preserveSilos)}, source=${String(targetData.keepIsland)}）`)
+				if (params.preserveSilos !== undefined && (preserveSilos !== params.preserveSilos || targetData.keepIsland !== params.preserveSilos))
+					throw new Error(`保留孤岛读回与请求不匹配（读回=${String(preserveSilos)}, 请求=${String(params.preserveSilos)}）`)
+				const getterPathInfo = inspectRectanglePath(readPath)
+				const sourcePathInfo = inspectRectanglePath(targetData.path)
+				const matchesExpected = (actual: typeof expectedPathInfo) => expectedPathInfo.valid && actual.valid
+					&& expectedPathInfo.normalized!.length === actual.normalized!.length
+					&& expectedPathInfo.normalized!.every((value, index) => value === actual.normalized![index])
+				pathComparison = {
+					expectedPath,
+					getterPath: readPath,
+					sourcePath: targetData.path,
+					expected: expectedPathInfo,
+					getter: getterPathInfo,
+					source: sourcePathInfo,
+					comparison: {
+						getterMatchesExpected: matchesExpected(getterPathInfo),
+						sourceMatchesExpected: matchesExpected(sourcePathInfo),
+						strictElementEquality: true,
+					},
+				}
+				if (!matchesExpected(getterPathInfo) || !matchesExpected(sourcePathInfo))
+					throw new Error('铺铜轮廓读回与请求矩形不匹配')
+				if (JSON.stringify(snapshotEffectiveSourceRecords(after.doc, undefined, candidateId)) !== JSON.stringify(beforeNonTargetRecords))
+					throw new Error('创建同时改变了非目标源码记录（包括原POURED/POUR/其他对象），已保留候选并停止')
+				if (remaining() <= 0)
+					throw budgetError('铺铜创建后读回验证')
+				return { primitiveId: candidateId, readback: { verified: true, net, layer: readLayer, preserveSilos, path: readPath } }
+			}
+			catch (error) {
+				failCandidate('属性/源码读回', error, candidateId, pathComparison ? { pathComparison } : {})
+			}
 		},
 	},
 	{
@@ -537,7 +1369,9 @@ export const pcbCommands: Array<ICommandDef> = [
 		example: { cmd: 'pcb.runDrc' },
 		handler: async () => {
 			const violations = await eda.pcb_Drc.check(true, false, true)
-			const list = Array.isArray(violations) ? violations : []
+			if (!Array.isArray(violations))
+				throw new Error(`PCB DRC 结果不可判定：官方返回 ${violations === null ? 'null' : typeof violations}，预期为违规数组；不能按 0 项通过处理`)
+			const list = violations
 			return { passed: list.length === 0, violations: list }
 		},
 	},
@@ -549,7 +1383,9 @@ export const pcbCommands: Array<ICommandDef> = [
 		example: { cmd: 'pcb.runDrcDetailed' },
 		handler: async () => {
 			const violations = await eda.pcb_Drc.check(true, false, true)
-			const list = Array.isArray(violations) ? violations : []
+			if (!Array.isArray(violations))
+				throw new Error(`PCB DRC 结果不可判定：官方返回 ${violations === null ? 'null' : typeof violations}，预期为违规数组；不能按 0 项通过处理`)
+			const list = violations
 			// 0.10.25 归一化重写（0.10.24 装机实锤真实结构）：官方返回的是**树形分组**——
 			// [{ name:'Connection Error', list:[{ name:'GND', list:[叶...] }] }]，
 			// 叶字段：errorType/errorObjType/ruleName/net/explanation{str,param}/errData{position,obj1,obj1Type,errorType,obj1Suffix,layerIds}/objs[primitiveId]/pos{x,y}/parentId('DRCTab|_|Errors|_|...')
@@ -688,11 +1524,12 @@ export const pcbCommands: Array<ICommandDef> = [
 		returns: '{ taskId, deleted: [...], failed: [...], deletedBy: { id: type }, reconciled?, sessionHealth?, batches?, unprocessed?, failedNote? }（taskId 可配合 task.get 在客户端超时后查进度/补取结果——0.10.42 起同参数任务在跑时重发只回进度不重复执行；unprocessed 为熔断/预算退出时未轮到的 ID，再次调用接着删；0.10.25 起整批结束后终扫对账：报失败但实际已被后台删除的项挪入 deleted 并在 reconciled 注明；0.10.27 起出现过 reconciled/failed 时追加会话健康探针 sessionHealth: ok|degraded|inconclusive，degraded 建议只读复核后再决定是否不保存重开页面，inconclusive 为探针未得出可信结论（不采信）；0.10.40 起探针加固：焦点复核+3 次重试+创建/删除读回，删除异常时报 probeResidue 残留探针 ID）',
 		example: { cmd: 'pcb.delete', params: { primitiveIds: ['xxx', 'yyy'] } },
 		handler: async (params, ctx) => {
-			const ids = Array.isArray(params.primitiveIds)
-				? params.primitiveIds.map(String)
-				: [String(params.primitiveIds)]
-			if (!ids.length)
+			const rawIds = Array.isArray(params.primitiveIds)
+				? params.primitiveIds
+				: params.primitiveIds == null ? [] : [params.primitiveIds]
+			if (!rawIds.length || rawIds.some(id => !String(id).trim()))
 				throw new Error('primitiveIds 不能为空')
+			const ids = rawIds.map(String)
 			// 0.10.42 任务登记（KIMI-EDA-20261002-03）：客户端超时后可凭 taskId 查实时进度/补取结果；
 			// 相同 ID 清单的任务仍在跑时直接返回现有进度，不重复执行（防盲重发）
 			// 0.10.49：onUpdate 心跳——任务进度每次更新都推给代理，重置其超时计时器
@@ -954,7 +1791,7 @@ export const pcbCommands: Array<ICommandDef> = [
 		params: [
 			{ name: 'primitiveId', type: 'string', required: true, description: 'PCB 器件图元 ID' },
 		],
-		returns: '焊盘列表 [{ padNumber, net, x, y, layer, rotation, shape }]（shape 为官方形状数组，如 ["RECT",90,60] / ["ELLIPSE",60,60]，可直接得焊盘宽高）',
+		returns: '焊盘列表 [{ padNumber, net, x, y, layer, rotation, shape, heatWelding }]（heatWelding.status 为 null/config/unavailable/exception/invalid；exception.error 仅含 message，config.value 仅含 connectionMethod、divergenceSpacing、divergenceLineWidth、divergenceAngle）',
 		example: { cmd: 'pcb.getComponentPads', params: { primitiveId: 'xxx' } },
 		handler: async (params) => {
 			if (!params.primitiveId)
@@ -970,7 +1807,26 @@ export const pcbCommands: Array<ICommandDef> = [
 				layer: safeState<number>(p, 'getState_Layer'),
 				rotation: safeState<number>(p, 'getState_Rotation'),
 				shape: safeState<Array<unknown>>(p, 'getState_Pad'),
+				heatWelding: heatWeldingReadback(p),
 			}))
+		},
+	},
+	{
+		name: 'pcb.connectComponentPadDirect',
+		summary: '暂时停用：当前公开热焊写入接口的写后读回不可靠；待确认有可靠接口后再恢复',
+		params: [
+			{ name: 'documentUuid', type: 'string', required: true, description: '当前 PCB 文档 UUID，必须与焦点文档一致' },
+			{ name: 'componentId', type: 'string', required: true, description: 'PCB 器件图元 ID' },
+			{ name: 'padNumber', type: 'string', required: true, description: '封装焊盘编号；同编号重复时须传 padId 消歧' },
+			{ name: 'padId', type: 'string', description: '可选焊盘图元 ID，用于同编号重复焊盘消歧' },
+			{ name: '_timeoutMs', type: 'number', description: '整条命令共享时间预算（毫秒，有效预算最少 1000、默认 290000，最大 2147483647）' },
+		],
+		returns: '当前始终抛出暂时停用错误；error.cause={ disabled:true, retryable:false, writeAttempted:false }。不访问工程或SDK。',
+		example: { cmd: 'pcb.connectComponentPadDirect', params: { documentUuid: 'pcb-uuid', componentId: 'component-id', padNumber: '1' } },
+		handler: async () => {
+			throw new Error('pcb.connectComponentPadDirect 暂时停用：当前公开热焊写入接口的写后读回不可靠，待确认有可靠接口后再恢复', {
+				cause: { disabled: true, retryable: false, writeAttempted: false },
+			})
 		},
 	},
 	{
@@ -984,7 +1840,9 @@ export const pcbCommands: Array<ICommandDef> = [
 		returns: '{ complete, components: [{ designator, layer, bbox:{x1,y1,x2,y2,w,h} }], overlaps: [{ a, b, overlapX, overlapY }], violations: [{ a, b, gap }], skippedNoPads?, skippedUnsupported? }',
 		example: { cmd: 'pcb.checkPlacement', params: { minClearance: 20, margin: 15 } },
 		handler: async (params) => {
-			const minClearance = params.minClearance != null ? Number(params.minClearance) : 0
+			const minClearance = params.minClearance != null ? parseFiniteNumber(params.minClearance, 'minClearance') : 0
+			if (minClearance < 0)
+				throw new Error('minClearance 不能为负数')
 			const margin = params.margin != null ? Number(params.margin) : 0
 			const filter = Array.isArray(params.designators)
 				? new Set(params.designators.map(String))
@@ -1136,12 +1994,17 @@ export const pcbCommands: Array<ICommandDef> = [
 		returns: '{ fileName, size, mimeType, base64 }',
 		example: { cmd: 'pcb.exportPickPlace', params: { fileType: 'csv', unit: 'mm' } },
 		handler: async (params) => {
-			const fileType = (params.fileType === 'xlsx' ? 'xlsx' : 'csv') as 'xlsx' | 'csv'
-			const unit = (String(params.unit ?? 'mm').toLowerCase() === 'mil' ? 'MIL' : 'MILLIMETER') as any
+			const fileType = String(params.fileType ?? 'csv').trim().toLowerCase()
+			if (fileType !== 'xlsx' && fileType !== 'csv')
+				throw new Error(`无效 fileType：${String(params.fileType)}（仅支持 xlsx | csv）`)
+			const unitName = String(params.unit ?? 'mm').trim().toLowerCase()
+			if (unitName !== 'mm' && unitName !== 'mil')
+				throw new Error(`无效 unit：${String(params.unit)}（贴片坐标 API 仅支持 mm | mil）`)
+			const unit = unitName as ESYS_Unit.MIL | ESYS_Unit.MILLIMETER
 			const file = await eda.pcb_ManufactureData.getPickAndPlaceFile(
 				params.fileName ? String(params.fileName) : undefined,
 				fileType,
-				params.unit != null ? unit : undefined,
+				unit,
 			)
 			const result = await fileToResult(file, `pick-and-place.${fileType}`)
 			if (!result)
@@ -1159,7 +2022,7 @@ export const pcbCommands: Array<ICommandDef> = [
 		example: { cmd: 'pcb.exportDsn' },
 		handler: async (params) => {
 			const file = await eda.pcb_ManufactureData.getDsnFile(
-				params.fileName ? String(params.fileName) : undefined,
+				params.fileName ? String(params.fileName) : 'board',
 			)
 			const result = await fileToResult(file, 'board.dsn')
 			if (!result)
@@ -1253,9 +2116,11 @@ export const pcbCommands: Array<ICommandDef> = [
 			const created = await eda.pcb_Drc.createNetClass(
 				String(params.name),
 				params.nets.map(String),
-				params.color ? String(params.color) as any : undefined as any,
+				params.color ? parsePcbColor(params.color) : undefined as any,
 			)
-			return { created: Boolean(created) }
+			if (created !== true)
+				throw new Error(`创建网络类失败：官方接口返回 ${String(created)}`)
+			return { created: true }
 		},
 	},
 	{
@@ -1426,11 +2291,12 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.getCurrentLayer',
-		summary: '查询当前激活层',
+		summary: '查询当前激活层；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）；低版本不以空值代替状态',
 		params: [],
 		returns: '当前层信息',
 		example: { cmd: 'pcb.getCurrentLayer' },
 		handler: async () => {
+			requireEda42('pcb.getCurrentLayer')
 			return await eda.pcb_Layer.getCurrentLayer()
 		},
 	},
@@ -1471,14 +2337,16 @@ export const pcbCommands: Array<ICommandDef> = [
 		name: 'pcb.setCopperLayers',
 		summary: '设置铜层数（2/4/6…，改层数会影响叠层，谨慎操作）',
 		params: [
-			{ name: 'count', type: 'number', required: true, description: '铜层数，如 2 或 4' },
+			{ name: 'count', type: 'number', required: true, description: '2 到 32 的偶数铜层数，如 2 或 4' },
 		],
 		returns: '{ set }',
 		example: { cmd: 'pcb.setCopperLayers', params: { count: 2 } },
 		handler: async (params) => {
 			if (params.count == null)
 				throw new Error('缺少参数 count')
-			const set = await eda.pcb_Layer.setTheNumberOfCopperLayers(Number(params.count) as any)
+			if (typeof params.count !== 'number' || !Number.isInteger(params.count) || params.count < 2 || params.count > 32 || params.count % 2 !== 0)
+				throw new Error('count 必须是 2 到 32 之间的偶数')
+			const set = await eda.pcb_Layer.setTheNumberOfCopperLayers(params.count as any)
 			return { set: Boolean(set) }
 		},
 	},
@@ -1830,12 +2698,12 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.modifyPour',
-		summary: '修改已有铺铜（网络/层/名称/优先级/线宽）',
+		summary: '修改已有铺铜；网络和名称仅允许同值确认，改网/改名会在写入前拒绝；可修改层/优先级/线宽',
 		params: [
 			{ name: 'primitiveId', type: 'string', required: true, description: '铺铜图元 ID' },
-			{ name: 'net', type: 'string', description: '新网络名' },
+			{ name: 'net', type: 'string', description: '只允许与当前网络相同；暂时禁止改变已有铺铜网络。创建新铺铜时可指定网络' },
 			{ name: 'layer', type: 'string | number', description: `新层：${LAYER_HELP}` },
-			{ name: 'pourName', type: 'string', description: '铺铜名称' },
+			{ name: 'pourName', type: 'string', description: '仅允许与当前名称一致；禁止修改已有铺铜名称' },
 			{ name: 'pourPriority', type: 'number', description: '铺铜优先级（数字小先铺）' },
 			{ name: 'lineWidth', type: 'number', description: '铺铜线宽（mil）' },
 		],
@@ -1906,7 +2774,11 @@ export const pcbCommands: Array<ICommandDef> = [
 				if (!target || !target.data || typeof target.data !== 'object' || Array.isArray(target.data))
 					throw new Error(`源码中不存在有效铺铜 ${pourId}`)
 				const all = Array.from(records.values()).map(record => ({ id: String(record.header.id), data: record.data as Record<string, any> }))
-				return { target: target.data as Record<string, any>, orders: all.filter(item => item.data.layerId === target.data.layerId).map(item => ({ primitiveId: item.id, layer: item.data.layerId, sourceOrder: item.data.order })).sort((a, b) => String(a.primitiveId).localeCompare(String(b.primitiveId))) }
+				return {
+					target: target.data as Record<string, any>,
+					orders: all.filter(item => item.data.layerId === target.data.layerId).map(item => ({ primitiveId: item.id, layer: item.data.layerId, sourceOrder: item.data.order })).sort((a, b) => String(a.primitiveId).localeCompare(String(b.primitiveId))),
+					pouredRecords: snapshotEffectiveSourceRecords(doc, 'POURED'),
+				}
 			}
 			const names = ['net', 'layer', 'pourName', 'pourPriority', 'lineWidth'] as const
 			const sourceField: Record<(typeof names)[number], string> = { net: 'netName', layer: 'layerId', pourName: 'name', pourPriority: 'order', lineWidth: 'width' }
@@ -1916,6 +2788,7 @@ export const pcbCommands: Array<ICommandDef> = [
 			let previousSource: Awaited<ReturnType<typeof readSource>> | undefined
 			const sourceOrders: { before: Array<Record<string, unknown>>, after?: Array<Record<string, unknown>> } = { before: [] }
 			const attemptedFields: Array<string> = []
+			const noOpFields: Array<string> = []
 			const verifiedFields: Array<string> = []
 			const readback: Record<string, unknown> = {}
 			let apiPriority: number | undefined
@@ -1924,7 +2797,7 @@ export const pcbCommands: Array<ICommandDef> = [
 			const refreshVerifiedFields = (data: Record<string, any>) => {
 				verifiedFields.splice(0, verifiedFields.length, ...attemptedFields.filter(field => equivalent(field as (typeof names)[number], sourceValue(data, field as (typeof names)[number]), requested[field])))
 			}
-			const remainingFields = () => names.filter(key => property[key] != null && !attemptedFields.includes(key))
+			const remainingFields = () => names.filter(key => property[key] != null && !attemptedFields.includes(key) && !noOpFields.includes(key))
 			const failPartial = (message: string, details: Record<string, unknown>, original?: unknown): never => {
 				const error = original instanceof Error ? original : new Error(message)
 				const priorCause = (error as any).cause
@@ -1939,6 +2812,7 @@ export const pcbCommands: Array<ICommandDef> = [
 					verifiedFields: [...verifiedFields],
 					unverifiedFields: attemptedFields.filter(field => !verifiedFields.includes(field)),
 					notAttemptedFields: remainingFields(),
+					noOpFields: [...noOpFields],
 					readback: { ...readback },
 					readbackStatus,
 					sourceOrdersStatus: readbackStatus,
@@ -1953,8 +2827,45 @@ export const pcbCommands: Array<ICommandDef> = [
 			previousSource = before
 			sourceOrders.before = before.orders
 			lastSource = before.target
+			let livePour: any
+			const readLivePour = async () => {
+				if (livePour)
+					return livePour
+				await assertSameFocus()
+				livePour = await awaitSdk(`读取铺铜 ${pourId} 当前属性`, () => eda.pcb_PrimitivePour.get(pourId))
+				await assertSameFocus()
+				if (!livePour)
+					throw new Error(`无法读取铺铜 ${pourId} 的当前属性，已在写入前拒绝修改`)
+				return livePour
+			}
+			if (property.net != null) {
+				const netObject = await readLivePour()
+				if (!netObject || typeof netObject.getState_Net !== 'function')
+					throw new Error(`铺铜 ${pourId} 缺少网络状态读取接口，已在写入前拒绝修改`)
+				const sourceNet = sourceValue(before.target, 'net')
+				const sdkNet = netObject.getState_Net()
+				if (typeof sourceNet !== 'string' || typeof sdkNet !== 'string' || sourceNet !== sdkNet)
+					throw new Error(`铺铜 ${pourId} 网络源码与当前 API 读回不一致，已在写入前拒绝请求（source=${String(sourceNet)}, API=${String(sdkNet)}）`)
+				if (sdkNet !== property.net)
+					throw new Error(`已有铺铜改网已停用（当前=${sdkNet}, 请求=${property.net}）；创建铺铜时可指定网络`)
+				noOpFields.push('net')
+				readback.net = sdkNet
+			}
+			if (property.pourName != null) {
+				const nameObject = await readLivePour()
+				if (typeof nameObject.getState_PourName !== 'function')
+					throw new Error(`铺铜 ${pourId} 缺少名称状态读取接口，已在写入前拒绝修改`)
+				const sourceName = sourceValue(before.target, 'pourName')
+				const sdkName = nameObject.getState_PourName()
+				if (typeof sourceName !== 'string' || typeof sdkName !== 'string' || sourceName !== sdkName)
+					throw new Error(`铺铜 ${pourId} 名称源码与当前 API 读回不一致，已在写入前拒绝请求（source=${String(sourceName)}, API=${String(sdkName)}）`)
+				if (sdkName !== property.pourName)
+					throw new Error(`已有铺铜改名已停用（当前=${sdkName}, 请求=${property.pourName}）`)
+				noOpFields.push('pourName')
+				readback.pourName = sdkName
+			}
 			for (const key of names) {
-				if (property[key] == null)
+				if (property[key] == null || noOpFields.includes(key))
 					continue
 				try { await assertSameFocus() }
 				catch (error) {
@@ -2007,6 +2918,9 @@ export const pcbCommands: Array<ICommandDef> = [
 						readback[field] = sourceValue(after.target, field) ?? null
 					const sameLayerChanged = key !== 'pourPriority' && key !== 'layer' && JSON.stringify(stepBefore.orders) !== JSON.stringify(after.orders)
 					refreshVerifiedFields(after.target)
+					const pouredRecordsChange = diffSourceRecordSnapshots(stepBefore.pouredRecords, after.pouredRecords)
+					if (pouredRecordsChange.added.length || pouredRecordsChange.removed.length || pouredRecordsChange.changed.length)
+						failPartial(`铺铜 ${pourId} 属性修改同时新增、删除或修改了有效 POURED 填充记录，已停止后续字段`, { pouredRecordsChange })
 					if (writeError)
 						failPartial(`铺铜 ${pourId} 字段 ${key} 修改失败或返回空值，已停止后续字段`, { writeError: String((writeError as any)?.message ?? writeError) }, writeError)
 					if (!equivalent(key, sourceValue(after.target, key), property[key])) {
@@ -2038,7 +2952,8 @@ export const pcbCommands: Array<ICommandDef> = [
 				/* API 优先级是辅助信息，源码 order 为验收依据 */
 			}
 			return {
-				modified: true,
+				modified: attemptedFields.length > 0,
+				...(noOpFields.length ? { noOpFields: [...noOpFields] } : {}),
 				readback: { ...readback, verified: true },
 				...(property.pourPriority != null ? { apiPriority, sourceOrder: sourceValue(lastSource, 'pourPriority') } : {}),
 				sourceOrders,
@@ -2357,23 +3272,102 @@ export const pcbCommands: Array<ICommandDef> = [
 	// ---------- 自动布线回灌 + 区域/点查询 ----------
 	{
 		name: 'pcb.importAutoRouteSes',
-		summary: '导入外部布线器的 SES 结果文件（自动布线最后一步：pcb.exportDsn 导出 → 外部布线器布线 → 本指令回灌；传 base64 文件内容）',
+			summary: '将外部 SES 布线追加到当前 PCB（传 base64 文件内容）；每个输入走线段须至少 1 mil，差集产生的新增段也须至少 1 mil。FreeRouting 状态查询只读，不会自动导入结果',
 		params: [
 			{ name: 'base64', type: 'string', required: true, description: 'SES 文件内容的 base64 编码' },
 			{ name: 'fileName', type: 'string', description: '文件名，默认 autoroute.ses' },
 		],
-		returns: '{ imported }',
+		returns: '{ imported, alreadyPresent, sesGeometryVerified, backend, created, coverage, holeDiameterStatus }；backend 为 direct-primitives 或 native-ses，created 为已读回验证的新增线/孔数量；SES 不提供且无法从原板可信沿用的孔径会在 coverage 标明不可验证',
 		example: { cmd: 'pcb.importAutoRouteSes', params: { fileName: 'board.ses', base64: '...' } },
 		handler: async (params) => {
+			const deadline = sesCommandDeadline(params)
 			if (!params.base64)
 				throw new Error('缺少参数 base64（SES 文件内容的 base64 编码）')
-			const bin = atob(String(params.base64))
-			const u8 = new Uint8Array(bin.length)
-			for (let i = 0; i < bin.length; i++)
-				u8[i] = bin.charCodeAt(i)
-			const file = new File([u8], params.fileName ? String(params.fileName) : 'autoroute.ses')
-			const imported = await eda.pcb_Document.importAutoRouteSesFile(file)
-			return { imported: Boolean(imported) }
+			const encoded = String(params.base64).trim()
+			if (!encoded || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 === 1)
+				throw new Error('base64 格式无效（请传入 SES 文件内容的标准 Base64 编码）')
+			const content = decodeSesUtf8(encoded).trim()
+			if (!content || !/(?:^|\s)\(session(?:\s|\))/.test(content) || !content.endsWith(')'))
+				throw new Error('解码内容不是非空 SES session 文件')
+			const model = parseAutoRouteSes(content)
+			if (!model.wires.length && !model.vias.length)
+				throw new Error('SES 不包含可导入的走线或过孔几何')
+			let sesInputSegmentIndex = 0
+			for (let wireIndex = 0; wireIndex < model.wires.length; wireIndex++) {
+				const wire = model.wires[wireIndex]
+				for (let pointIndex = 0; pointIndex < wire.points.length - 1; pointIndex++) {
+					const a = wire.points[pointIndex]
+					const b = wire.points[pointIndex + 1]
+					assertMinimumRouteSegmentLength({ x: a.xMil, y: a.yMil }, { x: b.xMil, y: b.yMil }, `SES 输入线段 ${sesInputSegmentIndex + 1}（wire ${wireIndex + 1}, segment ${pointIndex + 1}）`)
+					sesInputSegmentIndex++
+				}
+			}
+			const currentDocument = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			if (currentDocument?.documentType !== 3 || typeof currentDocument.uuid !== 'string' || !currentDocument.uuid.trim())
+				throw new Error('当前焦点不是可识别的 PCB 文档，已拒绝 SES 导入')
+			assertSesDocumentRecoverable(currentDocument.uuid)
+			const snapshot = await captureDocumentSnapshot('pcb.importAutoRouteSes', 3, currentDocument.uuid)
+			if (snapshot.documentUuid !== currentDocument.uuid)
+				throw new Error(`SES 导入目标文档在快照期间变化（${currentDocument.uuid} → ${snapshot.documentUuid}）`)
+			await assertSnapshotFocused(snapshot)
+			const before = await readRouteSnapshot(eda, () => assertSnapshotFocused(snapshot), snapshot.source)
+			const expected = mapSesRoutes(model, before.layers)
+			const plan = planSesImport(expected, sesSnapshot(before), 'append')
+			for (let i = 0; i < plan.deltaLines.length; i++) {
+				const line = plan.deltaLines[i]
+				assertMinimumRouteSegmentLength(line.a, line.b, `SES 差集新增线段 ${i + 1}`)
+			}
+			if (plan.alreadyPresent) {
+				const beforeCheck = verifySesImport(plan, sesSnapshot(before))
+				if (!beforeCheck.verified)
+					throw new Error(`已存在 SES 几何读回不匹配：${JSON.stringify(beforeCheck.differences)}`)
+				await assertSesSnapshotWithinBudget(deadline, snapshot)
+				return { imported: false, alreadyPresent: true, sesGeometryVerified: true, coverage: beforeCheck.coverage }
+			}
+			const delta: SesRouteExpected = { ...expected, lines: plan.deltaLines, vias: plan.deltaVias }
+			const subset = serializeSesSubset(content, delta)
+			const fileName = params.fileName ? String(params.fileName) : 'autoroute.ses'
+			const file = new File([subset], fileName)
+			const sesDiagnostic = createSesDiagnostic('pcb.importAutoRouteSes', snapshot.documentUuid)
+			sesDiagnostic.expectedGeometry = { lines: plan.targetLines, vias: plan.targetVias }
+			sesDiagnostic.deltaGeometry = { lines: plan.deltaLines, vias: plan.deltaVias }
+			const applyContext = createSesRouteApplyContext({ api: eda, snapshot, before, plan, deletedArcIds: [], file, timeoutMs: sesRemaining(deadline), onStage: stage => { sesDiagnostic.phase = stage } })
+			syncSesApplyDiagnostic(sesDiagnostic, applyContext)
+			let verification
+			try {
+				await attachSesInputDiagnostic(sesDiagnostic, file)
+				verification = await withDocumentRecovery(snapshot, async (write) => {
+					try {
+						await applyContext.focusGuard()
+						const result = await applyContext.apply(write)
+						syncSesApplyDiagnostic(sesDiagnostic, applyContext)
+						return result.result
+					}
+					catch (error) {
+						syncSesApplyDiagnostic(sesDiagnostic, applyContext)
+						await captureSesDiagnosticEvidence(sesDiagnostic, 'beforeRecovery', snapshot)
+						await persistSesDiagnostic(sesDiagnostic, 'beforeRecovery')
+						throw error
+					}
+				}, { recoveryHook: applyContext.recover, focusGuard: applyContext.focusGuard })
+			}
+			catch (error) {
+				if (hasUnconfirmedRecovery(error))
+					sesRecoveryRequiredDocuments.add(snapshot.documentUuid)
+				syncSesApplyDiagnostic(sesDiagnostic, applyContext)
+				await captureSesDiagnosticEvidence(sesDiagnostic, 'afterRecovery', snapshot)
+				const diagnostic = await persistSesDiagnostic(sesDiagnostic, 'afterRecovery')
+				throw withSesDiagnostic(error, diagnostic)
+			}
+			return {
+				imported: true,
+				alreadyPresent: false,
+				sesGeometryVerified: true,
+				backend: applyContext.backend,
+				created: { lines: plan.deltaLines.length, vias: plan.deltaVias.length },
+				coverage: verification.coverage,
+				holeDiameterStatus: verification.coverage.holeDiameterStatus,
+			}
 		},
 	},
 	{
@@ -2392,8 +3386,12 @@ export const pcbCommands: Array<ICommandDef> = [
 				if (params[k] == null)
 					throw new Error(`缺少参数 ${k}`)
 			}
+			const left = parseFiniteNumber(params.left, 'left')
+			const right = parseFiniteNumber(params.right, 'right')
+			const top = parseFiniteNumber(params.top, 'top')
+			const bottom = parseFiniteNumber(params.bottom, 'bottom')
 			const prims = await eda.pcb_Document.getPrimitivesInRegion(
-				Number(params.left), Number(params.right), Number(params.top), Number(params.bottom),
+				left, right, top, bottom,
 			)
 			return (prims ?? []).map(p => ({
 				primitiveId: safeState<string>(p, 'getState_PrimitiveId'),
@@ -2413,7 +3411,9 @@ export const pcbCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (params.x == null || params.y == null)
 				throw new Error('缺少参数 x / y')
-			const p = await eda.pcb_Document.getPrimitiveAtPoint(Number(params.x), Number(params.y))
+			const x = parseFiniteNumber(params.x, 'x')
+			const y = parseFiniteNumber(params.y, 'y')
+			const p = await eda.pcb_Document.getPrimitiveAtPoint(x, y)
 			if (!p)
 				return null
 			return {
@@ -2425,11 +3425,12 @@ export const pcbCommands: Array<ICommandDef> = [
 	// ---------- 层叠管理（多层板）与自定义层 ----------
 	{
 		name: 'pcb.listStackingConfigs',
-		summary: '列出全部物理层叠配置（含当前生效与默认配置名；多层板层叠设置的入口）',
+		summary: '列出全部物理层叠配置（含当前生效与默认配置名）；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [],
 		returns: '{ configs, current, default }',
 		example: { cmd: 'pcb.listStackingConfigs' },
 		handler: async () => {
+			requireEda42('pcb.listStackingConfigs')
 			const configs = await eda.pcb_Layer.getAllPhysicalStackingConfigurations()
 			let current: string | undefined
 			let dflt: string | undefined
@@ -2446,13 +3447,14 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.getStackingConfig',
-		summary: '读取指定层叠配置的完整定义（层顺序/厚度/介质等；不传 name 时读当前生效配置）',
+		summary: '读取指定层叠配置的完整定义（不传 name 时读当前配置）；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'name', type: 'string', description: '配置名，留空读当前生效配置' },
 		],
 		returns: '层叠配置对象（可直接改完传给 pcb.applyStackingConfig）',
 		example: { cmd: 'pcb.getStackingConfig' },
 		handler: async (params) => {
+			requireEda42('pcb.getStackingConfig')
 			if (params.name)
 				return await eda.pcb_Layer.getPhysicalStackingConfiguration(String(params.name))
 			return await eda.pcb_Layer.getCurrentPhysicalStackingConfiguration()
@@ -2460,13 +3462,14 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.applyStackingConfig',
-		summary: '把层叠配置对象应用到当前 PCB（典型用法：pcb.getStackingConfig 读回 → 修改 → 本指令写回）',
+		summary: '把层叠配置对象应用到当前 PCB（先读配置再修改）；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'configuration', type: 'object', required: true, description: '层叠配置对象（IPC​​B_PhysicalStackingConfiguration 结构）' },
 		],
 		returns: '{ applied }',
 		example: { cmd: 'pcb.applyStackingConfig', params: { configuration: {} } },
 		handler: async (params) => {
+			requireEda42('pcb.applyStackingConfig')
 			if (!params.configuration || typeof params.configuration !== 'object')
 				throw new Error('缺少参数 configuration（层叠配置对象，先 pcb.getStackingConfig 读回再改）')
 			const applied = await eda.pcb_Layer.overwriteCurrentPhysicalStackingConfiguration(params.configuration as any)
@@ -2475,7 +3478,7 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.saveStackingConfig',
-		summary: '把层叠配置对象另存为命名配置',
+		summary: '把层叠配置对象另存为命名配置；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'configuration', type: 'object', required: true, description: '层叠配置对象' },
 			{ name: 'name', type: 'string', required: true, description: '保存为的配置名' },
@@ -2484,6 +3487,7 @@ export const pcbCommands: Array<ICommandDef> = [
 		returns: '{ saved }',
 		example: { cmd: 'pcb.saveStackingConfig', params: { name: '4层-1.6mm', configuration: {} } },
 		handler: async (params) => {
+			requireEda42('pcb.saveStackingConfig')
 			if (!params.configuration || !params.name)
 				throw new Error('缺少参数 configuration / name')
 			const saved = await eda.pcb_Layer.savePhysicalStackingConfiguration(
@@ -2497,7 +3501,7 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.renameStackingConfig',
-		summary: '重命名层叠配置',
+		summary: '重命名层叠配置；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'oldName', type: 'string', required: true, description: '原配置名' },
 			{ name: 'newName', type: 'string', required: true, description: '新配置名' },
@@ -2505,6 +3509,7 @@ export const pcbCommands: Array<ICommandDef> = [
 		returns: '{ renamed }',
 		example: { cmd: 'pcb.renameStackingConfig', params: { oldName: 'a', newName: 'b' } },
 		handler: async (params) => {
+			requireEda42('pcb.renameStackingConfig')
 			if (!params.oldName || !params.newName)
 				throw new Error('缺少参数 oldName / newName')
 			const renamed = await eda.pcb_Layer.renamePhysicalStackingConfiguration(String(params.oldName), String(params.newName))
@@ -2513,13 +3518,14 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.deleteStackingConfig',
-		summary: '删除层叠配置',
+		summary: '删除层叠配置；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'name', type: 'string', required: true, description: '配置名' },
 		],
 		returns: '{ deleted }',
 		example: { cmd: 'pcb.deleteStackingConfig', params: { name: 'a' } },
 		handler: async (params) => {
+			requireEda42('pcb.deleteStackingConfig')
 			if (!params.name)
 				throw new Error('缺少参数 name')
 			const deleted = await eda.pcb_Layer.deletePhysicalStackingConfiguration(String(params.name))
@@ -2528,13 +3534,14 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.setDefaultStackingConfig',
-		summary: '把指定层叠配置设为默认',
+		summary: '把指定层叠配置设为默认；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'name', type: 'string', required: true, description: '配置名' },
 		],
 		returns: '{ done }',
 		example: { cmd: 'pcb.setDefaultStackingConfig', params: { name: '4层-1.6mm' } },
 		handler: async (params) => {
+			requireEda42('pcb.setDefaultStackingConfig')
 			if (!params.name)
 				throw new Error('缺少参数 name')
 			const done = await eda.pcb_Layer.setAsDefaultPhysicalStackingConfiguration(String(params.name))
@@ -2620,9 +3627,14 @@ export const pcbCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.pcbType)
 				throw new Error('缺少参数 pcbType（normal | fpc）')
-			const t = /fpc/i.test(String(params.pcbType)) ? 'FPC' : 'NORMAL'
-			const done = await eda.pcb_Layer.setPcbType(t as any)
-			return { done: Boolean(done) }
+			const pcbType = String(params.pcbType).trim().toLowerCase()
+			if (pcbType !== 'normal' && pcbType !== 'fpc')
+				throw new Error(`无效 pcbType：${String(params.pcbType)}（仅支持 normal | fpc）`)
+			const sdkType: EPCB_PcbPlateType = pcbType === 'fpc' ? 2 : 1
+			const done = await eda.pcb_Layer.setPcbType(sdkType)
+			if (done !== true)
+				throw new Error(`设置板子类型失败：官方接口返回 ${String(done)}`)
+			return { done: true }
 		},
 	},
 	// ---------- 等长组 + 实时 DRC ----------
@@ -2642,9 +3654,11 @@ export const pcbCommands: Array<ICommandDef> = [
 			const created = await eda.pcb_Drc.createEqualLengthNetGroup(
 				String(params.name),
 				params.nets.map(String),
-				params.color ? String(params.color) as any : undefined as any,
+				params.color ? parsePcbColor(params.color) : undefined as any,
 			)
-			return { created: Boolean(created) }
+			if (created !== true)
+				throw new Error(`创建等长网络组失败：官方接口返回 ${String(created)}`)
+			return { created: true }
 		},
 	},
 	{
@@ -2722,33 +3736,36 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.startRealTimeDrc',
-		summary: '开启实时 DRC（布线时即时报违规；高速/高密度板建议开）。⚠️ 官方 @beta 接口，需要 EDA v4.2+，低版本调用返回 done:false',
+		summary: '开启实时 DRC（官方 beta）；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [],
 		returns: '{ done }',
 		example: { cmd: 'pcb.startRealTimeDrc' },
 		handler: async () => {
+			requireEda42('pcb.startRealTimeDrc')
 			const done = await eda.pcb_Drc.startRealTimeDrc()
 			return { done: Boolean(done) }
 		},
 	},
 	{
 		name: 'pcb.stopRealTimeDrc',
-		summary: '关闭实时 DRC（需要 EDA v4.2+）',
+		summary: '关闭实时 DRC；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [],
 		returns: '{ done }',
 		example: { cmd: 'pcb.stopRealTimeDrc' },
 		handler: async () => {
+			requireEda42('pcb.stopRealTimeDrc')
 			const done = await eda.pcb_Drc.stopRealTimeDrc()
 			return { done: Boolean(done) }
 		},
 	},
 	{
 		name: 'pcb.getRealTimeDrcStatus',
-		summary: '查询实时 DRC 开关状态（需要 EDA v4.2+；低版本/不在 PCB 时恒返回 enabled:false）',
+		summary: '查询实时 DRC 开关状态；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [],
 		returns: '{ enabled }',
 		example: { cmd: 'pcb.getRealTimeDrcStatus' },
 		handler: async () => {
+			requireEda42('pcb.getRealTimeDrcStatus')
 			const enabled = await eda.pcb_Drc.getRealTimeDrcStatus()
 			return { enabled: Boolean(enabled) }
 		},
@@ -2756,7 +3773,7 @@ export const pcbCommands: Array<ICommandDef> = [
 	// ---------- 自动布线（FreeRouting 闭环）----------
 	{
 		name: 'pcb.setNetLock',
-		summary: '锁定/解锁指定网络的全部走线、过孔、圆弧（0.10.0 起）。⚠️ 自动布线前必用：pcb.autoRouteStart 回灌结果时会清掉所有【未锁定】的走线/过孔——电源等手工布好的网络必须先锁定',
+		summary: '锁定/解锁指定网络的全部走线、过孔、圆弧（0.10.0 起）。自动布线状态查询不会回灌；外部 SES 导入采用追加模式并保留现有图元。锁定仍可用于其他清理操作中的网络保护',
 		params: [
 			{ name: 'net', type: 'string', description: '网络名（与 nets 二选一）' },
 			{ name: 'nets', type: 'string[]', description: '网络名数组（批量）' },
@@ -2830,18 +3847,27 @@ export const pcbCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'pcb.autoRouteStart',
-		summary: '【宏】提交 FreeRouting 自动布线启动请求（0.10.0 起；需本地 FreeRouting 服务运行：bridge/start-freerouting.bat 或官方脚本，端口 37864）。流程：导出 DSN → 创建会话 → 上传 → 提交启动。启动请求返回不证明已进入布线；先用 pcb.autoRouteStatus 查询实际状态，不要重复提交。⚠️ 回灌会清除全部未锁定线段、圆弧与过孔：电源主路径必须先 pcb.setNetLock 锁定！完成后自动回灌+DRC',
+		summary: '【宏】提交 FreeRouting 自动布线启动请求（0.10.0 起；需本地 FreeRouting 服务运行：bridge/start-freerouting.bat 或官方脚本，端口 37864）。流程：导出 DSN → 创建会话 → 上传 → 提交启动。启动请求返回不证明已进入布线；用 pcb.autoRouteStatus 查询状态，该查询不会自动导入。完成后需按需调用 pcb.importAutoRouteSes',
 		params: [
 			{ name: 'maxPasses', type: 'number', description: '最大布线轮数，默认 50' },
 			{ name: 'viaCosts', type: 'number', description: '过孔成本权重（越高越少过孔），默认 50' },
 			{ name: 'maxThreads', type: 'number', description: '并行线程数，默认 4' },
-			{ name: 'skipDrc', type: 'boolean', description: '回灌后跳过自动 DRC，默认 false' },
+			{ name: 'skipDrc', type: 'boolean', description: '兼容参数；自动回灌停用期间不会自动运行 DRC' },
 		],
 		returns: '{ jobId, outcome: "start-request-submitted", stateVerified: false, note }；/start 响应不确定时抛出 partial=true,retryable=false 和 jobId；只能查状态或取消，不要重提',
 		example: { cmd: 'pcb.autoRouteStart', params: { maxPasses: 50 } },
 		handler: async (params) => {
+			if (params.skipDrc !== undefined && typeof params.skipDrc !== 'boolean')
+				throw new Error('skipDrc 必须是布尔值')
+			const maxPasses = params.maxPasses == null ? 50 : Number(params.maxPasses)
+			if (!Number.isFinite(maxPasses) || !Number.isInteger(maxPasses) || maxPasses <= 0)
+				throw new Error('maxPasses 必须是大于 0 的有限整数')
 			if (currentRouteJobId)
 				throw new Error(`已有布线任务在进行（jobId=${currentRouteJobId}），先 autoRouteStatus 查进度或 autoRouteStop 停止`)
+			const focus = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			if (focus?.documentType !== 3 || typeof focus.uuid !== 'string' || !focus.uuid.trim())
+				throw new Error('启动自动布线前必须先激活一个有效 PCB 文档')
+			const routeDocumentUuid = focus.uuid
 			// 健康检查
 			try {
 				await frRequest('GET', '/system/status')
@@ -2852,11 +3878,17 @@ export const pcbCommands: Array<ICommandDef> = [
 			const dsnFile = await eda.pcb_ManufactureData.getDsnFile('design.dsn')
 			if (!dsnFile)
 				throw new Error('DSN 导出失败：请确认已激活 PCB 文档')
+			const focusAfterDsn = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			if (focusAfterDsn?.documentType !== 3 || focusAfterDsn.uuid !== routeDocumentUuid)
+				throw new Error(`导出 DSN 期间 PCB 焦点已变化（原文档=${routeDocumentUuid}，当前=${focusAfterDsn?.uuid ?? '未知'}），已拒绝提交布线任务`)
 			const dsnBase64 = await blobToBase64(dsnFile)
 			const session = await frRequest<{ id: string }>('POST', '/sessions/create')
 			const job = await frRequest<{ id: string }>('POST', '/jobs/enqueue', { session_id: session.id, name: dsnFile.name.replace(/\.dsn$/i, ''), priority: 'NORMAL' })
+			if (typeof job?.id !== 'string' || !job.id.trim())
+				throw new Error('FreeRouting 创建任务未返回有效 jobId，无法绑定 PCB 文档')
+			routeJobDocumentUuids.set(job.id, routeDocumentUuid)
 			const settings: Record<string, unknown> = {
-				max_passes: params.maxPasses != null ? Number(params.maxPasses) : 50,
+				max_passes: maxPasses,
 				via_costs: params.viaCosts != null ? Number(params.viaCosts) : 50,
 				max_threads: params.maxThreads != null ? Number(params.maxThreads) : 4,
 				improvement_threshold: 0,
@@ -2868,7 +3900,6 @@ export const pcbCommands: Array<ICommandDef> = [
 			await frRequest('POST', `/jobs/${job.id}/settings`, settings)
 			await frRequest('POST', `/jobs/${job.id}/input`, { filename: dsnFile.name, data: dsnBase64 })
 			currentRouteJobId = job.id
-			routeSkipDrc = Boolean(params.skipDrc)
 			try {
 				await frRequest('PUT', `/jobs/${job.id}/start`)
 			}
@@ -2881,20 +3912,23 @@ export const pcbCommands: Array<ICommandDef> = [
 				jobId: job.id,
 				outcome: 'start-request-submitted',
 				stateVerified: false,
-				note: '启动请求已提交，尚未确认任务正在布线；用 pcb.autoRouteStatus 查询任务实际状态，不要重复提交。任务完成后的回灌会清除全部未锁定线段、圆弧与过孔，并自动导入结果及运行 DRC；pcb.autoRouteStop 可停止任务',
+				note: '启动请求已提交，尚未确认任务正在布线；用 pcb.autoRouteStatus 查询任务实际状态，不要重复提交。状态查询只读，任务完成后需按需调用 pcb.importAutoRouteSes 导入；pcb.autoRouteStop 可停止任务',
 			}
 		},
 	},
 	{
 		name: 'pcb.autoRouteStatus',
-		summary: '查询自动布线进度；任务 COMPLETED 时自动回灌 SES 结果（清除全部未锁定线段、圆弧与过孔后导入）并可选自动 DRC，返回布线统计',
+		summary: '只查询 FreeRouting 自动布线任务状态；COMPLETED 仅返回完成状态，不读取布线输出、不自动导入、不修改 PCB。需导入时可单独调用 pcb.importAutoRouteSes',
 		params: [
 			{ name: 'jobId', type: 'string', description: '任务 ID（留空取最近启动的任务）' },
-			{ name: 'noImport', type: 'boolean', description: '完成时不自动回灌（只查状态），默认 false' },
+			{ name: 'noImport', type: 'boolean', description: '兼容参数，仅接受布尔值；当前状态查询始终不自动回灌' },
 		],
-		returns: '{ state, stage, currentPass, statistics?, imported?, drc? }',
+		returns: '{ jobId, state, stage, currentPass, statistics?, imported:false, autoImportEnabled:false, note? }；本指令只查询状态，不获取输出或写入 PCB',
 		example: { cmd: 'pcb.autoRouteStatus' },
 		handler: async (params) => {
+			sesCommandDeadline(params)
+			if (params.noImport !== undefined && typeof params.noImport !== 'boolean')
+				throw new Error('noImport 必须是布尔值')
 			const jobId = params.jobId ? String(params.jobId) : currentRouteJobId
 			if (!jobId)
 				throw new Error('没有进行中的布线任务（先 pcb.autoRouteStart）')
@@ -2908,103 +3942,20 @@ export const pcbCommands: Array<ICommandDef> = [
 				stage: status.stage,
 				currentPass: status.current_pass,
 				statistics: status.output?.statistics,
+				imported: false,
+				autoImportEnabled: false,
 			}
-			if (status.state !== 'COMPLETED' || params.noImport)
-				return base
-			const unresolvedJob = [...routeJobRecoveryState].find(([, state]) => state === 'recoveryRequired')
-			if (unresolvedJob)
-				throw new Error(`任务 ${unresolvedJob[0]} 的原文档恢复未确认；已拒绝新的清线或导入`, {
-					cause: { partial: true, restored: false, retryable: false },
-				})
-			const routeState = routeJobRecoveryState.get(jobId)
-			if (routeState === 'recoveryRequired')
-				throw new Error(`任务 ${jobId} 的原文档恢复未确认；已拒绝再次清线或导入`, {
-					cause: { partial: true, restored: false, retryable: false },
-				})
-			if (routeState === 'applying')
-				throw new Error(`任务 ${jobId} 的回灌仍在执行，已拒绝重入`)
-			if (routeState === 'applied' || consumedRouteJobs.has(jobId))
-				return { ...base, imported: false, note: '该任务已成功回灌，不会重复清线或导入；如需重新布线请先 pcb.autoRouteStart' }
-			// 同步占用完成任务，再开始任何可能挂起的输出或快照读取，防止并发查询双清线。
-			routeJobRecoveryState.set(jobId, 'applying')
-			let routeMayHaveWritten = false
-			try {
-			// 先验证输出格式，再枚举目标图元、落快照，之后才开始修改。
-			const output = await frRequest<{ data: string, filename?: string }>('GET', `/jobs/${jobId}/output`)
-			if (!output?.data)
-				throw new Error('布线完成但结果为空')
-			let bin: string
-			try { bin = atob(output.data) }
-			catch (error) { throw new Error(`布线输出不是有效 Base64 SES：${error instanceof Error ? error.message : String(error)}`) }
-			if (!bin.trim() || !bin.includes('(session'))
-				throw new Error('布线输出不是非空 SES session 文件')
-			const u8 = new Uint8Array(bin.length)
-			for (let i = 0; i < bin.length; i++)
-				u8[i] = bin.charCodeAt(i)
-			const sesFile = new File([u8], output.filename || 'autoroute.ses')
-
-			const snapshot = await captureDocumentSnapshot('pcb.autoRouteStatus', 3)
-			await assertSnapshotFocused(snapshot)
-			const unlockedLines = await eda.pcb_PrimitiveLine.getAllPrimitiveId(undefined, undefined, false)
-			if (!Array.isArray(unlockedLines))
-				throw new Error('无法完整枚举未锁定走线，已拒绝清线')
-			await assertSnapshotFocused(snapshot)
-			const unlockedVias = await eda.pcb_PrimitiveVia.getAllPrimitiveId(undefined, false)
-			if (!Array.isArray(unlockedVias))
-				throw new Error('无法完整枚举未锁定过孔，已拒绝清线')
-			await assertSnapshotFocused(snapshot)
-			const unlockedArcs = await (eda.pcb_PrimitiveArc as any).getAllPrimitiveId(undefined, undefined, false)
-			if (!Array.isArray(unlockedArcs))
-				throw new Error('无法完整枚举未锁定圆弧，已拒绝清线')
-
-			let cleared: { lines: number, vias: number, arcs: number }
-			cleared = await withDocumentRecovery(snapshot, async (write) => {
-				const markMayWrite = () => { routeMayHaveWritten = true }
-				await write(() => eda.pcb_Document.startCalculatingRatline(), markMayWrite)
-				if (unlockedLines.length && await write(() => eda.pcb_PrimitiveLine.delete(unlockedLines), markMayWrite) !== true)
-					throw new Error('删除未锁定走线返回 false')
-				if (unlockedArcs.length && await write(() => (eda.pcb_PrimitiveArc as any).delete(unlockedArcs), markMayWrite) !== true)
-					throw new Error('删除未锁定圆弧返回 false')
-				if (unlockedVias.length && await write(() => eda.pcb_PrimitiveVia.delete(unlockedVias), markMayWrite) !== true)
-					throw new Error('删除未锁定过孔返回 false')
-				const imported = await write(() => eda.pcb_Document.importAutoRouteSesFile(sesFile), markMayWrite)
-				if (imported !== true)
-					throw new Error('SES 导入返回 false')
-				return { lines: unlockedLines.length, vias: unlockedVias.length, arcs: unlockedArcs.length }
-			})
-			routeJobRecoveryState.set(jobId, 'applied')
-			consumedRouteJobs.add(jobId)
-			if (currentRouteJobId === jobId)
-				currentRouteJobId = undefined
-			let drc: Record<string, unknown> | undefined
-			if (!routeSkipDrc) {
-				try {
-					const errors = await eda.pcb_Drc.check(true, true, false)
-					const groups = Array.isArray(errors) ? errors : []
-					drc = { totalCount: groups.reduce((s: number, e: any) => s + (typeof e?.count === 'number' ? e.count : 1), 0), groups }
-				}
-				catch { /* DRC 失败不阻断 */ }
+			if (status.state === 'COMPLETED') {
+				if (currentRouteJobId === jobId)
+					currentRouteJobId = undefined
+				return { ...base, note: '自动回灌已停用。状态查询不会获取布线输出或修改 PCB；如需导入外部 SES 结果，请调用 pcb.importAutoRouteSes（追加模式）' }
 			}
-			return {
-				...base,
-				imported: true,
-				cleared,
-				...(drc ? { drc } : {}),
-			}
-			}
-			catch (error) {
-				const cause = (error as any)?.cause
-				if (cause?.partial === true && cause?.restored === false || (routeMayHaveWritten && cause?.restored !== true))
-					routeJobRecoveryState.set(jobId, 'recoveryRequired')
-				else
-					routeJobRecoveryState.delete(jobId)
-				throw error
-			}
+			return base
 		},
 	},
 	{
 		name: 'pcb.autoRouteStop',
-		summary: '停止进行中的自动布线任务（保留当前已回灌的部分）',
+		summary: '停止进行中的 FreeRouting 任务；此命令不会导入 SES 或修改 PCB',
 		params: [
 			{ name: 'jobId', type: 'string', description: '任务 ID（留空取最近启动的任务）' },
 		],
@@ -3014,10 +3965,48 @@ export const pcbCommands: Array<ICommandDef> = [
 			const jobId = params.jobId ? String(params.jobId) : currentRouteJobId
 			if (!jobId)
 				throw new Error('没有进行中的布线任务')
+			const status = await frRequest<{ state?: string }>('GET', `/jobs/${jobId}`)
+			const state = String(status?.state ?? '').trim().toUpperCase()
+			if (state === 'COMPLETED') {
+				if (jobId === currentRouteJobId)
+					currentRouteJobId = undefined
+				return { cancelled: false, jobId, state, note: '任务已结束，无需取消' }
+			}
+			if (['CANCELLED', 'CANCELED', 'FAILED', 'ABORTED', 'ERROR'].includes(state)) {
+				if (jobId === currentRouteJobId)
+					currentRouteJobId = undefined
+				return { cancelled: false, jobId, state, note: '任务已结束，无需取消' }
+			}
+			if (state !== 'RUNNING' && state !== 'READY_TO_START' && state !== 'QUEUED')
+				return { cancelled: false, jobId, state: state || undefined, outcome: 'cancel-not-sent', note: '任务状态未知或不支持取消；未发送取消请求，请先查询任务状态' }
 			await frRequest('PUT', `/jobs/${jobId}/cancel`)
-			if (jobId === currentRouteJobId)
-				currentRouteJobId = undefined
-			return { cancelled: true, jobId }
+			let afterCancel: { state?: string }
+			try {
+				afterCancel = await frRequest<{ state?: string }>('GET', `/jobs/${jobId}`)
+			}
+			catch (error) {
+				return {
+					cancelled: false,
+					jobId,
+					outcome: 'cancel-request-unknown',
+					note: `取消请求已接受，但无法确认任务状态；请用 pcb.autoRouteStatus 查询后再决定下一步（${String((error as any)?.message ?? error)}）`,
+				}
+			}
+			const afterState = String(afterCancel?.state ?? '').trim().toUpperCase()
+			if (afterState === 'CANCELLED' || afterState === 'CANCELED') {
+				if (jobId === currentRouteJobId)
+					currentRouteJobId = undefined
+				return { cancelled: true, jobId, state: afterState }
+			}
+			return {
+				cancelled: false,
+				jobId,
+				state: afterState || undefined,
+				outcome: afterState === 'RUNNING' || afterState === 'READY_TO_START' || afterState === 'QUEUED' ? 'cancel-request-pending' : 'cancel-request-unknown',
+				note: afterState
+					? `取消请求已接受，但尚未观察到 CANCELLED 状态（当前：${afterState}）；任务 ID 已保留，请稍后查询状态`
+					: '取消请求已接受，但返回状态为空；任务 ID 已保留，请查询状态',
+			}
 		},
 	},
 ]

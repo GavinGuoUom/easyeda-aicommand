@@ -1,0 +1,146 @@
+(session "A_CLASS_SES_READONLY_FIXTURE"
+  (base_design "A_CLASS_SES_READONLY_FIXTURE")
+  (placement
+    (resolution mil 1000)
+    (component u1
+      (place u1 0 0 front 0)
+    )
+  )
+  (was_is
+  )
+  (routes 
+    (resolution mil 1000)
+    (parser
+      (host_cad "EasyEDA Pro")
+      (host_version "4.1.78")
+    )
+    (library_out 
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+      (padstack via0
+        (shape
+          (circle TopLayer 24000 0 0)
+        )
+        (shape
+          (circle BottomLayer 24000 0 0)
+        )
+      )
+    )
+    (network_out 
+      (net "ACE_IN_A"
+        (wire
+          (path TopLayer 10050
+            370300 400000
+            370340 400000
+          )
+        )
+        (via via0 300000 400000
+          (type protect)
+        )
+        (wire
+          (path TopLayer 12000
+            370300 400000
+            300000 400000
+          )
+          (type protect)
+        )
+      )
+      (net $1N1
+        (wire
+          (path TopLayer 10050
+            620340 400000
+            620300 400000
+          )
+        )
+        (wire
+          (path TopLayer 10050
+            429700 400000
+            429660 400000
+          )
+        )
+        (wire
+          (path TopLayer 12000
+            429700 400000
+            620300 400000
+          )
+          (type protect)
+        )
+      )
+      (net $1N4
+        (wire
+          (path TopLayer 10050
+            620340 650000
+            620300 650000
+          )
+        )
+        (wire
+          (path TopLayer 10050
+            429700 650000
+            429660 650000
+          )
+        )
+        (wire
+          (path TopLayer 12000
+            429700 650000
+            620300 650000
+          )
+          (type protect)
+        )
+      )
+    )
+  )
+)

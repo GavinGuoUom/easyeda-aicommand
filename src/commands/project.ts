@@ -3,6 +3,143 @@
  */
 import type { ICommandDef } from '../engine/types'
 import { fileToResult } from './util'
+import JSZip from 'jszip'
+
+type ProjectNode = Record<string, any>
+
+type OperationDeadline = {
+	check: (phase: string, partial?: boolean) => void
+	wait: <T>(start: () => Promise<T>, phase: string, partial?: boolean) => Promise<T>
+}
+
+function createOperationDeadline(params: any, label: string): OperationDeadline {
+	const supplied = params?._timeoutMs == null ? 290_000 : Math.max(1000, Number(params._timeoutMs))
+	const timeoutMs = Number.isFinite(supplied) ? supplied : 290_000
+	const deadlineAt = Date.now() + timeoutMs
+	const timeoutError = (phase: string, partial = false) => new Error(`${label} 超过 ${timeoutMs}ms 操作期限（${phase}），未继续后续写入`, {
+		cause: { partial, retryable: false, phase: `${label} deadline`, timeoutMs },
+	})
+	return {
+		check(phase, partial = false) {
+			if (Date.now() >= deadlineAt)
+				throw timeoutError(phase, partial)
+		},
+		async wait<T>(start: () => Promise<T>, phase: string, partial = false) {
+			if (Date.now() >= deadlineAt)
+				throw timeoutError(phase, partial)
+			const promise = start()
+			let timer: ReturnType<typeof setTimeout> | undefined
+			try {
+				const value = await Promise.race([
+					promise,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => reject(timeoutError(phase, partial)), Math.max(1, deadlineAt - Date.now()))
+					}),
+				])
+				if (Date.now() >= deadlineAt)
+					throw timeoutError(phase, partial)
+				return value
+			}
+			finally {
+				if (timer !== undefined)
+					clearTimeout(timer)
+			}
+		},
+	}
+}
+
+function projectData(project: any, projectUuid: string): ProjectNode[] {
+	if (!project || typeof project !== 'object' || project.uuid !== projectUuid || !Array.isArray(project.data))
+		throw new Error(`无法读取工程 ${projectUuid} 的完整文档树`)
+	const found: ProjectNode[] = []
+	const addPcb = (pcb: any, parentBoardName?: string, nested = false) => {
+		if (!pcb || typeof pcb !== 'object' || pcb.itemType !== 'PCB' || typeof pcb.uuid !== 'string' || !pcb.uuid || typeof pcb.name !== 'string' || !pcb.name || pcb.parentProjectUuid !== projectUuid || (nested ? pcb.parentBoardName !== parentBoardName : pcb.parentBoardName !== undefined && pcb.parentBoardName !== ''))
+			throw new Error(`工程 ${projectUuid} 的 PCB 节点结构或归属无效`)
+		found.push(pcb)
+	}
+	const addPage = (page: any, schematicUuid: string) => {
+		if (!page || typeof page !== 'object' || page.itemType !== 'Schematic Page' || typeof page.uuid !== 'string' || !page.uuid || typeof page.name !== 'string' || !page.name || page.parentSchematicUuid !== schematicUuid)
+			throw new Error(`原理图 ${schematicUuid} 含有结构或归属无效的图页`)
+		found.push(page)
+	}
+	const addSchematic = (schematic: any, parentBoardName?: string, nested = false) => {
+		if (!schematic || typeof schematic !== 'object' || schematic.itemType !== 'Schematic' || typeof schematic.uuid !== 'string' || !schematic.uuid || typeof schematic.name !== 'string' || !schematic.name || schematic.parentProjectUuid !== projectUuid || (nested ? schematic.parentBoardName !== parentBoardName : schematic.parentBoardName !== undefined && schematic.parentBoardName !== '') || !Array.isArray(schematic.page))
+			throw new Error(`工程 ${projectUuid} 的原理图节点结构或归属无效`)
+		found.push(schematic)
+		for (const page of schematic.page)
+			addPage(page, schematic.uuid)
+	}
+	for (const node of project.data) {
+		if (!node || typeof node !== 'object')
+			throw new Error(`工程 ${projectUuid} 文档树包含空或非对象节点`)
+		if (node.itemType === 'Board') {
+			if (typeof node.name !== 'string' || !node.name || node.parentProjectUuid !== projectUuid || !Object.hasOwn(node, 'schematic') || !Object.hasOwn(node, 'pcb'))
+				throw new Error(`工程 ${projectUuid} 的 Board 节点结构或归属无效`)
+			found.push(node)
+			if (node.schematic !== null)
+				addSchematic(node.schematic, node.name, true)
+			if (node.pcb !== null)
+				addPcb(node.pcb, node.name, true)
+		}
+		else if (node.itemType === 'Schematic') {
+			addSchematic(node)
+		}
+		else if (node.itemType === 'PCB') {
+			addPcb(node)
+		}
+		else if (node.itemType === 'Panel') {
+			if (typeof node.uuid !== 'string' || !node.uuid || typeof node.name !== 'string' || !node.name || node.parentProjectUuid !== projectUuid)
+				throw new Error(`工程 ${projectUuid} 的 Panel 节点结构或归属无效`)
+			found.push(node)
+		}
+		else {
+			throw new Error(`工程 ${projectUuid} 文档树含不支持或未知节点类型 ${String(node.itemType)}`)
+		}
+	}
+	return found
+}
+
+function projectTreeUnchanged(before: any, after: any): boolean {
+	if (!before || !after || before.uuid !== after.uuid || !Array.isArray(before.data) || !Array.isArray(after.data))
+		return false
+	try {
+		return JSON.stringify(before.data) === JSON.stringify(after.data)
+	}
+	catch {
+		return false
+	}
+}
+
+function mutationUnknown(label: string, operationError: unknown, details: Record<string, unknown> = {}) {
+	const message = operationError instanceof Error ? operationError.message : String(operationError)
+	return new Error(`${label}结果未知，未自动重试。请先读取工程树核对状态。原始错误：${message}`, {
+		cause: { partial: true, retryable: false, phase: label, operationError: message, ...details },
+	})
+}
+
+function requireUuid(value: unknown, label: string): string {
+	if (typeof value !== 'string' || value.length === 0)
+		throw new Error(`${label}必须是非空 UUID`)
+	return value
+}
+
+async function currentProjectTree(deadline?: OperationDeadline, phase = '读取当前工程树') {
+	const current: any = deadline
+		? await deadline.wait(() => eda.dmt_Project.getCurrentProjectInfo(), phase)
+		: await eda.dmt_Project.getCurrentProjectInfo()
+	if (!current || typeof current.uuid !== 'string' || !current.uuid)
+		throw new Error('无法读取当前工程完整信息')
+	const nodes = projectData(current, current.uuid)
+	deadline?.check(`${phase} 校验`)
+	return { project: current, nodes }
+}
+
+async function confirmCurrentProject(deadline: OperationDeadline, projectUuid: string, phase: string) {
+	const current = await currentProjectTree(deadline, phase)
+	if (current.project.uuid !== projectUuid)
+		throw new Error(`当前工程已从 ${projectUuid} 切换为 ${current.project.uuid}，未写入`)
+	return current
+}
 
 /**
  * 规范化器件搜索结果。
@@ -119,6 +256,9 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.projectUuid)
 				throw new Error('缺少参数 projectUuid')
+			const info = await eda.dmt_Project.getProjectInfo(String(params.projectUuid))
+			if (!info)
+				throw new Error('目标工程不存在或无权访问，未调用 openProject')
 			const opened = await eda.dmt_Project.openProject(String(params.projectUuid))
 			if (!opened)
 				throw new Error('工程打开失败，请检查 uuid 是否正确')
@@ -136,6 +276,8 @@ export const projectCommands: Array<ICommandDef> = [
 		example: { cmd: 'project.list' },
 		handler: async (params) => {
 			let teamUuid: string | undefined
+			if (params.detail !== undefined && typeof params.detail !== 'boolean')
+				throw new Error('detail 必须是布尔值')
 			if (params.teamUuid !== undefined) {
 				if (typeof params.teamUuid !== 'string' || params.teamUuid.length === 0)
 					throw new Error('teamUuid 必须是非空字符串')
@@ -194,11 +336,46 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.projectUuid)
 				throw new Error('缺少参数 projectUuid')
-			const moved = await eda.dmt_Project.moveProjectToFolder(
-				String(params.projectUuid),
-				params.folderUuid ? String(params.folderUuid) : undefined,
-			)
-			return { moved: Boolean(moved) }
+			const deadline = createOperationDeadline(params, 'project.moveToFolder')
+			const projectUuid = String(params.projectUuid)
+			if (params.folderUuid !== undefined && params.folderUuid !== '' && (typeof params.folderUuid !== 'string' || !params.folderUuid))
+				throw new Error('folderUuid 必须是非空字符串；移到根目录请省略或传空字符串')
+			if (params.folderUuid === null)
+				throw new Error('folderUuid 不能为 null；移到根目录请省略参数')
+			const targetFolderUuid = params.folderUuid === undefined || params.folderUuid === '' ? undefined : String(params.folderUuid)
+			const before: any = await deadline.wait(() => eda.dmt_Project.getProjectInfo(projectUuid), '读取移动前工程信息')
+			if (!before || before.uuid !== projectUuid || typeof before.teamUuid !== 'string' || !before.teamUuid)
+				throw new Error(`无法确认工程 ${projectUuid} 的当前团队归属，未移动`)
+			if (targetFolderUuid) {
+				const folder: any = await deadline.wait(() => eda.dmt_Folder.getFolderInfo(before.teamUuid, targetFolderUuid), '读取目标文件夹归属')
+				if (!folder || folder.uuid !== targetFolderUuid || folder.teamUuid !== before.teamUuid)
+					throw new Error(`目标文件夹 ${targetFolderUuid} 不属于工程当前团队 ${before.teamUuid}，未移动`)
+			}
+			let moved: unknown
+			deadline.check('发起移动前')
+			try {
+				moved = await deadline.wait(() => eda.dmt_Project.moveProjectToFolder(projectUuid, targetFolderUuid), '移动工程', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.moveToFolder', err, { projectUuid, requestedFolderUuid: targetFolderUuid ?? null })
+			}
+			let after: any
+			try {
+				after = await deadline.wait(() => eda.dmt_Project.getProjectInfo(projectUuid), '读取移动后工程信息', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.moveToFolder readback', err, { projectUuid, requestedFolderUuid: targetFolderUuid ?? null, sdkReturned: moved })
+			}
+			if (!after || after.uuid !== projectUuid)
+				throw mutationUnknown('project.moveToFolder readback', '无法读取移动后的工程信息', { projectUuid, requestedFolderUuid: targetFolderUuid ?? null, sdkReturned: moved })
+			if (after.teamUuid !== before.teamUuid)
+				throw mutationUnknown('project.moveToFolder readback', '移动后工程团队 UUID 缺失或发生变化', { projectUuid, beforeTeamUuid: before.teamUuid, afterTeamUuid: after.teamUuid ?? null, requestedFolderUuid: targetFolderUuid ?? null, sdkReturned: moved })
+			const landed = targetFolderUuid === undefined ? after.folderUuid === undefined : after.folderUuid === targetFolderUuid
+			if (moved !== true || !landed)
+				throw new Error(`工程移动未通过读回验收（SDK=${String(moved)}，请求目录=${targetFolderUuid ?? '根目录'}，实际目录=${after.folderUuid === undefined ? '根目录(undefined)' : String(after.folderUuid)}）`, {
+					cause: { partial: moved === true || landed, retryable: false, phase: 'project.moveToFolder verify', projectUuid, requestedFolderUuid: targetFolderUuid ?? null, actualFolderUuid: after.folderUuid ?? null, sdkReturned: moved },
+				})
+			return { moved: true }
 		},
 	},
 	{
@@ -211,7 +388,9 @@ export const projectCommands: Array<ICommandDef> = [
 		returns: '{ fileName, size, mimeType, base64 }',
 		example: { cmd: 'project.exportFile' },
 		handler: async (params) => {
-			const fileType = (params.fileType === 'epro2' ? 'epro2' : 'epro') as 'epro' | 'epro2'
+			if (params.fileType !== undefined && params.fileType !== 'epro' && params.fileType !== 'epro2')
+				throw new Error('fileType 必须是 epro 或 epro2')
+			const fileType = (params.fileType ?? 'epro') as 'epro' | 'epro2'
 			const file = await eda.sys_FileManager.getProjectFile(
 				params.fileName ? String(params.fileName) : undefined,
 				undefined,
@@ -225,12 +404,12 @@ export const projectCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'project.importFile',
-		summary: '从工程文件导入工程（薄封装官方 sys_FileManager.importProjectByProjectFile；支持 .epro/.PcbDoc/.SchDoc/.kicad_pcb 等，传 base64 文件内容；缺省新建工程到当前团队；导入可能耗时，耐心等待返回）',
+		summary: '从工程文件导入工程（传 base64 文件内容；newProjectName 设置新工程显示名并检查同名；在线省略时仅从 epro2 根 project2.json 的 title 派生；根 project2.json 的字符串 description 随同一次新建导入写入；官方导入为 beta，空返回按结果未知处理）',
 		params: [
 			{ name: 'base64', type: 'string', required: true, description: '文件内容的 base64 编码' },
 			{ name: 'fileName', type: 'string', required: true, description: '文件名（带扩展名，用于构造 File 和推断 fileType）' },
 			{ name: 'fileType', type: 'string', description: "文件类型，如 'Altium Designer'、'KiCad'、'PADS'、'JLCEDA Pro' 等；缺省按扩展名推断（.PcbDoc/.SchDoc→'Altium Designer'），无法推断时必须显式传" },
-			{ name: 'newProjectName', type: 'string', description: '新工程名，缺省官方按文件名命名' },
+			{ name: 'newProjectName', type: 'string', description: '新工程显示名；传入时检查当前团队是否已有同名工程；在线省略时只支持从 epro2 根 project2.json 的 title 派生，其他格式或元数据无法确定时必须显式传入' },
 			{ name: 'saveToFolderPath', type: 'string', description: "本地文件夹路径（仅离线客户端）：传入后 saveTo 用 'Offline Client Local Path'；缺省新建工程到当前团队（自动取 dmt_Team.getCurrentTeamInfo 的 uuid）" },
 		],
 		returns: '{ uuid, name, ... }（官方 IDMT_BriefProjectItem 简略工程属性）',
@@ -240,7 +419,12 @@ export const projectCommands: Array<ICommandDef> = [
 				throw new Error('缺少参数 base64（文件内容的 base64 编码）')
 			if (!params.fileName)
 				throw new Error('缺少参数 fileName（带扩展名的文件名）')
+			const deadline = createOperationDeadline(params, 'project.importFile')
 			const fileName = String(params.fileName)
+			const requestedName = params.newProjectName === undefined ? undefined : String(params.newProjectName).trim()
+			if (requestedName === '')
+				throw new Error('newProjectName 不能是空白字符串')
+			let importName = requestedName
 			const ext = fileName.toLowerCase().split('.').pop() ?? ''
 			let fileType = params.fileType ? String(params.fileType) : undefined
 			if (!fileType) {
@@ -255,7 +439,13 @@ export const projectCommands: Array<ICommandDef> = [
 				if (!fileType)
 					throw new Error(`无法按扩展名 .${ext} 推断 fileType，请显式传 fileType（如 'Altium Designer'、'KiCad'、'PADS'、'JLCEDA Pro' 等）`)
 			}
-			const bin = atob(String(params.base64))
+			let bin: string
+			try {
+				bin = atob(String(params.base64))
+			}
+			catch {
+				throw new Error('base64 不是有效的文件内容编码，未调用导入接口')
+			}
 			const u8 = new Uint8Array(bin.length)
 			for (let i = 0; i < bin.length; i++)
 				u8[i] = bin.charCodeAt(i)
@@ -267,25 +457,76 @@ export const projectCommands: Array<ICommandDef> = [
 				saveTo = { operation: 'Offline Client Local Path', folderPath: String(params.saveToFolderPath) }
 			}
 			else {
-				const team: any = await eda.dmt_Team.getCurrentTeamInfo()
+				const canReadEpro2Metadata = fileType === 'JLCEDA Pro' && ext === 'epro2'
+				let metadata: Record<string, unknown> | undefined
+				if (canReadEpro2Metadata) {
+					try {
+						const archive = await deadline.wait(() => JSZip.loadAsync(u8), '解析 epro2 元数据归档')
+						const metadataPaths = Object.keys(archive.files).filter(path => /(^|\/)project2\.json$/i.test(path) && !archive.files[path].dir)
+						if (metadataPaths.length !== 1 || metadataPaths[0] !== 'project2.json')
+							throw new Error('归档必须在根目录且仅包含一个 project2.json')
+						const metadataText = await deadline.wait(() => archive.files[metadataPaths[0]].async('string'), '读取 epro2 工程元数据')
+						const parsed: unknown = JSON.parse(metadataText)
+						if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+							throw new Error('project2.json 顶层必须是普通对象')
+						metadata = parsed as Record<string, unknown>
+					}
+					catch (error) {
+						// Explicit names may proceed without optional metadata, but a parse timeout
+						// must still stop before the SDK write. Derived names keep the strict gate below.
+						deadline.check('解析 epro2 工程元数据')
+						metadata = undefined
+						if (importName === undefined) {
+							const detail = error instanceof Error ? error.message : String(error)
+							throw new Error(`无法从 epro2 元数据可靠确定工程显示名（${detail}），请显式传 newProjectName；未发起导入`)
+						}
+					}
+				}
+				if (importName === undefined) {
+					if (!canReadEpro2Metadata)
+						throw new Error(`无法从 ${fileType} 的 .${ext} 文件中可靠确定工程显示名，请显式传 newProjectName；未发起导入`)
+					if (typeof metadata?.title !== 'string' || !metadata.title.trim())
+						throw new Error('无法从 epro2 元数据可靠确定工程显示名（project2.json 顶层 title 缺失或为空），请显式传 newProjectName；未发起导入')
+					importName = metadata.title.trim()
+				}
+				const team: any = await deadline.wait(() => eda.dmt_Team.getCurrentTeamInfo(), '读取导入目标团队')
 				const teamUuid = team?.uuid ?? team?.teamUuid
-				if (!teamUuid)
+				if (typeof teamUuid !== 'string' || !teamUuid)
 					throw new Error('拿不到当前团队 uuid（dmt_Team.getCurrentTeamInfo 返回异常），无法新建工程')
 				saveTo = {
 					operation: 'New Project',
 					newProjectOwnerTeamUuid: teamUuid,
-					newProjectName: params.newProjectName ? String(params.newProjectName) : undefined,
+					// EDA 4.1.78 的导入实现只读取 newProjectFriendlyName，忽略 newProjectName。
+					...(importName === undefined ? {} : { newProjectFriendlyName: importName }),
+					...(metadata && Object.hasOwn(metadata, 'description') && typeof metadata.description === 'string' ? { newProjectDescription: metadata.description } : {}),
+				}
+				if (importName) {
+					const uuids = await deadline.wait(() => eda.dmt_Project.getAllProjectsUuid(teamUuid), '读取当前团队工程列表')
+					if (!Array.isArray(uuids))
+						throw new Error('无法读取当前团队工程列表，未发起导入')
+					for (const uuid of uuids) {
+						if (typeof uuid !== 'string' || !uuid)
+							throw new Error('当前团队工程列表包含无效 UUID，无法排除重名，未发起导入')
+						const info = await deadline.wait(() => eda.dmt_Project.getProjectInfo(uuid), `读取工程 ${uuid} 的名称`)
+						if (!info || info.uuid !== uuid || info.teamUuid !== teamUuid || typeof info.friendlyName !== 'string')
+							throw new Error(`无法读取工程 ${uuid} 的名称，未发起导入`)
+						if (info.friendlyName === importName)
+							throw new Error(`当前团队已有同名工程 ${importName}，未发起导入`)
+					}
 				}
 			}
 			let beforeProjectUuid: string | undefined
 			try {
-				const before = await eda.dmt_Project.getCurrentProjectInfo()
+				const before = await deadline.wait(() => eda.dmt_Project.getCurrentProjectInfo(), '读取导入前当前工程 UUID')
 				if (typeof before?.uuid === 'string' && before.uuid)
 					beforeProjectUuid = before.uuid
 			}
-			catch { /* 仅作恢复线索，不影响导入前置校验 */ }
+			catch {
+				deadline.check('导入前读取恢复线索')
+				/* 仅作恢复线索，不影响导入前置校验 */
+			}
 			const target = saveTo?.operation === 'New Project'
-				? { operation: saveTo.operation, teamUuid: saveTo.newProjectOwnerTeamUuid, projectName: saveTo.newProjectName }
+				? { operation: saveTo.operation, teamUuid: saveTo.newProjectOwnerTeamUuid, projectName: saveTo.newProjectFriendlyName }
 				: saveTo ? { operation: saveTo.operation, folderPath: saveTo.folderPath } : undefined
 			const unknownOutcome = (reason: unknown) => {
 				const detail = reason instanceof Error ? reason.message : reason === undefined ? 'SDK 返回空结果' : String(reason)
@@ -296,7 +537,7 @@ export const projectCommands: Array<ICommandDef> = [
 						outcome: 'unknown',
 						fileName,
 						fileType,
-						newProjectName: params.newProjectName ? String(params.newProjectName) : undefined,
+						newProjectName: importName,
 						target,
 						beforeProjectUuid,
 						sdkError: detail,
@@ -304,13 +545,14 @@ export const projectCommands: Array<ICommandDef> = [
 				})
 			}
 			let project: any
+			deadline.check('发起导入前')
 			try {
-				project = await eda.sys_FileManager.importProjectByProjectFile(
+				project = await deadline.wait(() => eda.sys_FileManager.importProjectByProjectFile(
 					file,
 					fileType as any,
 					undefined,
 					saveTo as any,
-				)
+				), '导入工程文件', true)
 			}
 			catch (error) {
 				throw unknownOutcome(error)
@@ -327,9 +569,33 @@ export const projectCommands: Array<ICommandDef> = [
 		returns: '{ source }（文档源数据 JSON 字符串）',
 		example: { cmd: 'project.getDocumentSource' },
 		handler: async () => {
-			const source = await eda.sys_FileManager.getDocumentSource()
-			if (source == null)
-				throw new Error('读取失败：官方返回空（请确认有文档处于激活状态）')
+			let before: any
+			try {
+				before = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			}
+			catch (err) {
+				throw new Error(`无法确认当前激活文档：${err instanceof Error ? err.message : String(err)}`)
+			}
+			if (!before || typeof before.uuid !== 'string' || !before.uuid)
+				throw new Error('当前没有可确认的激活文档 UUID，未读取文档源数据')
+			let source: unknown
+			try {
+				source = await eda.sys_FileManager.getDocumentSource()
+			}
+			catch (err) {
+				throw new Error(`读取当前激活文档 ${before.uuid} 的源数据失败：${err instanceof Error ? err.message : String(err)}`)
+			}
+			let after: any
+			try {
+				after = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			}
+			catch (err) {
+				throw new Error(`源数据读取后无法确认焦点是否仍为文档 ${before.uuid}：${err instanceof Error ? err.message : String(err)}`)
+			}
+			if (!after || after.uuid !== before.uuid || (before.documentType !== undefined && after.documentType !== before.documentType))
+				throw new Error(`读取期间激活文档焦点已从 ${before.uuid} 切换，未返回可能错配的源数据`)
+			if (typeof source !== 'string' || !source.trim())
+				throw new Error('读取当前激活文档源数据失败：官方返回空或非字符串')
 			return { source }
 		},
 	},
@@ -343,11 +609,52 @@ export const projectCommands: Array<ICommandDef> = [
 		returns: '{ schematicUuid }',
 		example: { cmd: 'project.createSchematic' },
 		handler: async (params) => {
-			const uuid = await eda.dmt_Schematic.createSchematic(
-				params.boardName ? String(params.boardName) : undefined,
-			)
-			if (!uuid)
-				throw new Error(`原理图创建失败（官方返回空${params.boardName ? '；boardName 必须是已存在的板子名，不存在时会静默失败，可留空自动创建' : ''}）`)
+			if (params.boardName !== undefined && (typeof params.boardName !== 'string' || !params.boardName))
+				throw new Error('boardName 必须是非空字符串；创建游离原理图请省略参数')
+			const deadline = createOperationDeadline(params, 'project.createSchematic')
+			const boardName = params.boardName as string | undefined
+			const { project, nodes } = await currentProjectTree(deadline, '读取原理图创建前工程树')
+			const targetBoard = boardName ? nodes.find(node => node.itemType === 'Board' && node.name === boardName) : undefined
+			if (boardName && !targetBoard)
+				throw new Error(`当前工程 ${project.uuid} 中不存在精确匹配的 Board ${boardName}，未创建原理图`)
+			if (boardName && targetBoard && targetBoard.schematic != null)
+				throw new Error(`Board ${boardName} 的原理图槽已占用，未创建原理图`)
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核原理图创建工程树')
+			if (boardName) {
+				const board = current.nodes.find(node => node.itemType === 'Board' && node.name === boardName)
+				if (!board || board.schematic !== null)
+					throw new Error(`Board ${boardName} 的原理图槽已改变，未创建原理图`)
+			}
+			let uuid: unknown
+			deadline.check('发起创建前')
+			try {
+				uuid = await deadline.wait(() => eda.dmt_Schematic.createSchematic(boardName), '创建原理图', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.createSchematic', err, { projectUuid: project.uuid, requestedBoardName: boardName ?? null })
+			}
+			if (typeof uuid !== 'string' || !uuid)
+				throw mutationUnknown('project.createSchematic', 'SDK 返回空 UUID', { projectUuid: project.uuid, requestedBoardName: boardName ?? null })
+			let verified = false
+			try {
+				for (let attempt = 0; attempt < 4; attempt++) {
+					const after = await currentProjectTree(deadline, '创建后读取工程树').catch(() => undefined)
+					if (after && after.project.uuid === project.uuid) {
+						const schematic = after.nodes.find(node => node.itemType === 'Schematic' && node.uuid === uuid)
+						const board = boardName ? after.nodes.find(node => node.itemType === 'Board' && node.name === boardName) : undefined
+						verified = Boolean(schematic && (boardName ? board?.schematic?.uuid === uuid && schematic.parentBoardName === boardName : !schematic?.parentBoardName && !after.nodes.some(node => node.itemType === 'Board' && node.schematic?.uuid === uuid)))
+						if (verified)
+						break
+					}
+					if (attempt < 3)
+						await deadline.wait(() => new Promise(resolve => setTimeout(resolve, 500)), '等待原理图创建同步', true)
+				}
+			}
+			catch (err) {
+				throw mutationUnknown('project.createSchematic readback', err, { projectUuid: project.uuid, schematicUuid: uuid, requestedBoardName: boardName ?? null })
+			}
+			if (!verified)
+				throw mutationUnknown('project.createSchematic readback', '新原理图类型、工程归属或板槽归属不匹配/未读到', { projectUuid: project.uuid, schematicUuid: uuid, requestedBoardName: boardName ?? null })
 			return { schematicUuid: uuid }
 		},
 	},
@@ -379,8 +686,42 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.pageUuid)
 				throw new Error('缺少参数 pageUuid')
-			const deleted = await eda.dmt_Schematic.deleteSchematicPage(String(params.pageUuid))
-			return { deleted: Boolean(deleted) }
+			const deadline = createOperationDeadline(params, 'project.deleteSchematicPage')
+			const pageUuid = String(params.pageUuid)
+			const { project, nodes } = await currentProjectTree(deadline, '读取图页删除前工程树')
+			const page = nodes.find(node => node.itemType === 'Schematic Page' && node.uuid === pageUuid)
+			if (!page)
+				throw new Error(`当前工程 ${project.uuid} 的完整文档树中不存在图页 ${pageUuid}，未删除`)
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核图页删除工程树')
+			if (!current.nodes.some(node => node.itemType === 'Schematic Page' && node.uuid === pageUuid))
+				throw new Error(`图页 ${pageUuid} 已不在当前工程 ${project.uuid}，未删除`)
+			let deleted: unknown
+			deadline.check('发起删除前')
+			try {
+				deleted = await deadline.wait(() => eda.dmt_Schematic.deleteSchematicPage(pageUuid), '删除图页', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.deleteSchematicPage', err, { projectUuid: project.uuid, pageUuid })
+			}
+			let remains: boolean
+			let unchanged: boolean
+			try {
+				const after = await deadline.wait(() => eda.dmt_Project.getCurrentProjectInfo(), '读取图页删除后工程树', true)
+				unchanged = projectTreeUnchanged(project, after)
+				remains = projectData(after, project.uuid).some(node => node.itemType === 'Schematic Page' && node.uuid === pageUuid)
+			}
+			catch (err) {
+				throw mutationUnknown('project.deleteSchematicPage readback', err, { projectUuid: project.uuid, pageUuid, sdkReturned: deleted })
+			}
+			if (deleted === false && remains && unchanged)
+				throw new Error('官方返回 false，图页仍在当前工程树中，未删除', {
+					cause: { partial: false, retryable: false, phase: 'project.deleteSchematicPage', projectUuid: project.uuid, pageUuid, sdkReturned: false, remains: true },
+				})
+			if (deleted !== true || remains)
+				throw new Error(`图页删除结果矛盾或未确认（SDK=${String(deleted)}，读回仍存在=${remains}）`, {
+					cause: { partial: true, retryable: false, phase: 'project.deleteSchematicPage verify', projectUuid: project.uuid, pageUuid, sdkReturned: deleted, remains, treeUnchanged: unchanged },
+				})
+			return { deleted: true }
 		},
 	},
 	{
@@ -395,23 +736,76 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.pageUuid)
 				throw new Error('缺少参数 pageUuid')
+			if (params.schematicUuid !== undefined && (typeof params.schematicUuid !== 'string' || !params.schematicUuid))
+				throw new Error('schematicUuid 必须是非空字符串')
+			const deadline = createOperationDeadline(params, 'project.copySchematicPage')
 			const sourcePageUuid = String(params.pageUuid)
-			const targetSchematic = params.schematicUuid ? String(params.schematicUuid) : undefined
-			// 透传官方（签名 copySchematicPage(schematicPageUuid, schematicUuid?)，0.10.37 已逐字核对）
-			const uuid = await eda.dmt_Schematic.copySchematicPage(sourcePageUuid, targetSchematic)
-			if (!uuid)
-				throw new Error('图页复制失败（官方返回空）')
-			// 官方示例要求等同步再读回（1500ms），读回新页名称与归属一并返回，便于调用方核对"复制的是不是想要的页"
-			await new Promise(resolve => setTimeout(resolve, 1500))
-			const info: any = await eda.dmt_Schematic.getSchematicPageInfo(uuid)
+			const targetSchematic = params.schematicUuid as string | undefined
+			const { project, nodes } = await currentProjectTree(deadline, '读取复制前工程树')
+			const sourcePage = nodes.find(node => node.itemType === 'Schematic Page' && node.uuid === sourcePageUuid)
+			if (!sourcePage)
+				throw new Error(`源图页 ${sourcePageUuid} 不属于当前工程 ${project.uuid}，未复制`)
+			const sourceSchematicUuid = requireUuid(sourcePage.parentSchematicUuid, `源图页 ${sourcePageUuid} 的父原理图`)
+			if (!nodes.some(node => node.itemType === 'Schematic' && node.uuid === sourceSchematicUuid))
+				throw new Error(`源图页 ${sourcePageUuid} 的父原理图不在当前工程 ${project.uuid}，未复制`)
+			if (targetSchematic && !nodes.some(node => node.itemType === 'Schematic' && node.uuid === targetSchematic))
+				throw new Error(`目标原理图 ${targetSchematic} 不属于当前工程 ${project.uuid}，未复制`)
+			const expectedParent = targetSchematic ?? sourceSchematicUuid
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核图页复制工程树')
+			if (!current.nodes.some(node => node.itemType === 'Schematic Page' && node.uuid === sourcePageUuid && node.parentSchematicUuid === sourceSchematicUuid)
+				|| (targetSchematic && !current.nodes.some(node => node.itemType === 'Schematic' && node.uuid === targetSchematic)))
+				throw new Error('复制前源图页或目标原理图已不在当前工程树中，未复制')
+			let uuid: unknown
+			deadline.check('发起复制前')
+			try {
+				// 透传官方（签名 copySchematicPage(schematicPageUuid, schematicUuid?)，0.10.37 已逐字核对）
+				uuid = await deadline.wait(() => eda.dmt_Schematic.copySchematicPage(sourcePageUuid, targetSchematic), '复制图页', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.copySchematicPage', err, { projectUuid: project.uuid, sourcePageUuid, requestedSchematicUuid: expectedParent })
+			}
+			if (typeof uuid !== 'string' || !uuid || uuid === sourcePageUuid)
+				throw mutationUnknown('project.copySchematicPage', 'SDK 返回空 UUID 或复用了源 UUID', {
+					projectUuid: project.uuid,
+					sourcePageUuid,
+					requestedSchematicUuid: expectedParent,
+					sdkResultType: uuid === null ? 'null' : typeof uuid,
+					...(uuid === null || typeof uuid === 'string' || typeof uuid === 'boolean' || (typeof uuid === 'number' && Number.isFinite(uuid))
+						? { sdkResultValue: uuid }
+						: typeof uuid === 'number' ? { sdkResultValue: Number.isNaN(uuid) ? 'NaN' : uuid > 0 ? 'Infinity' : '-Infinity' } : {}),
+					sdkResultIsSourceUuid: uuid === sourcePageUuid,
+				})
+			// 官方示例要求等同步再读回（1500ms）；只读轮询，不重复发起复制。
+			try {
+				await deadline.wait(() => new Promise(resolve => setTimeout(resolve, 1500)), '等待复制同步', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.copySchematicPage readback', err, { projectUuid: project.uuid, pageUuid: uuid, sourcePageUuid, requestedSchematicUuid: expectedParent })
+			}
+			let info: any
+			try {
+				info = await deadline.wait(() => eda.dmt_Schematic.getSchematicPageInfo(uuid), '读取新图页信息', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.copySchematicPage readback', err, { projectUuid: project.uuid, pageUuid: uuid, sourcePageUuid, requestedSchematicUuid: expectedParent })
+			}
+			if (!info || info.uuid !== uuid || typeof info.name !== 'string' || !info.name || info.parentSchematicUuid !== expectedParent)
+				throw mutationUnknown('project.copySchematicPage readback', '新图页 UUID、父原理图或工程归属不匹配', { projectUuid: project.uuid, pageUuid: uuid, sourcePageUuid, requestedSchematicUuid: expectedParent, actualParentSchematicUuid: info?.parentSchematicUuid ?? null })
+			let afterTree: { project: any, nodes: ProjectNode[] }
+			try {
+				afterTree = await currentProjectTree(deadline, '复制后读取工程树')
+			}
+			catch (err) {
+				throw mutationUnknown('project.copySchematicPage readback', err, { projectUuid: project.uuid, pageUuid: uuid, sourcePageUuid, requestedSchematicUuid: expectedParent })
+			}
+			const { project: afterProject, nodes: afterNodes } = afterTree
+			if (afterProject.uuid !== project.uuid || !afterNodes.some(node => node.itemType === 'Schematic Page' && node.uuid === uuid && node.parentSchematicUuid === expectedParent))
+				throw mutationUnknown('project.copySchematicPage readback', '新图页未出现在当前工程目标原理图下', { projectUuid: project.uuid, pageUuid: uuid, sourcePageUuid, requestedSchematicUuid: expectedParent })
 			return {
 				pageUuid: uuid,
-				name: info?.name ?? null,
-				parentSchematicUuid: info?.parentSchematicUuid ?? info?.schematicUuid ?? null,
+				name: info.name,
+				parentSchematicUuid: info.parentSchematicUuid,
 				sourcePageUuid,
-				...(targetSchematic && info?.parentSchematicUuid && info.parentSchematicUuid !== targetSchematic
-					? { warning: `新页归属 ${info.parentSchematicUuid} 与目标原理图 ${targetSchematic} 不一致（官方行为异常），请复核` }
-					: {}),
 			}
 		},
 	},
@@ -611,11 +1005,52 @@ export const projectCommands: Array<ICommandDef> = [
 		returns: '{ pcbUuid }',
 		example: { cmd: 'project.createPcb' },
 		handler: async (params) => {
-			const uuid = await eda.dmt_Pcb.createPcb(
-				params.boardName ? String(params.boardName) : undefined,
-			)
-			if (!uuid)
-				throw new Error(`PCB 创建失败（官方返回空${params.boardName ? '；boardName 必须是已存在的板子名，不存在时会静默失败，可留空自动创建' : ''}）`)
+			if (params.boardName !== undefined && (typeof params.boardName !== 'string' || !params.boardName))
+				throw new Error('boardName 必须是非空字符串；创建游离 PCB 请省略参数')
+			const deadline = createOperationDeadline(params, 'project.createPcb')
+			const boardName = params.boardName as string | undefined
+			const { project, nodes } = await currentProjectTree(deadline, '读取 PCB 创建前工程树')
+			const targetBoard = boardName ? nodes.find(node => node.itemType === 'Board' && node.name === boardName) : undefined
+			if (boardName && !targetBoard)
+				throw new Error(`当前工程 ${project.uuid} 中不存在精确匹配的 Board ${boardName}，未创建 PCB`)
+			if (boardName && targetBoard && targetBoard.pcb != null)
+				throw new Error(`Board ${boardName} 的 PCB 槽已占用，未创建 PCB`)
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核 PCB 创建工程树')
+			if (boardName) {
+				const board = current.nodes.find(node => node.itemType === 'Board' && node.name === boardName)
+				if (!board || board.pcb !== null)
+					throw new Error(`Board ${boardName} 的 PCB 槽已改变，未创建 PCB`)
+			}
+			let uuid: unknown
+			deadline.check('发起创建前')
+			try {
+				uuid = await deadline.wait(() => eda.dmt_Pcb.createPcb(boardName), '创建 PCB', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.createPcb', err, { projectUuid: project.uuid, requestedBoardName: boardName ?? null })
+			}
+			if (typeof uuid !== 'string' || !uuid)
+				throw mutationUnknown('project.createPcb', 'SDK 返回空 UUID', { projectUuid: project.uuid, requestedBoardName: boardName ?? null })
+			let verified = false
+			try {
+				for (let attempt = 0; attempt < 4; attempt++) {
+					const after = await currentProjectTree(deadline, '创建后读取工程树').catch(() => undefined)
+					if (after && after.project.uuid === project.uuid) {
+						const pcb = after.nodes.find(node => node.itemType === 'PCB' && node.uuid === uuid)
+						const board = boardName ? after.nodes.find(node => node.itemType === 'Board' && node.name === boardName) : undefined
+						verified = Boolean(pcb && (boardName ? board?.pcb?.uuid === uuid && pcb.parentBoardName === boardName : !pcb?.parentBoardName && !after.nodes.some(node => node.itemType === 'Board' && node.pcb?.uuid === uuid)))
+						if (verified)
+						break
+					}
+					if (attempt < 3)
+						await deadline.wait(() => new Promise(resolve => setTimeout(resolve, 500)), '等待 PCB 创建同步', true)
+				}
+			}
+			catch (err) {
+				throw mutationUnknown('project.createPcb readback', err, { projectUuid: project.uuid, pcbUuid: uuid, requestedBoardName: boardName ?? null })
+			}
+			if (!verified)
+				throw mutationUnknown('project.createPcb readback', '新 PCB 类型、工程归属或板槽归属不匹配/未读到', { projectUuid: project.uuid, pcbUuid: uuid, requestedBoardName: boardName ?? null })
 			return { pcbUuid: uuid, note: '新建 PCB 需在 EDA 界面打开渲染一次后，写操作才会被官方 API 接受' }
 		},
 	},
@@ -631,8 +1066,27 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.pcbUuid)
 				throw new Error('缺少参数 pcbUuid')
+			const deadline = createOperationDeadline(params, 'project.copyPcb')
 			const sourcePcbUuid = String(params.pcbUuid)
-			const boardName = params.boardName ? String(params.boardName) : undefined
+			if (params.boardName !== undefined && (typeof params.boardName !== 'string' || !params.boardName))
+				throw new Error('boardName 必须是非空字符串；创建游离副本请省略参数')
+			const boardName = params.boardName as string | undefined
+			const { project, nodes } = await currentProjectTree(deadline, '读取复制前工程树')
+			if (!nodes.some(node => node.itemType === 'PCB' && node.uuid === sourcePcbUuid))
+				throw new Error(`源 PCB ${sourcePcbUuid} 不属于当前工程 ${project.uuid}，未复制`)
+			const targetBoard = boardName ? nodes.find(node => node.itemType === 'Board' && node.name === boardName) : undefined
+			if (boardName && !targetBoard)
+				throw new Error(`当前工程 ${project.uuid} 中不存在精确匹配的 Board ${boardName}，未复制 PCB`)
+			if (boardName && targetBoard && targetBoard.pcb != null)
+				throw new Error(`Board ${boardName} 的 PCB 槽已占用，未复制 PCB`)
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核 PCB 复制工程树')
+			if (!current.nodes.some(node => node.itemType === 'PCB' && node.uuid === sourcePcbUuid))
+				throw new Error(`源 PCB ${sourcePcbUuid} 已不在当前工程 ${project.uuid}，未复制`)
+			if (boardName) {
+				const board = current.nodes.find(node => node.itemType === 'Board' && node.name === boardName)
+				if (!board || board.pcb !== null)
+					throw new Error(`Board ${boardName} 的 PCB 槽已改变，未复制 PCB`)
+			}
 			const unknownResult = (operationError: unknown) => new Error(
 				`PCB 复制结果未知（源 PCB ${sourcePcbUuid}，请求 boardName=${boardName ?? '未提供'}）。官方调用可能已创建副本，也可能尚未创建；请先用 project.getInfo / project.listPcbs 核对是否生成副本，再决定后续操作；不要自动重试。原始错误：${operationError instanceof Error ? operationError.message : String(operationError)}`,
 				{
@@ -641,19 +1095,45 @@ export const projectCommands: Array<ICommandDef> = [
 						retryable: false,
 						phase: 'project.copyPcb',
 						operationError: operationError instanceof Error ? operationError.message : String(operationError),
-						result: { sourcePcbUuid, requestedBoardName: boardName ?? null, pcbUuid: 'unknown' },
+						result: { projectUuid: project.uuid, sourcePcbUuid, requestedBoardName: boardName ?? null, pcbUuid: 'unknown' },
 					},
 				},
 			)
-			let uuid: string | undefined
+			let uuid: unknown
+			deadline.check('发起复制前')
 			try {
-				uuid = await eda.dmt_Pcb.copyPcb(sourcePcbUuid, boardName)
+				uuid = await deadline.wait(() => eda.dmt_Pcb.copyPcb(sourcePcbUuid, boardName), '复制 PCB', true)
 			}
 			catch (err) {
 				throw unknownResult(err)
 			}
-			if (!uuid)
+			if (typeof uuid !== 'string' || !uuid || uuid === sourcePcbUuid)
 				throw unknownResult('SDK 返回空值')
+			try {
+				let verified = false
+				for (let attempt = 0; attempt < 4; attempt++) {
+					const after = await currentProjectTree(deadline, '复制后读取工程树').catch((err) => {
+						deadline.check('复制后读取工程树', true)
+						return undefined
+					})
+					if (after && after.project.uuid === project.uuid) {
+						const copiedPcb = after.nodes.find(node => node.itemType === 'PCB' && node.uuid === uuid)
+						const copiedBoard = boardName ? after.nodes.find(node => node.itemType === 'Board' && node.name === boardName) : undefined
+						verified = Boolean(copiedPcb && (boardName
+							? copiedBoard?.pcb?.uuid === uuid && copiedPcb.parentBoardName === boardName
+							: !copiedPcb.parentBoardName && !after.nodes.some(node => node.itemType === 'Board' && node.pcb?.uuid === uuid)))
+						if (verified)
+							break
+					}
+					if (attempt < 3)
+						await deadline.wait(() => new Promise(resolve => setTimeout(resolve, 500)), '等待 PCB 复制同步', true)
+				}
+				if (!verified)
+					throw new Error(`新 PCB ${uuid} 未能在工程 ${project.uuid} 的${boardName ? `Board ${boardName} PCB 槽` : '游离文档'}中读回确认`)
+			}
+			catch (err) {
+				throw unknownResult(err)
+			}
 			return { pcbUuid: uuid }
 		},
 	},
@@ -668,8 +1148,41 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.pcbUuid)
 				throw new Error('缺少参数 pcbUuid')
-			const deleted = await eda.dmt_Pcb.deletePcb(String(params.pcbUuid))
-			return { deleted: Boolean(deleted) }
+			const deadline = createOperationDeadline(params, 'project.deletePcb')
+			const pcbUuid = String(params.pcbUuid)
+			const { project, nodes } = await currentProjectTree(deadline, '读取 PCB 删除前工程树')
+			if (!nodes.some(node => node.itemType === 'PCB' && node.uuid === pcbUuid))
+				throw new Error(`当前工程 ${project.uuid} 的完整文档树中不存在 PCB ${pcbUuid}，未删除`)
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核 PCB 删除工程树')
+			if (!current.nodes.some(node => node.itemType === 'PCB' && node.uuid === pcbUuid))
+				throw new Error(`PCB ${pcbUuid} 已不在当前工程 ${project.uuid}，未删除`)
+			let deleted: unknown
+			deadline.check('发起删除前')
+			try {
+				deleted = await deadline.wait(() => eda.dmt_Pcb.deletePcb(pcbUuid), '删除 PCB', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.deletePcb', err, { projectUuid: project.uuid, pcbUuid })
+			}
+			let remains: boolean
+			let unchanged: boolean
+			try {
+				const after = await deadline.wait(() => eda.dmt_Project.getCurrentProjectInfo(), '读取 PCB 删除后工程树', true)
+				unchanged = projectTreeUnchanged(project, after)
+				remains = projectData(after, project.uuid).some(node => node.itemType === 'PCB' && node.uuid === pcbUuid)
+			}
+			catch (err) {
+				throw mutationUnknown('project.deletePcb readback', err, { projectUuid: project.uuid, pcbUuid, sdkReturned: deleted })
+			}
+			if (deleted === false && remains && unchanged)
+				throw new Error('官方返回 false，PCB 仍在当前工程树中，未删除', {
+					cause: { partial: false, retryable: false, phase: 'project.deletePcb', projectUuid: project.uuid, pcbUuid, sdkReturned: false, remains: true },
+				})
+			if (deleted !== true || remains)
+				throw new Error(`PCB 删除结果矛盾或未确认（SDK=${String(deleted)}，读回仍存在=${remains}）`, {
+					cause: { partial: true, retryable: false, phase: 'project.deletePcb verify', projectUuid: project.uuid, pcbUuid, sdkReturned: deleted, remains, treeUnchanged: unchanged },
+				})
+			return { deleted: true }
 		},
 	},
 	{
@@ -711,46 +1224,53 @@ export const projectCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.boardName)
 				throw new Error('缺少参数 boardName')
+			const deadline = createOperationDeadline(params, 'project.deleteBoard')
 			const boardName = String(params.boardName)
-			const deleted = await eda.dmt_Board.deleteBoard(boardName)
-			if (deleted)
+			const { project, nodes } = await currentProjectTree(deadline, '读取 Board 删除前工程树')
+			if (!nodes.some(node => node.itemType === 'Board' && node.name === boardName))
+				throw new Error(`当前工程 ${project.uuid} 的完整文档树中不存在 Board ${boardName}，未删除`)
+			const current = await confirmCurrentProject(deadline, project.uuid, '写入前复核 Board 删除工程树')
+			if (!current.nodes.some(node => node.itemType === 'Board' && node.name === boardName))
+				throw new Error(`Board ${boardName} 已不在当前工程 ${project.uuid}，未删除`)
+			let deleted: unknown
+			deadline.check('发起删除前')
+			try {
+				deleted = await deadline.wait(() => eda.dmt_Board.deleteBoard(boardName), '删除 Board', true)
+			}
+			catch (err) {
+				throw mutationUnknown('project.deleteBoard', err, { projectUuid: project.uuid, boardName })
+			}
+			let afterNodes: ProjectNode[]
+			let unchanged: boolean
+			try {
+				const after = await deadline.wait(() => eda.dmt_Project.getCurrentProjectInfo(), '读取 Board 删除后工程树', true)
+				unchanged = projectTreeUnchanged(project, after)
+				afterNodes = projectData(after, project.uuid)
+			}
+			catch (err) {
+				throw mutationUnknown('project.deleteBoard readback', err, { projectUuid: project.uuid, boardName, sdkReturned: deleted })
+			}
+			const boardRemains = afterNodes.some(node => node.itemType === 'Board' && node.name === boardName)
+			if (deleted === true && !boardRemains)
 				return { deleted: true }
 			// 官方返回 false 时读取当前实际状态，不把历史故障或猜测当作本次原因。
-			let diagnostics: Record<string, any> | undefined
-			try {
-				const info: any = await eda.dmt_Project.getCurrentProjectInfo()
-				const boards: Array<any> = []
-				const walkDocs = (node: any) => {
-					if (!node || typeof node !== 'object')
-						return
-					if (node.itemType === 'Board')
-						boards.push({ name: node.name, uuid: node.uuid, schematic: node.schematic ? { uuid: node.schematic.uuid, pages: (node.schematic.page ?? []).length } : null, pcb: node.pcb?.uuid ?? null })
-					for (const v of Object.values(node)) {
-						if (v && typeof v === 'object') {
-							if (Array.isArray(v)) {
-								for (const it of v)
-									walkDocs(it)
-							}
-							else
-								walkDocs(v)
-						}
-					}
-				}
-				walkDocs(info?.data ?? info)
-				const target = boards.find(b => String(b.name) === boardName)
-				diagnostics = {
-					boardExists: Boolean(target),
-					boards: boards.map(b => b.name),
-					target: target ?? '未在工程文档树中找到该板',
-					likelyCauses: target
-						? ['官方删除接口返回 false，目标板仍存在；具体失败原因尚未由接口提供']
-						: ['板名不存在（注意大小写/空格；可先 project.getInfo 核对板名清单）'],
-				}
+			const boards = afterNodes.filter(node => node.itemType === 'Board').map(b => ({ name: b.name, uuid: b.uuid, schematic: b.schematic ? { uuid: b.schematic.uuid, pages: (b.schematic.page ?? []).length } : null, pcb: b.pcb?.uuid ?? null }))
+			const target = boards.find(b => String(b.name) === boardName)
+			const diagnostics: Record<string, any> = {
+				boardExists: Boolean(target),
+				boards: boards.map(b => b.name),
+				target: target ?? '未在工程文档树中找到该板',
+				likelyCauses: target
+					? ['官方删除接口返回 false，目标板仍存在；具体失败原因尚未由接口提供']
+					: ['官方返回值与读回状态不一致，目标板已不存在'],
 			}
-			catch (e) {
-				diagnostics = { note: `诊断信息采集失败：${(e as Error)?.message ?? e}` }
-			}
-			return { deleted: false, diagnostics }
+			if (deleted === false && boardRemains && unchanged)
+				throw new Error('官方返回 false，Board 仍在当前工程树中，未删除', {
+					cause: { partial: false, retryable: false, phase: 'project.deleteBoard', projectUuid: project.uuid, boardName, sdkReturned: false, remains: true, diagnostics },
+				})
+			throw new Error(`Board 删除结果矛盾（SDK=${String(deleted)}，读回仍存在=${boardRemains}）`, {
+				cause: { partial: true, retryable: false, phase: 'project.deleteBoard verify', projectUuid: project.uuid, boardName, sdkReturned: deleted, remains: boardRemains, treeUnchanged: unchanged, diagnostics },
+			})
 		},
 	},
 	{

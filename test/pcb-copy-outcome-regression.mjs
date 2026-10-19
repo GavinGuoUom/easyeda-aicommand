@@ -25,6 +25,25 @@ for (const command of projectCommands) registerCommand(command)
 const copyPcb = projectCommands.find(command => command.name === 'project.copyPcb')
 assert.ok(copyPcb)
 
+function makeProjectTree() {
+	return {
+		uuid: 'project-1',
+		teamUuid: 'team-1',
+		data: [
+			{ itemType: 'Board', name: 'Board1', parentProjectUuid: 'project-1', schematic: null, pcb: { itemType: 'PCB', uuid: 'source-pcb', name: 'PCB1', parentProjectUuid: 'project-1', parentBoardName: 'Board1' } },
+			{ itemType: 'Board', name: 'Board1_1', parentProjectUuid: 'project-1', schematic: null, pcb: null },
+		],
+	}
+}
+
+function copyIntoTree(tree, uuid, boardName) {
+	const pcb = { itemType: 'PCB', uuid, name: uuid, parentProjectUuid: tree.uuid, ...(boardName ? { parentBoardName: boardName } : {}) }
+	if (boardName)
+		tree.data.find(node => node.itemType === 'Board' && node.name === boardName).pcb = pcb
+	else
+		tree.data.push(pcb)
+}
+
 let markerWrites = 0
 registerCommand({
 	name: 'test.markerWrite', summary: 'marker', params: [], returns: '{}',
@@ -33,18 +52,18 @@ registerCommand({
 
 async function rejectsUnknown(params, configureSdk, label, expectedBoardName) {
 	let copies = 0
-	let extraApiCalls = 0
+	let treeReads = 0
+	const project = makeProjectTree()
 	let copySideEffects = 0
 	globalThis.eda = {
 		dmt_Pcb: {
 			copyPcb: async (...args) => {
 				copies++
 				assert.deepEqual(args, ['source-pcb', expectedBoardName])
-				return configureSdk(() => { copySideEffects++ })
+				return configureSdk(() => { copySideEffects++; copyIntoTree(project, 'side-effect-copy', expectedBoardName) })
 			},
-			getAllPcbsInfo: async () => { extraApiCalls++; return [] },
 		},
-		dmt_Project: { getCurrentProjectInfo: async () => { extraApiCalls++; return {} } },
+		dmt_Project: { getCurrentProjectInfo: async () => { treeReads++; return structuredClone(project) } },
 	}
 	await assert.rejects(copyPcb.handler(params), error => {
 		assert.equal(error.cause?.partial, true, label)
@@ -62,58 +81,63 @@ async function rejectsUnknown(params, configureSdk, label, expectedBoardName) {
 		return true
 	})
 	assert.equal(copies, 1, `${label}: SDK copy called once`)
-	assert.equal(extraApiCalls, 0, `${label}: no other SDK calls or implicit readback`)
+	assert.equal(treeReads, 2, `${label}: complete tree is rechecked immediately before the one SDK write; unknown SDK outcome is not retried or read back`)
 	assert.equal(copySideEffects, label === 'SDK throw after write' ? 1 : 0, `${label}: simulated SDK side effect is tracked independently from calls`)
 }
 
 {
 	let copies = 0
-	let otherWrites = 0
+	let treeReads = 0
+	let writes = 0
+	const project = makeProjectTree()
 	globalThis.eda = {
 		dmt_Pcb: {
-			copyPcb: async (...args) => { copies++; assert.deepEqual(args, ['source-pcb', 'BoardTarget']); return 'copy-pcb' },
-			getAllPcbsInfo: async () => { otherWrites++; return [] },
+			copyPcb: async (...args) => { copies++; assert.deepEqual(args, ['source-pcb', 'Board1_1']); writes++; copyIntoTree(project, 'copy-pcb', 'Board1_1'); return 'copy-pcb' },
 		},
-		dmt_Project: { getCurrentProjectInfo: async () => { otherWrites++; return {} } },
+		dmt_Project: { getCurrentProjectInfo: async () => { treeReads++; return structuredClone(project) } },
 	}
-	assert.deepEqual(await copyPcb.handler({ pcbUuid: 'source-pcb', boardName: 'BoardTarget' }), { pcbUuid: 'copy-pcb' })
+	assert.deepEqual(await copyPcb.handler({ pcbUuid: 'source-pcb', boardName: 'Board1_1' }), { pcbUuid: 'copy-pcb' })
 	assert.equal(copies, 1)
-	assert.equal(otherWrites, 0)
+	assert.equal(treeReads, 3, 'complete tree read in preflight, immediately before the single copy, and after it')
+	assert.equal(writes, 1, 'only copyPcb is a write')
+	assert.equal(project.data.find(node => node.name === 'Board1').pcb.uuid, 'source-pcb', 'source PCB remains unchanged')
+	assert.equal(project.data.find(node => node.name === 'Board1_1').pcb.uuid, 'copy-pcb', 'new PCB belongs to the real empty Board')
 }
 
 {
 	let copies = 0
-	let otherWrites = 0
+	let treeReads = 0
+	const project = makeProjectTree()
 	globalThis.eda = {
 		dmt_Pcb: {
-			copyPcb: async (...args) => { copies++; assert.deepEqual(args, ['source-pcb', undefined]); return 'loose-copy' },
-			getAllPcbsInfo: async () => { otherWrites++; return [] },
+			copyPcb: async (...args) => { copies++; assert.deepEqual(args, ['source-pcb', undefined]); copyIntoTree(project, 'loose-copy'); return 'loose-copy' },
 		},
-		dmt_Project: { getCurrentProjectInfo: async () => { otherWrites++; return {} } },
+		dmt_Project: { getCurrentProjectInfo: async () => { treeReads++; return structuredClone(project) } },
 	}
 	assert.deepEqual(await copyPcb.handler({ pcbUuid: 'source-pcb' }), { pcbUuid: 'loose-copy' })
 	assert.equal(copies, 1)
-	assert.equal(otherWrites, 0)
+	assert.equal(treeReads, 3)
+	assert.equal(project.data.at(-1).uuid, 'loose-copy', 'omitted target keeps the unlinked copy path')
 }
 
-await rejectsUnknown({ pcbUuid: 'source-pcb', boardName: 'BoardTarget' }, () => undefined, 'empty SDK return', 'BoardTarget')
+await rejectsUnknown({ pcbUuid: 'source-pcb', boardName: 'Board1_1' }, () => undefined, 'empty SDK return', 'Board1_1')
 await rejectsUnknown({ pcbUuid: 'source-pcb' }, () => { throw new Error('SDK copy rejected') }, 'SDK throw', undefined)
-await rejectsUnknown({ pcbUuid: 'source-pcb', boardName: 'BoardTarget' }, recordWrite => {
+await rejectsUnknown({ pcbUuid: 'source-pcb', boardName: 'Board1_1' }, recordWrite => {
 	recordWrite()
 	throw new Error('SDK threw after creating copy')
-}, 'SDK throw after write', 'BoardTarget')
+}, 'SDK throw after write', 'Board1_1')
 
 
 async function checkMacroStopsAfterUnknown(configureSdk, label) {
 	let copies = 0
 	let markerWrites = 0
-	let extraApiCalls = 0
+	let treeReads = 0
+	const project = makeProjectTree()
 	globalThis.eda = {
 		dmt_Pcb: {
 			copyPcb: async () => { copies++; return configureSdk() },
-			getAllPcbsInfo: async () => { extraApiCalls++; return [] },
 		},
-		dmt_Project: { getCurrentProjectInfo: async () => { extraApiCalls++; return {} } },
+		dmt_Project: { getCurrentProjectInfo: async () => { treeReads++; return structuredClone(project) } },
 	}
 	registerCommand({
 		name: 'test.markerWrite', summary: 'marker', params: [], returns: '{}',
@@ -129,7 +153,7 @@ async function checkMacroStopsAfterUnknown(configureSdk, label) {
 		assert.equal(result.data.steps[0].error.cause.operationError, 'SDK copy rejected')
 	assert.equal(markerWrites, 0, `${label}: partial copy result blocks dependent macro write`)
 	assert.equal(copies, 1, `${label}: copy is invoked once`)
-	assert.equal(extraApiCalls, 0, `${label}: no implicit readback or extra API call`)
+	assert.equal(treeReads, 2, `${label}: preflight and immediate pre-write checks occur before the unknown write outcome`)
 }
 
 await checkMacroStopsAfterUnknown(() => undefined, 'empty SDK result')
@@ -137,17 +161,17 @@ await checkMacroStopsAfterUnknown(() => { throw new Error('SDK copy rejected') }
 
 {
 	let copies = 0
-	let extraApiCalls = 0
+	let treeReads = 0
+	const project = makeProjectTree()
 	globalThis.eda = {
 		dmt_Pcb: {
 			copyPcb: async () => { copies++; return undefined },
-			getAllPcbsInfo: async () => { extraApiCalls++; return [] },
 		},
-		dmt_Project: { getCurrentProjectInfo: async () => { extraApiCalls++; return {} } },
+		dmt_Project: { getCurrentProjectInfo: async () => { treeReads++; return structuredClone(project) } },
 	}
 	await assert.rejects(copyPcb.handler({ pcbUuid: 'source-pcb' }), /结果未知.*SDK 返回空值/)
 	assert.equal(copies, 1)
-	assert.equal(extraApiCalls, 0)
+	assert.equal(treeReads, 2)
 }
 
 console.log('pcb-copy-outcome-regression: 7 scenarios passed')

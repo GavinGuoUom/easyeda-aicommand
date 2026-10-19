@@ -1,11 +1,13 @@
 ---
 name: ai-command-engine
-description: Use the AI Command Engine to query, draw, modify, and inspect EasyEDA Pro schematics, PCBs, projects, and libraries over local HTTP. For extension development and debugging, use extension-dev-skill.
+description: Use local HTTP commands to query, draw, modify, and inspect EasyEDA Pro schematics, PCBs, projects, and libraries. Use extension-dev-skill for extension development and debugging.
 ---
 
 # AI Command Engine
 
-Use this skill to operate EasyEDA Pro. For connection setup, instance selection, and parameter lookup, see [Connection and setup](references/setup.md). [简体中文](SKILL_ZH.md)
+Use this skill to operate EasyEDA Pro. See [Connection and setup](references/setup.md) for connection, instance selection, and parameter lookup. [简体中文](SKILL_ZH.md)
+
+The v0.20.50 Chinese package exposes the menu entry “AI 指令引擎” (“AI Command Engine”), including “指令列表…” (“Command List…”) and bridge operations. Command names and JSON parameters are unchanged. The 14 features currently paused for EDA 4.1.78 remain rejected as stated in the version notes.
 
 ## Operating boundaries
 
@@ -13,6 +15,7 @@ Use this skill to operate EasyEDA Pro. For connection setup, instance selection,
 - Back up before destructive operations. Only one writer may operate on a window at a time.
 - If a write result is unknown, stop relying on it and read back the current state before proceeding. Do not blindly resend.
 - At each stage, check save state and untouched content. Command success, a screenshot, or zero DRC errors alone does not prove the design is acceptable.
+- Commands unsupported by EDA 4.1.78 are listed in [PCB low-frequency commands](references/commands-pcb-low.md#eda-version-limitations) and [schematic low-frequency commands](references/commands-schematic-low.md#eda-version-limitations). They require EDA 4.2 or later; EDA 4.2 has not been accepted on a real host.
 
 ## Choose files by task
 

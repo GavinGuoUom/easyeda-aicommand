@@ -14,6 +14,24 @@ export interface IDocumentSnapshot {
 
 export type TDocumentWrite = <T>(action: () => Promise<T>, beforeWrite?: () => void) => Promise<T>
 
+export interface IDocumentRecoveryHookContext {
+	snapshot: IDocumentSnapshot
+	operationError: unknown
+	write: TDocumentWrite
+}
+
+export interface IDocumentRecoveryHookResult {
+	/** True only when the hook verified full recovery; false means recovery is uncertain. */
+	restored: boolean
+	/** Diagnostic details. Wrapper-owned recovery fields always take precedence. */
+	cause?: Record<string, unknown>
+}
+
+export interface IDocumentRecoveryOptions {
+	recoveryHook?: (context: IDocumentRecoveryHookContext) => Promise<IDocumentRecoveryHookResult>
+	focusGuard?: () => Promise<void>
+}
+
 export interface IDocumentSourceComparison {
 	equal: boolean
 	difference?: string
@@ -22,6 +40,15 @@ export interface IDocumentSourceComparison {
 
 const EMPTY_NET_TOLERANCE_NORMALIZATION = 'PCB empty-net default NET_LENGTH_TOLERANCE'
 const DEFAULT_NET_TOLERANCE = ['default', null]
+const PRE_RECOVERY_READ_BUDGET_MS = 500
+
+function sourceDocTypeForDocumentType(documentType: number): string | undefined {
+	if (documentType === 1)
+		return 'SCH_PAGE'
+	if (documentType === 3)
+		return 'PCB'
+	return undefined
+}
 
 function orderedValue(value: any): any {
 	if (Array.isArray(value))
@@ -197,10 +224,12 @@ async function currentDocument(): Promise<any> {
 }
 
 /** Read and persist an exact source snapshot, requiring focus and SDK storage readback before writes. */
-export async function captureDocumentSnapshot(command: string, documentType: number): Promise<IDocumentSnapshot> {
+export async function captureDocumentSnapshot(command: string, documentType: number, expectedDocumentUuid?: string): Promise<IDocumentSnapshot> {
 	const before = await currentDocument()
 	if (!before?.uuid || before.documentType !== documentType)
 		throw new Error(`快照前焦点文档类型或 UUID 无效（${command}）`)
+	if (expectedDocumentUuid !== undefined && before.uuid !== expectedDocumentUuid)
+		throw new Error(`快照目标 UUID 与预期不一致（${command}：expected=${expectedDocumentUuid}, focus=${before.uuid}）；已拒绝读取或保存快照`)
 	const source = await eda.sys_FileManager.getDocumentSource()
 	if (typeof source !== 'string' || !source.trim())
 		throw new Error(`无法取得非空文档源码，已拒绝执行 ${command}`)
@@ -249,10 +278,12 @@ export async function assertSnapshotFocused(snapshot: IDocumentSnapshot): Promis
 export async function withDocumentRecovery<T>(
 	snapshot: IDocumentSnapshot,
 	operation: (write: TDocumentWrite) => Promise<T>,
+	options: IDocumentRecoveryOptions = {},
 ): Promise<T> {
 	let mayHaveWritten = false
+	const assertFocused = options.focusGuard ?? (() => assertSnapshotFocused(snapshot))
 	const write: TDocumentWrite = async <R>(action: () => Promise<R>, beforeWrite?: () => void): Promise<R> => {
-		await assertSnapshotFocused(snapshot)
+		await assertFocused()
 		mayHaveWritten = true
 		beforeWrite?.()
 		return await action()
@@ -260,12 +291,99 @@ export async function withDocumentRecovery<T>(
 
 	try {
 		const result = await operation(write)
-		await assertSnapshotFocused(snapshot)
+		await assertFocused()
 		return result
 	}
 	catch (operationError) {
 		if (!mayHaveWritten)
 			throw operationError
+
+		// A command-specific recovery owner must decide immediately. In particular, an unconfirmed
+		// primitive write cannot be declared unchanged by the generic source probe, nor may the
+		// generic whole-document source restore run after a specialized hook.
+		if (options.recoveryHook) {
+			let result: IDocumentRecoveryHookResult | undefined
+			let recoveryError: unknown
+			try {
+				result = await options.recoveryHook({ snapshot, operationError, write })
+			}
+			catch (error) {
+				recoveryError = error
+			}
+			const hookCause = result?.cause && typeof result.cause === 'object' ? result.cause : {}
+			if (result?.restored === true) {
+				throw new Error(`操作失败，专用恢复已读回确认：${messageOf(operationError)}`, {
+					cause: {
+						...hookCause,
+						partial: false,
+						restored: true,
+						contentRestored: true,
+						retryable: true,
+						operationError: messageOf(operationError),
+						recovery: recoveryCredential(snapshot),
+					},
+				})
+			}
+			throw new Error(`操作失败，专用恢复未能确认：${messageOf(operationError)}${recoveryError ? `；恢复错误：${messageOf(recoveryError)}` : ''}`, {
+				cause: {
+						...hookCause,
+					partial: true,
+					restored: false,
+					contentRestored: false,
+					retryable: false,
+					operationError: messageOf(operationError),
+					...(recoveryError ? { recoveryError: messageOf(recoveryError) } : {}),
+					recovery: recoveryCredential(snapshot),
+				},
+			})
+		}
+
+		// An operation can fail after a guarded write even when the host made no source change.
+		// Confirm that case with a bounded, focus-bound read before attempting a full restore.
+		let probeActive = true
+		let probeTimer: ReturnType<typeof setTimeout> | undefined
+		const probe = Promise.resolve().then(async () => {
+			await assertSnapshotFocused(snapshot)
+			if (!probeActive)
+				return undefined
+			const source = await eda.sys_FileManager.getDocumentSource()
+			if (!probeActive)
+				return undefined
+			if (typeof source !== 'string' || !source.trim())
+				return undefined
+			await assertSnapshotFocused(snapshot)
+			if (!probeActive)
+				return undefined
+			const parsed = parseSourceLog(source)
+			const expectedDocType = sourceDocTypeForDocumentType(snapshot.documentType)
+			if (parsed.uuid !== snapshot.documentUuid || !expectedDocType || parsed.docType !== expectedDocType)
+				return undefined
+			const comparison = compareDocumentSources(snapshot.source, source)
+			return comparison.equal ? comparison : undefined
+		}).then(value => ({ completed: true as const, value }), () => ({ completed: true as const, value: undefined }))
+		const probeTimeout = new Promise<{ completed: false }>((resolve) => {
+			probeTimer = setTimeout(() => {
+				probeActive = false
+				resolve({ completed: false })
+			}, PRE_RECOVERY_READ_BUDGET_MS)
+		})
+		const probeResult = await Promise.race([probe, probeTimeout])
+		if (probeTimer)
+			clearTimeout(probeTimer)
+		probeActive = false
+		if (probeResult.completed && probeResult.value?.equal) {
+			throw new Error(`操作失败，读回确认原文档内容未变，未执行恢复写入：${messageOf(operationError)}`, {
+				cause: {
+					restored: true,
+					contentRestored: true,
+					noRecoveryWriteNeeded: true,
+					retryable: true,
+					operationError: messageOf(operationError),
+					normalizations: probeResult.value.normalizations ?? [],
+					recovery: recoveryCredential(snapshot),
+				},
+			})
+		}
 
 		let restoreError: unknown
 		let restoreSucceeded = false

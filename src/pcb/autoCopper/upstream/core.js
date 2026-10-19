@@ -734,9 +734,9 @@ export function createCopperCore(namespace, clipping, mathSdk) {
 						.filter(points => points.length >= 3);
 				}
 
-				function shouldReduceTargetExpansion(target, desiredMargin, obstacles) {
+				function findTargetExpansionBlockers(target, desiredMargin, obstacles) {
 					if (!isPadLikeTarget(target) || desiredMargin <= 0 || !Array.isArray(obstacles) || obstacles.length === 0) {
-						return false;
+						return [];
 					}
 
 					const targetKey = getTargetKey(target);
@@ -748,22 +748,25 @@ export function createCopperCore(namespace, clipping, mathSdk) {
 						[],
 					));
 					if (contour.length < 3) {
-						return false;
+						return [];
 					}
 
-					return obstacles.some((obstacle) => {
+					for (const obstacle of obstacles) {
 						if (getTargetKey(obstacle) === targetKey) {
-							return false;
+							continue;
 						}
 
 						const obstacleNet = normalizeNetName(obstacle.net);
 						if (targetNet && obstacleNet && targetNet === obstacleNet) {
-							return false;
+							continue;
 						}
 
 						const forbiddenPolygons = makeTargetExpansionObstaclePolygons(obstacle);
-						return forbiddenPolygons.some(polygon => polygonsOverlap(contour, polygon));
-					});
+						if (forbiddenPolygons.some(polygon => polygonsOverlap(contour, polygon))) {
+							return [obstacle];
+						}
+					}
+					return [];
 				}
 
 				function applyDrcAwareTargetMargins(targets, config, obstacles) {
@@ -777,15 +780,27 @@ export function createCopperCore(namespace, clipping, mathSdk) {
 
 					let reducedCount = 0;
 					const adjustedTargets = targets.map((target) => {
-						if (!shouldReduceTargetExpansion(target, desiredMargin, obstacles)) {
+						const blockers = findTargetExpansionBlockers(target, desiredMargin, obstacles);
+						if (blockers.length === 0) {
 							return target;
 						}
 
 						reducedCount += 1;
+						const expansionBlockers = blockers.map(obstacle => ({
+							primitiveId: obstacle.primitiveId ?? null,
+							type: obstacle.type ?? null,
+							net: obstacle.net ?? null,
+							layer: obstacle.layer ?? null,
+							clearanceMil: obstacle.clearanceMil ?? null,
+							clearanceRuleSource: obstacle.clearanceRuleSource ?? null,
+							clearanceRulePath: obstacle.clearanceRulePath ?? null,
+							trigger: 'firstTrigger',
+						}));
 						return {
 							...target,
 							boundaryMargin: 0,
 							autoReducedExpansion: true,
+							expansionBlockers,
 						};
 					});
 

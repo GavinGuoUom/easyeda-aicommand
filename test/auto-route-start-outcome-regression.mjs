@@ -24,10 +24,13 @@ async function main() {
 
 	function install({ startFailure = undefined, startState = 'READY_TO_START' } = {}) {
 		const calls = [];
+		const edaCalls = [];
+		let jobState = startState;
 		const dsnFile = new Blob(['dsn']);
 		Object.defineProperty(dsnFile, 'name', { value: 'design.dsn' });
 		globalThis.eda = {
-			pcb_ManufactureData: { getDsnFile: async () => dsnFile },
+			dmt_SelectControl: { getCurrentDocumentInfo: async () => { edaCalls.push('getCurrentDocumentInfo'); return { documentType: 3, uuid: 'pcb-A' } } },
+			pcb_ManufactureData: { getDsnFile: async () => { edaCalls.push('getDsnFile'); return dsnFile } },
 			sys_ClientUrl: {
 				request: async (url, method, body) => {
 					calls.push({ url, method, body });
@@ -36,6 +39,8 @@ async function main() {
 					if (startFailure === 'http' && method === 'PUT' && url.endsWith('/jobs/job-A/start')) {
 						return { ok: false, status: 500, text: async () => 'start refused' };
 					}
+					if (method === 'PUT' && url.endsWith('/jobs/job-A/cancel'))
+						jobState = 'CANCELLED';
 					return {
 						ok: true,
 						status: 200,
@@ -47,20 +52,26 @@ async function main() {
 							if (url.endsWith('/jobs/job-A/start'))
 								return { state: startState };
 							if (url.endsWith('/jobs/job-A'))
-								return { state: startState, stage: 'queued', current_pass: 0 };
+								return { state: jobState, stage: 'queued', current_pass: 0 };
 							return {};
 						},
 					};
 				},
 			},
 		};
-		return calls;
+		return { calls, edaCalls };
 	}
 
 	const status = pcbCommands.find(command => command.name === 'pcb.autoRouteStatus');
 	const stop = pcbCommands.find(command => command.name === 'pcb.autoRouteStop');
+	const invalidCalls = install();
+	for (const skipDrc of [null, 'false', 1])
+		await assert.rejects(() => start.handler({ skipDrc }, {}), /skipDrc 必须是布尔值/);
+	for (const noImport of [null, 'true', 0])
+		await assert.rejects(() => status.handler({ noImport }, {}), /noImport 必须是布尔值/);
+	assert.deepEqual(invalidCalls, { calls: [], edaCalls: [] }, 'invalid flags must be rejected before EDA or HTTP calls');
 	for (const startFailure of ['http', 'transport']) {
-		const failedCalls = install({ startFailure });
+		const { calls: failedCalls } = install({ startFailure });
 		const error = await start.handler({}, {}).catch(reason => reason);
 		assert.ok(error instanceof Error);
 		assert.equal(error.cause?.partial, true);
@@ -78,13 +89,13 @@ async function main() {
 		assert.equal(observed.jobId, 'job-A');
 		assert.equal(observed.state, 'READY_TO_START');
 		const cancelled = await stop.handler({}, {});
-		assert.deepEqual(cancelled, { cancelled: true, jobId: 'job-A' });
+		assert.deepEqual(cancelled, { cancelled: true, jobId: 'job-A', state: 'CANCELLED' });
 		assert.equal(failedCalls.some(call => call.method === 'GET' && call.url.endsWith('/jobs/job-A')), true);
 		assert.equal(failedCalls.some(call => call.method === 'PUT' && call.url.endsWith('/jobs/job-A/cancel')), true);
 	}
 
-	const calls = install({ startState: 'READY_TO_START' });
-	const result = await start.handler({}, {});
+	const { calls } = install({ startState: 'READY_TO_START' });
+	const result = await start.handler({ skipDrc: true }, {});
 	assert.equal(result.jobId, 'job-A');
 	assert.equal(result.outcome, 'start-request-submitted');
 	assert.equal(result.stateVerified, false);
@@ -92,7 +103,9 @@ async function main() {
 	assert.doesNotMatch(JSON.stringify(result), /RUNNING/);
 	assert.match(result.note, /查询任务实际状态/);
 	assert.match(result.note, /不要重复提交/);
-	assert.match(result.note, /清除全部未锁定线段、圆弧与过孔/);
+	assert.match(result.note, /状态查询只读/);
+	assert.match(result.note, /pcb\.importAutoRouteSes 导入/);
+	assert.doesNotMatch(result.note, /清除未锁定铜层走线|自动回灌/);
 	assert.equal(calls.filter(call => call.method === 'PUT' && call.url.endsWith('/jobs/job-A/start')).length, 1);
 	console.log('PASS autoRouteStart reports submission without claiming RUNNING and rejects API failure');
 }

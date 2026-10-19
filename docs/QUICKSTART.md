@@ -14,10 +14,10 @@
 
 ## 1. 下载仓库并安装代理依赖
 
-从 [v0.20.1 正式版源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.1.zip) 下载并解压到固定目录，或检出同一发布 tag：
+从 [v0.20.50 正式版源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.50.zip) 下载并解压到固定目录，或检出同一发布 tag：
 
 ```powershell
-git clone --branch v0.20.1 --depth 1 https://github.com/quhuii-lgtm/easyeda-aicommand.git
+git clone --branch v0.20.50 --depth 1 https://github.com/quhuii-lgtm/easyeda-aicommand.git
 Set-Location easyeda-aicommand
 ```
 
@@ -44,16 +44,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bridge\install-url-sch
 
 ## 2. 安装并连接 EDA 插件
 
-1. 从 [v0.20.1 GitHub 正式发布](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/tag/v0.20.1) 下载 [扩展包 `ai-command-engine_v0.20.1.eext`](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine_v0.20.1.eext)。若从中文嘉立创 EDA 市场安装，请由使用者上传市场包；市场审核和上架状态以市场页面为准。
+1. 从 [v0.20.50 GitHub 正式发布](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/tag/v0.20.50)下载[中文版扩展包 `ai-command-engine_v0.20.50_zh-CN.eext`](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/ai-command-engine_v0.20.50_zh-CN.eext)。中文版嘉立创 EDA 市场包已重新提交，正在审核；公开上架版本仍为 v0.10.143，v0.20.50 尚未确认通过审核或上架。
 2. 在 EDA 的扩展/插件管理界面导入该 `.eext`，启用插件并勾选“允许外部交互”。不同 EDA 版本菜单位置可能不同，以当前客户端的插件导入入口为准。
 3. 新建一个用于试用的空白工程及原理图页，打开该页。
-4. 在“AI Command”菜单使用“启动桥接”“停止桥接”或“重新连接桥接”。启动已连接的窗口是幂等操作；重新连接会先排空本窗口已有请求，再换连。停止会拒绝排队中的新写请求，交付已派发请求的结果后再断开本窗口。partial 或结果不确定时停止会明确报告并保留写保护。
+4. 在“AI 指令引擎”菜单使用“启动桥接”“停止桥接”或“重新连接桥接”。启动已连接的窗口是幂等操作；重新连接会先排空本窗口已有请求，再换连。停止会拒绝排队中的新写请求，交付已派发请求的结果后再断开本窗口。partial 或结果不确定时停止会明确报告并保留写保护。
 
-v0.20.1 附件校验值见 [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/SHA256SUMS.txt)。
+v0.20.50 附件校验值见 [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/SHA256SUMS.txt)。
 
 可用 PowerShell `Get-FileHash -Algorithm SHA256 -LiteralPath '<下载的 eext 路径>'` 核对。校验值只适用于本次发布附件，不适用于自行重新打包的文件。
 
-v0.20.1 是 GitHub 正式版，不是预发布。类型检查、正式构建和 15 组现有回归通过；运行程序与原始候选包对照，仅发布元数据和路径标记不同。实际注册 205 条指令，不含 `cbb.*`、`module.*` 且无重名。该版本尚未安装到真实 EDA 宿主，不能据此声称完成实机验证。代理从 v0.20.1 源码包安装，技能请下载[同版本英文主版、中文备用技能 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine-skill_en-zh_v0.20.1.zip)，与扩展保持同一版本。细节见 [v0.20.1 版本说明](releases/v0.20.1_ZH.md)。升级后先在试用工程核对；从旧版升级需关闭并重新打开 EDA 窗口。
+v0.20.50 是中文菜单与文档打包版，核心逻辑继承 v0.20.49，本版不新增核心写入操作。类型检查、正式构建和 31 组现有模拟回归通过；运行程序去掉构建路径标记后与市场候选版本一致，manifest 字段无差异。发布包尚未重新安装到 EDA 宿主，不能据此声称完成本版实机验收。代理从 v0.20.50 源码包安装，技能请下载[同版本英文主版、中文备用技能 ZIP `ai-command-engine-skill_en-zh_v0.20.50.zip`](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/ai-command-engine-skill_en-zh_v0.20.50.zip)，与扩展保持同一版本。EDA 4.1.78 下，需要 4.2 的 14 条指令已停用；4.2 的正向执行尚未验收。`routeTrack` 与 SES 段的 1 mil 限制是插件输入策略，不是 SDK 限制；`pcb.connectComponentPadDirect` 暂停，`modifyPour` 改网/改名写前拒绝，自动 SES 回灌禁用。详见 [v0.20.50 版本说明](releases/v0.20.50_ZH.md)。升级后先在试用工程核对；从旧版升级需关闭并重新打开 EDA 窗口。
 
 ## 3. 完成第一次只读调用
 

@@ -17,7 +17,10 @@ export const knowledgeCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.query)
 				throw new Error('缺少参数 query')
-			const entries = queryRules(String(params.query), Number(params.limit) || 3)
+			const limit = params.limit === undefined ? 3 : Number(params.limit)
+			if (!Number.isSafeInteger(limit) || limit <= 0)
+				throw new Error('limit 必须是正整数')
+			const entries = queryRules(String(params.query), limit)
 			if (entries.length === 0)
 				return { matched: [], hint: '知识库暂无匹配条目，可按通用规则设计或先查询 knowledge.listRules' }
 			return { matched: entries }
@@ -44,7 +47,10 @@ export const knowledgeCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (params.currentA == null)
 				throw new Error('缺少参数 currentA')
-			const hit = widthForCurrent(Number(params.currentA))
+			const currentA = Number(params.currentA)
+			if (!Number.isFinite(currentA) || currentA <= 0)
+				throw new Error('currentA 必须是大于 0 的有限数值（A）')
+			const hit = widthForCurrent(currentA)
 			if (!hit)
 				throw new Error('超出知识库线宽表范围（>5A），请查 IPC-2221 完整表')
 			return hit

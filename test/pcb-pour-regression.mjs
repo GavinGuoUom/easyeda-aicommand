@@ -46,9 +46,9 @@ function hostSetOrder(pours, id, value) {
 	target.order = anchor.order + 1
 }
 
-function install({ pours = [pour('target', 2, 0)], apiPriority = 0, modify, sourceRead, focusRead } = {}) {
+function install({ pours = [pour('target', 2, 0)], apiPriority = 0, modify, netWrite, sourceRead, focusRead } = {}) {
 	const docs = structuredClone(pours)
-	const stats = { writes: [], sourceReads: 0 }
+	const stats = { writes: [], netWrites: [], writeCount: 0, sourceReads: 0 }
 	let focus = { documentType: 3, uuid: 'pcb-test' }
 	let focusReads = 0
 	const setFocus = next => { focus = next }
@@ -64,6 +64,19 @@ function install({ pours = [pour('target', 2, 0)], apiPriority = 0, modify, sour
 		getState_PourName: () => item.name,
 		getState_PourPriority: () => typeof apiPriority === 'function' ? apiPriority(item) : apiPriority,
 		getState_LineWidth: () => item.width,
+		toAsync() {
+			let stagedNet = item.netName
+			return {
+				setState_Net(value) { stagedNet = value; return this },
+				async done() {
+					stats.netWrites.push({ id: item.id, net: stagedNet })
+					stats.writeCount++
+					if (netWrite) return netWrite({ id: item.id, net: stagedNet, docs, stats })
+					item.netName = stagedNet
+					return pourObj(item)
+				},
+			}
+		},
 	})
 	globalThis.eda = {
 			dmt_SelectControl: { getCurrentDocumentInfo: readFocus },
@@ -77,12 +90,17 @@ function install({ pours = [pour('target', 2, 0)], apiPriority = 0, modify, sour
 		pcb_PrimitivePour: {
 			modify: async (id, props) => {
 				stats.writes.push({ id, props: { ...props } })
+				stats.writeCount++
 				if (modify) return modify({ id, props, docs, stats })
 				const item = docs.find(value => value.id === id)
-				const map = { net: 'netName', layer: 'layerId', pourName: 'name', lineWidth: 'width' }
+				const map = { layer: 'layerId', pourName: 'name', lineWidth: 'width' }
 				if ('pourPriority' in props) hostSetOrder(docs, id, props.pourPriority)
 				else for (const [key, value] of Object.entries(props)) item[map[key]] = value
 				return pourObj(item)
+			},
+			get: async id => {
+				const item = docs.find(value => value.id === id)
+				return item ? pourObj(item) : null
 			},
 			getAll: async () => docs.map(pourObj),
 		},
@@ -163,14 +181,14 @@ function capturePartial(error) {
 	const original = new Error('SDK threw after applying')
 	const f = install({
 		pours: [pour('target', 2, 0)],
-		modify: ({ props, docs }) => { docs[0].name = props.pourName; throw original },
+		modify: ({ props, docs }) => { docs[0].layerId = props.layer; throw original },
 	})
-	const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', pourName: 'changed', lineWidth: 0.4 }).then(() => undefined, caught => caught)
+	const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', layer: 'top', lineWidth: 0.4 }).then(() => undefined, caught => caught)
 	assert.equal(error, original)
 	const cause = capturePartial(error)
 	assert.equal(cause.writeError, 'SDK threw after applying')
-	assert.deepEqual(cause.attemptedFields, ['pourName'])
-	assert.deepEqual(cause.verifiedFields, ['pourName'], 'source readback confirms a field even though the SDK call threw')
+	assert.deepEqual(cause.attemptedFields, ['layer'])
+	assert.deepEqual(cause.verifiedFields, ['layer'], 'source readback confirms a field even though the SDK call threw')
 	assert.deepEqual(cause.notAttemptedFields, ['lineWidth'])
 	assert.equal(f.stats.sourceReads, 2, 'a thrown write gets one source readback before stopping')
 }
@@ -193,14 +211,15 @@ function capturePartial(error) {
 	assert.equal(f.stats.writes.length, 0)
 }
 
-// A page switch between successful field steps prevents the next write.
+// A page switch during post-write source readback marks the non-net write partial and stops the next field.
 {
 	const f = install({ focusRead: (count, setFocus) => { if (count === 7) setFocus({ documentType: 3, uuid: 'pcb-other' }) } })
-	const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'VCC', pourName: 'next' }).then(() => undefined, caught => caught)
+	const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'GND', lineWidth: 0.4 }).then(() => undefined, caught => caught)
 	const cause = capturePartial(error)
-	assert.deepEqual(cause.attemptedFields, ['net'])
-	assert.deepEqual(cause.notAttemptedFields, ['pourName'])
-	assert.equal(f.stats.writes.length, 1)
+	assert.deepEqual(cause.noOpFields, ['net'])
+	assert.deepEqual(cause.attemptedFields, ['lineWidth'])
+	assert.deepEqual(cause.notAttemptedFields, [])
+	assert.equal(f.stats.writeCount, 1)
 	assert.equal(cause.readbackStatus, 'lastKnown')
 }
 
@@ -208,20 +227,16 @@ function capturePartial(error) {
 {
 	const f = install({
 		pours: [pour('target', 2, 0)],
-		modify: ({ props, docs }) => {
-			if (props.net) docs[0].netName = props.net
-			if (props.layer) { docs[0].layerId = props.layer; docs[0].netName = 'SIDE_EFFECT' }
-			return { ok: true }
-		},
+		modify: ({ props, docs }) => { if (props.layer) docs[0].layerId = props.layer; else if (props.lineWidth) docs[0].width = props.lineWidth; return { ok: true } },
 		sourceRead: async (reads, docs) => { if (reads === 3) throw new Error('post-source unavailable'); return source(docs) },
 	})
-	const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'VCC', layer: 'top' }).then(() => undefined, caught => caught)
+	const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', layer: 'top', lineWidth: 0.35 }).then(() => undefined, caught => caught)
 	const cause = capturePartial(error)
-	assert.deepEqual(cause.attemptedFields, ['net', 'layer'])
+	assert.deepEqual(cause.attemptedFields, ['layer', 'lineWidth'])
 	assert.deepEqual(cause.verifiedFields, [])
-	assert.deepEqual(cause.unverifiedFields, ['net', 'layer'])
+	assert.deepEqual(cause.unverifiedFields, ['layer', 'lineWidth'])
 	assert.equal(cause.readbackStatus, 'lastKnown')
-	assert.equal(f.stats.writes.length, 2)
+	assert.equal(f.stats.writeCount, 2)
 }
 
 // Time budget checks reject delayed source and write completions without follow-up calls.
@@ -239,54 +254,57 @@ function capturePartial(error) {
 			const original = new Error('delayed SDK rejection')
 			const f = install({
 				modify: ({ docs, props }) => {
-					if (props.net) docs[0].netName = props.net
+					if (props.layer) docs[0].layerId = props.layer
 					advance(1001)
 					if (mode === 'reject') throw original
 					return { ok: true }
 				},
 			})
-			const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'VCC', pourName: 'later', _timeoutMs: 1000 }).then(() => undefined, caught => caught)
+			const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', layer: 'top', lineWidth: 0.4, _timeoutMs: 1000 }).then(() => undefined, caught => caught)
 			const cause = capturePartial(error)
-			assert.deepEqual(cause.attemptedFields, ['net'])
-			assert.deepEqual(cause.notAttemptedFields, ['pourName'])
+			assert.deepEqual(cause.attemptedFields, ['layer'])
+			assert.deepEqual(cause.notAttemptedFields, ['lineWidth'])
 			assert.equal(cause.verifiedFields.length, 0)
 			assert.equal(cause.readbackStatus, 'lastKnown')
 			assert.equal(f.stats.sourceReads, 1, 'late write result does not trigger source reads')
-			assert.equal(f.stats.writes.length, 1, 'late write result does not trigger a next write')
+			assert.equal(f.stats.writeCount, 1, 'late write result does not trigger a next write')
 			if (mode === 'reject') assert.equal(cause.priorCause, original)
 		})
 	}
 	await withClock(async advance => {
 		const f = install({
 			modify: ({ docs, props, stats }) => {
-				if (props.net) docs[0].netName = props.net
-				if (stats.writes.length === 2) advance(1001)
+				const item = docs[0]
+				if (props.layer) item.layerId = props.layer
+				if (props.lineWidth) item.width = props.lineWidth
+				if (stats.writeCount === 2) advance(1001)
 				return { ok: true }
 			},
 		})
-		const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'VCC', pourName: 'late', _timeoutMs: 1000 }).then(() => undefined, caught => caught)
+		const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', layer: 'top', lineWidth: 0.35, _timeoutMs: 1000 }).then(() => undefined, caught => caught)
 		const cause = capturePartial(error)
-		assert.deepEqual(cause.attemptedFields, ['net', 'pourName'])
+		assert.deepEqual(cause.attemptedFields, ['layer', 'lineWidth'])
 		assert.deepEqual(cause.verifiedFields, [])
-		assert.deepEqual(cause.unverifiedFields, ['net', 'pourName'])
+		assert.deepEqual(cause.unverifiedFields, ['layer', 'lineWidth'])
 		assert.equal(cause.readbackStatus, 'lastKnown')
 		assert.equal(f.stats.sourceReads, 2, 'late second write result does not trigger another source read')
-		assert.equal(f.stats.writes.length, 2, 'late second write result stops the sequence')
+		assert.equal(f.stats.writeCount, 2, 'late second write result stops the sequence')
 	})
 	await withClock(async advance => {
 		const f = install({ focusRead: count => { if (count === 7) advance(1001) } })
-		const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'VCC', pourName: 'later', _timeoutMs: 1000 }).then(() => undefined, caught => caught)
+		const error = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'GND', lineWidth: 0.35, _timeoutMs: 1000 }).then(() => undefined, caught => caught)
 		const cause = capturePartial(error)
-		assert.deepEqual(cause.attemptedFields, ['net'])
-		assert.deepEqual(cause.notAttemptedFields, ['pourName'])
-		assert.equal(f.stats.writes.length, 1)
+		assert.deepEqual(cause.noOpFields, ['net'])
+		assert.deepEqual(cause.attemptedFields, ['lineWidth'])
+		assert.deepEqual(cause.notAttemptedFields, [])
+		assert.equal(f.stats.writeCount, 1)
 	})
 }
 
 // P8: same-layer source order snapshots include all and only that layer's pours.
 {
 	install({ pours: [pour('target', 2, 0), pour('same-a', 2, 2), pour('other-layer', 15, 1)] })
-	const result = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'VCC' })
+	const result = await command('pcb.modifyPour').handler({ primitiveId: 'target', net: 'GND', pourPriority: 1 })
 	assert.deepEqual(result.sourceOrders.before.map(item => item.primitiveId), ['same-a', 'target'])
 	assert.deepEqual(result.sourceOrders.after.map(item => item.primitiveId), ['same-a', 'target'])
 }

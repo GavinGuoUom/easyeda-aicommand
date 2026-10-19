@@ -6,11 +6,12 @@
 import type { ICommandDef } from '../engine/types'
 import { modifyComponentSafely, moveComponentSafely } from '../engine/componentMutation'
 import { getProjectFootprintDiagnostic, placeDeviceSafely } from '../engine/componentPlacement'
-import { assertSnapshotFocused, captureDocumentSnapshot, withDocumentRecovery } from '../engine/documentRecovery'
+import { assertSnapshotFocused, captureDocumentSnapshot, compareDocumentSources, withDocumentRecovery } from '../engine/documentRecovery'
 import { fileToResult } from './util'
 import { beginTask, failTask, finishTask, taskProgress } from '../engine/tasks'
 import { serializeErrorDetail } from '../engine/registry'
 import { diag } from '../engine/diag'
+import { isEda42OrNewer, requireEda42 } from '../engine/edaVersion'
 import { parseSourceLog, resolveRecords } from '../pcb/sourcelog'
 
 /** 0.10.42：给无保护 await 加超时（官方偶发永不 resolve，曾致整批删除挂死 300s 无结果） */
@@ -22,6 +23,47 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 			error => { clearTimeout(timer); reject(error) },
 		)
 	})
+}
+
+function checkedSchematicDrcEntries(value: unknown): Array<any> {
+	if (!Array.isArray(value))
+		throw new Error(`原理图 DRC 结果不可判定：官方返回 ${value === null ? 'null' : typeof value}，预期为违规数组；不能按 0 项通过处理`)
+	for (const [index, entry] of value.entries()) {
+		const detailed = entry && typeof entry === 'object'
+			&& typeof entry.type === 'string' && typeof entry.rule === 'string'
+			&& Array.isArray(entry.primitives)
+		const aggregated = entry && typeof entry === 'object'
+			&& typeof entry.type === 'string' && Number.isSafeInteger(entry.count)
+			&& entry.count >= 0 && entry.primitives == null
+		if (!detailed && !aggregated)
+			throw new Error(`原理图 DRC 结果不可判定：第 ${index + 1} 项不是已知的逐条或聚合结构；不能按检查通过处理`)
+	}
+	return value
+}
+
+function describeBomFile(result: { base64: string }, fileType: 'xlsx' | 'csv') {
+	const head = atob(result.base64.slice(0, 4096))
+	if (fileType === 'xlsx') {
+		if (head.startsWith('PK\u0003\u0004'))
+			return { format: 'xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+		return { format: 'unknown', note: '请求 XLSX，但文件头不是 ZIP；请检查返回文件' }
+	}
+	const utf16 = head.charCodeAt(0) === 0xFF && head.charCodeAt(1) === 0xFE
+	const utf8Bom = head.charCodeAt(0) === 0xEF && head.charCodeAt(1) === 0xBB && head.charCodeAt(2) === 0xBF
+	const encoding = utf16 ? 'utf-16le' : utf8Bom ? 'utf-8' : 'unconfirmed'
+	const sample = new TextDecoder(utf16 ? 'utf-16le' : 'utf-8').decode(Uint8Array.from(head, c => c.charCodeAt(0)))
+	const header = sample.split(/\r?\n/, 1)[0]
+	const tabs = (header.match(/\t/g) ?? []).length
+	const commas = (header.match(/,/g) ?? []).length
+	const delimiter = tabs > commas ? '\t' : commas > tabs ? ',' : undefined
+	if (!delimiter)
+		return { format: 'unknown', encoding, note: '无法从 BOM 表头确认分隔符；请检查原始文件' }
+	return {
+		format: delimiter === '\t' ? 'tsv' : 'csv',
+		encoding,
+		delimiter,
+		mimeType: `${delimiter === '\t' ? 'text/tab-separated-values' : 'text/csv'}${encoding === 'unconfirmed' ? '' : `; charset=${encoding}`}`,
+	}
 }
 
 /** 防御性读取图元状态方法（不同图元类型支持的方法不同） */
@@ -1266,8 +1308,14 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '单页：{ stats, summary, blockingCount, issues, warning? }。allPages：{ pages: [{ pageUuid, pageName, stats, summary, blockingCount, issues, warning? }], pageCount, totalBlocking, overallSummary }。blocking=0 不代表整图电气验收通过：本指令证明结构合法，不证明设计意图（关键网络仍按项目契约对账）',
 		example: { cmd: 'schematic.structuralAudit', params: { ncExempt: ['U2.2', 'U2.7'] } },
 		handler: async (params) => {
-			const ncExempt = new Set(Array.isArray(params.ncExempt) ? params.ncExempt.map(String) : [])
-			const deviceMargin = params.deviceMargin != null ? Math.max(0, Number(params.deviceMargin)) : 10
+			if (params.ncExempt !== undefined && (!Array.isArray(params.ncExempt) || params.ncExempt.some((ref: unknown) => typeof ref !== 'string')))
+				throw new Error('ncExempt 必须是字符串数组')
+			if (params.allPages !== undefined && typeof params.allPages !== 'boolean')
+				throw new Error('allPages 必须是布尔值')
+			if (Object.hasOwn(params, 'deviceMargin') && (typeof params.deviceMargin !== 'number' || !Number.isFinite(params.deviceMargin) || params.deviceMargin < 0))
+				throw new Error('deviceMargin 必须是有限且不小于 0 的数字')
+			const ncExempt = new Set<string>(params.ncExempt ?? [])
+			const deviceMargin = Object.hasOwn(params, 'deviceMargin') ? params.deviceMargin : 10
 
 			// ①~④ 采集+分析当前激活页（全部只读）
 			const auditCurrentPage = async () => {
@@ -1986,7 +2034,10 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '器件列表 [{ primitiveId, designator, name, x, y, rotation }]',
 		example: { cmd: 'schematic.listComponents' },
 		handler: async (params) => {
-			const components = await eda.sch_PrimitiveComponent.getAll(undefined, Boolean(params.allPages))
+			if (params.allPages !== undefined && typeof params.allPages !== 'boolean')
+				throw new Error('allPages 必须是布尔值')
+			const allPages = params.allPages ?? false
+			const components = await eda.sch_PrimitiveComponent.getAll(undefined, allPages)
 			return (components ?? []).map(c => ({
 				primitiveId: safeState<string>(c, 'getState_PrimitiveId'),
 				designator: safeState<string>(c, 'getState_Designator'),
@@ -2233,9 +2284,28 @@ export const schematicCommands: Array<ICommandDef> = [
 			{ name: 'lineWidth', type: 'number', description: '线宽（0.9.8 起）' },
 			{ name: 'lineType', type: 'string', description: '线型 solid | dashed | dotted（0.9.8 起）' },
 		],
-		returns: '{ primitiveIds, segments, named, net?, skippedDiagonal? }',
+		returns: '{ primitiveIds, segments, named, net?, skippedDiagonal?, drawingOrderChanges?: [{ id, wireId, before, after }] }',
 		example: { cmd: 'schematic.drawWire', params: { points: [[300, 300], [400, 300]], net: 'VCC' } },
 		handler: async (params) => {
+			const operationStartedAt = performance.now()
+			const requestedOperationBudget = params._timeoutMs == null ? 290_000 : Number(params._timeoutMs)
+			if (!Number.isFinite(requestedOperationBudget) || requestedOperationBudget <= 0)
+				throw new Error('_timeoutMs 必须是有限正数')
+			const effectiveOperationBudget = Math.max(1000, requestedOperationBudget)
+			const operationMargin = Math.min(250, effectiveOperationBudget * 0.1)
+			const operationDeadline = operationStartedAt + Math.max(1, effectiveOperationBudget - operationMargin)
+			const awaitWithinOperationDeadline = async <T>(operation: () => Promise<T> | T, label: string): Promise<T> => {
+				const remaining = operationDeadline - performance.now()
+				if (remaining <= 0) throw new Error(`${label}超出 drawWire 总时间预算`)
+				let timer: ReturnType<typeof setTimeout> | undefined
+				try {
+					return await Promise.race([
+						Promise.resolve().then(operation),
+						new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label}超出 drawWire 总时间预算`)), remaining) }),
+					])
+				}
+				finally { if (timer !== undefined) clearTimeout(timer) }
+			}
 			if (!Array.isArray(params.points) || params.points.length < 2)
 				throw new Error('points 至少需要两个点')
 			// 兼容 [{x,y},...] 对象形式，统一归一为 [[x,y],...]
@@ -2248,49 +2318,600 @@ export const schematicCommands: Array<ICommandDef> = [
 			const wireWidth = params.lineWidth != null ? Number(params.lineWidth) : undefined
 			const wireTypeMap: Record<string, number> = { solid: 0, dashed: 1, dotted: 2 }
 			const wireType = params.lineType != null ? (wireTypeMap[String(params.lineType)] ?? 0) : undefined
+			const initialFocus: any = await awaitWithinOperationDeadline(() => eda.dmt_SelectControl.getCurrentDocumentInfo(), '读取初始焦点')
+			if (initialFocus?.documentType !== 1 || typeof initialFocus.uuid !== 'string' || !initialFocus.uuid.trim())
+				throw new Error(`焦点文档不是有效原理图（documentType=${initialFocus?.documentType ?? '未知'}, uuid=${initialFocus?.uuid ?? '无'}）`)
+			const expectedUuid = initialFocus.uuid
 			// 智能命名：网络已存在（命名导线或网络标签）则画无名段
-			let nameNext = net ? !(await netExistsOnPage(net)) : false
+			let nameNext = net ? !(await awaitWithinOperationDeadline(() => netExistsOnPage(net), '检查现存网络名')) : false
 			const { segments, skippedDiagonal } = splitToSimpleSegments(pts)
 			if (!segments.length)
 				throw new Error('没有可绘制的有效线段（全部为重复/零长/斜线段）')
-			const primitiveIds: Array<string | undefined> = []
+			// create 会把相接线合并到旧图元上，故每段都以源码/模型读回确认最终存活 ID。
+			// 快照只保存原始值，避免 SDK getter 返回的活动对象在后续写入后改变。
+			const normalizeLine = (value: any): Array<number> | undefined => {
+				const values = Array.isArray(value) && Array.isArray(value[0]) ? value.flat() : value
+				return Array.isArray(values) && values.length >= 4 && values.length % 2 === 0 && values.every(Number.isFinite) ? [...values] : undefined
+			}
+			const lineGeometryCandidates = (value: any, sourcePaths?: Array<Array<number>>): Array<Array<Array<number>>> => {
+				const groups: Array<Array<number>> = Array.isArray(value) && Array.isArray(value[0]) ? value : [value]
+				if (!groups.length || groups.some(group => !Array.isArray(group) || group.length < 4 || group.length % 2 !== 0 || !group.every(Number.isFinite)))
+					return []
+				let combined: Array<Array<Array<number>>> = [[]]
+				for (const group of groups) {
+					const choices: Array<Array<Array<number>>> = [[ [...group] ]]
+					if (group.length % 4 === 0) {
+						const tuples: Array<Array<number>> = []
+						for (let i = 0; i < group.length; i += 4) tuples.push(group.slice(i, i + 4))
+						choices.push(tuples)
+					}
+					const geometryKey = (paths: Array<Array<number>>) => paths.flatMap(path => lineSegments(path).map(segmentKey)).sort().join('|')
+					const uniqueChoices = [...new Map(choices.map(choice => [geometryKey(choice), choice])).values()]
+					const sourceCompatible = sourcePaths ? uniqueChoices.filter(choice => geometryPathsPreserved(choice, sourcePaths)) : uniqueChoices
+					const next = new Map<string, Array<Array<number>>>()
+					for (const prefix of combined) for (const choice of sourceCompatible) {
+						const candidate = [...prefix, ...choice]
+						const key = geometryKey(candidate)
+						if (!next.has(key)) next.set(key, candidate)
+					}
+					combined = [...next.values()]
+				}
+				return combined
+			}
+			const sourceLineToSdk = (line: Array<number>) => line.map((value, index) => index % 2 === 1 ? -value : value)
+			const wireCovers = (wire: any, segment: Array<number>) =>
+				pathCovered(segment, wire?.sourcePaths ?? [])
+			const wireContributes = (wire: any, segment: Array<number>) => {
+				const [x1, y1, x2, y2] = segment
+				return (wire?.sourcePaths ?? []).some((line: Array<number> | undefined) => lineSegments(line).some(([ax, ay, bx, by]) =>
+					y1 === y2 && ay === by && ay === y1 && Math.min(Math.max(ax, bx), Math.max(x1, x2)) > Math.max(Math.min(ax, bx), Math.min(x1, x2))
+					|| x1 === x2 && ax === bx && ax === x1 && Math.min(Math.max(ay, by), Math.max(y1, y2)) > Math.max(Math.min(ay, by), Math.min(y1, y2))))
+			}
+			const lineSegments = (line: Array<number> | undefined) => {
+				const out: Array<Array<number>> = []
+				if (line) for (let i = 0; i + 3 < line.length; i += 2) out.push(line.slice(i, i + 4))
+				return out
+			}
+			const segmentCovered = (target: Array<number>, lines: Array<Array<number>>) => {
+				const [x1, y1, x2, y2] = target
+				const horizontal = y1 === y2
+				const vertical = x1 === x2
+				if (!horizontal && !vertical) return false
+				const fixed = horizontal ? y1 : x1
+				const low = Math.min(horizontal ? x1 : y1, horizontal ? x2 : y2)
+				const high = Math.max(horizontal ? x1 : y1, horizontal ? x2 : y2)
+				const intervals = lines.flatMap(lineSegments).flatMap(([ax, ay, bx, by]) => {
+					if (horizontal ? ay !== fixed || by !== fixed : ax !== fixed || bx !== fixed) return []
+					const a = Math.max(low, Math.min(horizontal ? ax : ay, horizontal ? bx : by))
+					const b = Math.min(high, Math.max(horizontal ? ax : ay, horizontal ? bx : by))
+					return b > a ? [[a, b] as [number, number]] : []
+				}).sort((a, b) => a[0] - b[0])
+				let end = low
+				for (const [a, b] of intervals) {
+					if (a > end) return false
+					end = Math.max(end, b)
+					if (end >= high) return true
+				}
+				return false
+			}
+			const pathCovered = (target: Array<number>, lines: Array<Array<number>>) =>
+				lineSegments(target).every(segment => segmentCovered(segment, lines))
+			const segmentKey = (segment: Array<number>) => {
+				const [x1, y1, x2, y2] = segment
+				return JSON.stringify([[x1, y1], [x2, y2]].sort((a, b) => a[0] - b[0] || a[1] - b[1]))
+			}
+			const sameSegments = (a: Array<number>, b: Array<number>) => {
+				const left = lineSegments(a).map(segmentKey).sort()
+				const right = lineSegments(b).map(segmentKey).sort()
+				return left.length === right.length && left.every((value, index) => value === right[index])
+			}
+			const geometryPreserved = (target: Array<number>, lines: Array<Array<number>>) =>
+				lineSegments(target).every(segment => segment[1] === segment[3] || segment[0] === segment[2]
+					? segmentCovered(segment, lines)
+					: lines.some(line => lineSegments(line).some(candidate => segmentKey(candidate) === segmentKey(segment))))
+			const geometryPathsPreserved = (targets: Array<Array<number>>, lines: Array<Array<number>>) =>
+				targets.flatMap(lineSegments).every(segment => geometryPreserved(segment, lines))
+			const segmentOverlaps = (a: Array<number>, b: Array<number>) => {
+				const [ax1, ay1, ax2, ay2] = a
+				const [bx1, by1, bx2, by2] = b
+				return ay1 === ay2 && by1 === by2 && ay1 === by1
+					? Math.min(Math.max(ax1, ax2), Math.max(bx1, bx2)) > Math.max(Math.min(ax1, ax2), Math.min(bx1, bx2))
+					: ax1 === ax2 && bx1 === bx2 && ax1 === bx1
+						? Math.min(Math.max(ay1, ay2), Math.max(by1, by2)) > Math.max(Math.min(ay1, ay2), Math.min(by1, by2))
+						: false
+			}
+			const segmentOverlapsOrMatches = (a: Array<number>, b: Array<number>) =>
+				segmentOverlaps(a, b) || segmentKey(a) === segmentKey(b)
+			const segmentsTouch = (a: Array<number>, b: Array<number>) => {
+				if (segmentOverlapsOrMatches(a, b)) return true
+				const onSegment = (x: number, y: number, line: Array<number>) =>
+					(x === line[0] && line[0] === line[2] && y >= Math.min(line[1], line[3]) && y <= Math.max(line[1], line[3]))
+					|| (y === line[1] && line[1] === line[3] && x >= Math.min(line[0], line[2]) && x <= Math.max(line[0], line[2]))
+				const endpoints = [[a[0], a[1]], [a[2], a[3]], [b[0], b[1]], [b[2], b[3]]]
+				return endpoints.some(([x, y]) => onSegment(x, y, a) && onSegment(x, y, b))
+			}
+			const styleKey = (item: any) => JSON.stringify({ color: item?.strokeColor ?? item?.color ?? null, width: item?.strokeWidth ?? item?.lineWidth ?? null, type: item?.strokeStyle ?? item?.lineType ?? null })
+			const capture = async (expectedUuid: string, allowWireIdLag = false, deadline?: number) => {
+				const awaitCaptureRead = async <T>(operation: () => Promise<T> | T, label: string): Promise<T> => {
+					const readDeadline = deadline ?? operationDeadline
+					const remaining = readDeadline - performance.now()
+					if (remaining <= 0) throw new Error(`${label}超出 drawWire 总时间预算`)
+					let timer: ReturnType<typeof setTimeout> | undefined
+					try {
+						return await Promise.race([
+							Promise.resolve().then(operation),
+							new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label}超出 drawWire 总时间预算`)), remaining) }),
+						])
+					}
+					finally { if (timer !== undefined) clearTimeout(timer) }
+				}
+				const focus: any = await awaitCaptureRead(() => eda.dmt_SelectControl.getCurrentDocumentInfo(), '读取焦点文档')
+				if (focus?.documentType !== 1 || focus?.uuid !== expectedUuid)
+					throw new Error(`焦点原理图已变化（预期 UUID=${expectedUuid}, 当前=${focus?.uuid ?? '未知'}）`)
+				const source = await awaitCaptureRead(() => eda.sys_FileManager.getDocumentSource(), '读取原理图源码')
+				const focusAfterSource: any = await awaitCaptureRead(() => eda.dmt_SelectControl.getCurrentDocumentInfo(), '源码后焦点核对')
+				if (focusAfterSource?.documentType !== 1 || focusAfterSource?.uuid !== expectedUuid)
+					throw new Error(`读取原理图源码期间焦点已变化（预期 UUID=${expectedUuid}, 当前=${focusAfterSource?.uuid ?? '未知'}）`)
+				if (typeof source !== 'string' || !source.trim()) throw new Error('原理图源码读回为空或非法')
+				const parsed = parseSourceLog(source)
+				if (parsed.docType !== 'SCH_PAGE' || parsed.uuid !== focus.uuid)
+					throw new Error(`焦点 UUID 与源码不符（焦点=${focus.uuid}, 源码=${parsed.uuid}, 类型=${parsed.docType}）`)
+				const records = resolveRecords(parsed)
+				const sourceLines = new Map<string, Array<any>>()
+				const sourceNets = new Map<string, Array<any>>()
+				const sourceAttrs = new Map<string, Array<any>>()
+				for (const record of records.values()) {
+					const data: any = record.data && typeof record.data === 'object' ? record.data : {}
+					if (record.header.type === 'LINE' && data.lineGroup != null) {
+						const key = String(data.lineGroup)
+						if (!sourceLines.has(key)) sourceLines.set(key, [])
+						sourceLines.get(key)!.push({ id: String(record.header.id ?? ''), ...data })
+					}
+					if (record.header.type === 'ATTR' && data.parentId != null && ['NET', 'Name'].includes(String(data.key))) {
+						const key = String(data.parentId)
+						if (!sourceNets.has(key)) sourceNets.set(key, [])
+						sourceNets.get(key)!.push({ parentId: key, key: data.key, value: data.value })
+					}
+					if (record.header.type === 'ATTR' && data.parentId != null) {
+						const key = String(data.parentId)
+						if (!sourceAttrs.has(key)) sourceAttrs.set(key, [])
+						sourceAttrs.get(key)!.push({ id: String(record.header.id ?? ''), header: { ...record.header }, data: { ...data } })
+					}
+				}
+				const rawWires = await awaitCaptureRead(() => eda.sch_PrimitiveWire.getAll(), '读取 SDK 原理图导线')
+				const focusAfterModel: any = await awaitCaptureRead(() => eda.dmt_SelectControl.getCurrentDocumentInfo(), '模型后焦点核对')
+				if (focusAfterModel?.documentType !== 1 || focusAfterModel?.uuid !== expectedUuid)
+					throw new Error(`读取 SDK 原理图导线期间焦点已变化（预期 UUID=${expectedUuid}, 当前=${focusAfterModel?.uuid ?? '未知'}）`)
+				if (!Array.isArray(rawWires)) throw new Error('SDK 导线读回不是数组')
+				const wires = new Map<string, any>()
+				for (const wire of rawWires) {
+					const id = safeState<string>(wire, 'getState_PrimitiveId')
+					if (!id) continue
+					wires.set(id, {
+						id,
+						rawLine: safeState<any>(wire, 'getState_Line'),
+						color: safeState<any>(wire, 'getState_Color'),
+						lineWidth: safeState<any>(wire, 'getState_LineWidth'),
+						lineType: safeState<any>(wire, 'getState_LineType'),
+						net: safeState<any>(wire, 'getState_Net'),
+					})
+				}
+				const effectiveWireRecords = [...records.values()].filter(record => record.header.type === 'WIRE' && record.header.id != null)
+				const sourceWireIds = effectiveWireRecords.map(record => String(record.header.id)).sort()
+				const sdkWireIds = [...wires.keys()].sort()
+				const wireIdsSynchronized = sourceWireIds.length === sdkWireIds.length && sourceWireIds.every((id, index) => id === sdkWireIds[index])
+				if (!wireIdsSynchronized) {
+					if (allowWireIdLag)
+						return { uuid: focus.uuid, wires, sourceWireIds, sdkWireIds, wireIdsSynchronized: false }
+					throw new Error('有效源码 WIRE ID 与 SDK 导线 ID 不一致')
+				}
+				for (const record of records.values()) {
+					if (record.header.type !== 'WIRE' || record.header.id == null) continue
+					const id = String(record.header.id)
+					const data: any = record.data && typeof record.data === 'object' ? record.data : {}
+					const { line: _geometry, ...wireAttributes } = data
+					const model = wires.get(id) ?? { id }
+					const sourceLineRecords = sourceLines.get(id) ?? []
+					if (!model.rawLine || !sourceLineRecords.length)
+						throw new Error(`WIRE ${id} 缺少 SDK getter 几何或关联 LINE 源记录`)
+					const sourceLineGeometry = sourceLineRecords.map((item: any) => {
+						const nativeLine = normalizeLine([item.startX, item.startY, item.endX, item.endY])
+						return nativeLine ? sourceLineToSdk(nativeLine) : undefined
+					})
+					if (sourceLineGeometry.some((line: any) => !line))
+						throw new Error(`WIRE ${id} 的 LINE 源几何缺少有限坐标`)
+					const sourcePaths = sourceLineGeometry as Array<Array<number>>
+					const optionalWireLines = data.line == null ? [] : lineGeometryCandidates(data.line).map(paths => paths.map(sourceLineToSdk))
+					if (data.line != null && !optionalWireLines.length)
+						throw new Error(`WIRE ${id} 的可选 line 字段格式非法`)
+					const getterCandidates = lineGeometryCandidates(model.rawLine, sourcePaths)
+					const matchingGetter = getterCandidates.filter(candidate => geometryPathsPreserved(sourcePaths, candidate) && geometryPathsPreserved(candidate, sourcePaths))
+					const geometryKey = (paths: Array<Array<number>>) => paths.flatMap(path => lineSegments(path).map(segmentKey)).sort().join('|')
+					const uniqueGetterMatches = [...new Map(matchingGetter.map(candidate => [geometryKey(candidate), candidate])).values()]
+					const matchingWireLine = optionalWireLines.filter(candidate => geometryPathsPreserved(sourcePaths, candidate) && geometryPathsPreserved(candidate, sourcePaths))
+					if (!uniqueGetterMatches.length || (data.line != null && !matchingWireLine.length))
+						throw new Error(`WIRE ${id} 的 LINE 源几何与 SDK getter 几何不一致`)
+					// LINE records define canonical persisted geometry. SDK getter interpretations
+					// are accepted when any complete candidate covers the same geometry both ways;
+					// candidate segmentation may differ while representing the same covered path.
+					const confirmedPaths = sourcePaths
+					wires.set(id, {
+						...model,
+						line: undefined,
+						rawLine: undefined,
+						getterPaths: confirmedPaths,
+						sourcePaths: confirmedPaths,
+						sourceWireAttributes: wireAttributes,
+						sourceLines: sourceLineRecords.map((item: any, index: number) => ({ ...item, sdkLine: sourceLineGeometry[index] })),
+						sourceLineStyles: sourceLineRecords.map((item: any, index: number) => ({ geometry: sourceLineGeometry[index], style: styleKey(item) })),
+						sourceNets: sourceNets.get(id) ?? [],
+						sourceAttrs: sourceAttrs.get(id) ?? [],
+					})
+				}
+				return { uuid: focus.uuid, wires, sourceWireIds, sdkWireIds, wireIdsSynchronized: true, records: [...records.values()].map(record => ({ header: { ...record.header }, data: record.data && typeof record.data === 'object' ? { ...record.data } : record.data })) }
+			}
+			let currentState = await capture(expectedUuid)
+			const plain = (value: any): string => {
+				if (Array.isArray(value)) return `[${value.map(plain).join(',')}]`
+				if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${plain(value[key])}`).join(',')}}`
+				return JSON.stringify(value) ?? String(value)
+			}
+			const primitiveIds: string[] = []
+			const drawingOrderChanges: Array<{ id: string, before: number, after: number, wireId: string }> = []
+			const created = new Set<string>()
+			const reused = new Set<string>()
+			const removed = new Set<string>()
+			const coveredSegments: Array<string[]> = []
+			let wireIdSyncEvidence: any
+			let partial: any
+			let createCalls = 0
 			let didName = false
+			let verifiedTargetNet = false
+			let writeAttempted = false
+			let lastVerifiedPhase = 'pre-write'
+			let lastVerifiedSegment: number | undefined
+			const throwPartial = (reason: string, stateName: 'partial' | 'unknown', segmentIndex?: number, affectedId?: string, syncEvidence?: any): never => {
+				const result = {
+					primitiveIds: [...primitiveIds],
+					segments: createCalls,
+					created: [...created].filter(id => currentState.wires.has(id)),
+					reused: [...reused].filter(id => currentState.wires.has(id)),
+					removed: [...removed].filter(id => !currentState.wires.has(id)),
+					partial: { reason, state: stateName, ...(segmentIndex ? { stoppedAtSegment: segmentIndex } : {}), ...(affectedId ? { affectedId } : {}), ...(syncEvidence ? { wireIdSync: syncEvidence } : {}) },
+					verification: { focusUuid: currentState.uuid, sourceAndModelReadback: !writeAttempted || ['post-write', 'final'].includes(lastVerifiedPhase), lastVerifiedPhase, ...(lastVerifiedSegment ? { lastVerifiedSegment } : {}), snapshot: 'last-verified' },
+					named: didName,
+					...(net ? { net } : {}),
+				}
+				throw new Error('schematic.drawWire 部分写入或结果未知', { cause: { partial: true, retryable: false, result } })
+			}
+			const capturePostWrite = async (segmentIndex: number) => {
+				const samplingDeadline = operationDeadline
+				let snapshot = await capture(expectedUuid, true, samplingDeadline)
+				if (snapshot.wireIdsSynchronized)
+					return snapshot
+				let attempts = 0
+				while (!snapshot.wireIdsSynchronized && performance.now() < samplingDeadline) {
+					attempts++
+					wireIdSyncEvidence = {
+						segmentIndex,
+						attempts,
+						sampledAt: new Date().toISOString(),
+						sampledAtMonotonicMs: Math.round(performance.now()),
+						sourceWireIds: [...snapshot.sourceWireIds],
+						sdkWireIds: [...snapshot.sdkWireIds],
+					}
+					const remaining = samplingDeadline - performance.now()
+					if (remaining <= 0)
+						break
+					await new Promise(resolve => setTimeout(resolve, Math.min(40, remaining)))
+					snapshot = await capture(expectedUuid, true, samplingDeadline)
+				}
+				if (!snapshot.wireIdsSynchronized)
+					throw new Error(`写后源码 WIRE ID 与 SDK 导线 ID 在只读同步预算内仍不一致（source=${JSON.stringify(snapshot.sourceWireIds)}, sdk=${JSON.stringify(snapshot.sdkWireIds)}）`)
+				wireIdSyncEvidence = undefined
+				return snapshot
+			}
+			const comparableHeader = (header: any) => {
+				const { ticket: _ticket, ...rest } = header ?? {}
+				return rest
+			}
+			const recordKey = (record: any) => `${record?.header?.type ?? ''}\u0000${String(record?.header?.id ?? '')}`
+			const checkSnapshotChanges = (before: any, after: any, requested: Array<number>[], segmentWasNamed: boolean, currentSegment: Array<number>) => {
+				const oldRecords = new Map<string, any>((before.records ?? []).map((record: any) => [recordKey(record), record]))
+				const newRecords = new Map<string, any>((after.records ?? []).map((record: any) => [recordKey(record), record]))
+				const oldLineIds = new Set<string>((before.records ?? []).filter((record: any) => record.header.type === 'LINE').map((record: any) => String(record.header.id)))
+				const addedLines = (after.records ?? []).filter((record: any) => record.header.type === 'LINE' && !oldLineIds.has(String(record.header.id)))
+				// This narrow comparison applies only to a simple append that retains all
+				// old WIRE IDs and every old LINE record verbatim. Merge/extension flows
+				// keep their established geometry/style validation path.
+				if ([...before.wires.keys()].some((id: string) => !after.wires.has(id))) return
+				const oldLineRecords = (before.records ?? []).filter((record: any) => record.header.type === 'LINE')
+				const oldLinesUnchanged = oldLineRecords.every((record: any) => {
+					const current = newRecords.get(recordKey(record))
+					return current && plain(comparableHeader(record.header)) === plain(comparableHeader(current.header)) && plain(record.data) === plain(current.data)
+				})
+				if (!oldLinesUnchanged || !addedLines.length) {
+					for (const record of oldRecords.values()) {
+						if (record.header.type !== 'ATTR') continue
+						const current = newRecords.get(recordKey(record))
+						if (current && plain(record.data?.zIndex) !== plain(current.data?.zIndex))
+							throw new Error(`ATTR ${record.header.id} 的 zIndex 变化没有对应的简单新增 LINE`)
+					}
+					return
+				}
+				const isSame = (left: any, right: any) => plain(comparableHeader(left.header)) === plain(comparableHeader(right.header)) && plain(left.data) === plain(right.data)
+				const changedAttrs = new Map<string, Array<{ old: any, current: any }>>()
+				for (const [key, oldRecord] of oldRecords) {
+					if (oldRecord.header.type === 'DOCHEAD') continue
+					const current = newRecords.get(key)
+					if (!current)
+						throw new Error(`写后有效记录丢失：${key.replace('\u0000', ':')}`)
+					if (isSame(oldRecord, current)) continue
+					if (oldRecord.header.type !== 'ATTR' || !oldRecord.data || !current.data || typeof oldRecord.data !== 'object' || typeof current.data !== 'object')
+						throw new Error(`写后非目标有效记录发生变化：${key.replace('\u0000', ':')}`)
+					const parentId = String(oldRecord.data.parentId ?? '')
+					if (!parentId || parentId !== String(current.data.parentId ?? ''))
+						throw new Error(`旧 ATTR ${oldRecord.header.id} 的 parentId 发生变化`)
+					const oldData = { ...oldRecord.data }; delete oldData.zIndex
+					const currentData = { ...current.data }; delete currentData.zIndex
+					if (plain(comparableHeader(oldRecord.header)) !== plain(comparableHeader(current.header)) || plain(oldData) !== plain(currentData))
+						throw new Error(`旧 ATTR ${oldRecord.header.id} 除 zIndex 外的字段发生变化`)
+					if (!changedAttrs.has(parentId)) changedAttrs.set(parentId, [])
+					changedAttrs.get(parentId)!.push({ old: oldRecord, current })
+				}
+				const requestedGeometry = requested
+				for (const record of newRecords.values()) {
+					const key = recordKey(record)
+					if (oldRecords.has(key)) continue
+					if (record.header.type === 'DOCHEAD') continue
+					if (record.header.type === 'WIRE') {
+						const wire = after.wires.get(String(record.header.id))
+						if (!wire || !requestedGeometry.some(segment => wireContributes(wire, segment))) throw new Error(`新增 WIRE ${record.header.id} 不属于本次请求路径`)
+						continue
+					}
+					if (record.header.type === 'LINE') {
+						const lineId = String(record.header.id)
+						const owner = String(record.data?.lineGroup ?? '')
+						const wire = after.wires.get(owner)
+						const line = wire?.sourceLines.find((item: any) => item.id === lineId)
+						const expectedStrokeStyle = ['SOLID', 'SHORT_DASH', 'DOT'][wire?.lineType]
+						if (!wire || !line || !requestedGeometry.some(segment => geometryPreserved(line.sdkLine, [segment]))
+							|| line.strokeColor !== wire.color || line.strokeWidth !== wire.lineWidth || line.strokeStyle !== expectedStrokeStyle)
+							throw new Error(`新增 LINE ${lineId} 的请求几何、归属或样式未与保留 WIRE 一致`)
+						continue
+					}
+					if (record.header.type === 'ATTR') {
+						const owner = String(record.data?.parentId ?? '')
+						const wire = after.wires.get(owner)
+						const isNewWire = !oldRecords.has(`WIRE\u0000${owner}`)
+						const data = record.data
+						const relevanceKeys = ['id', 'x', 'y', 'rotation', 'color', 'fontFamily', 'fontSize', 'fontWeight', 'italic', 'underline', 'align', 'value', 'keyVisible', 'valueVisible', 'key', 'fillColor', 'parentId', 'zIndex']
+						const validIdentity = typeof record.header.id === 'string' && record.header.id.trim().length > 0
+						const autoRelevance = isNewWire && data?.key === 'Relevance' && data?.value === '[]'
+							&& wire && wireContributes(wire, currentSegment)
+							&& ['key', 'value', 'parentId'].every(key => Object.hasOwn(data, key))
+							&& Object.keys(data).every(key => relevanceKeys.includes(key))
+							&& Object.keys(data).filter(key => !['id', 'key', 'parentId', 'value', 'zIndex'].includes(key)).every(key => data[key] === null)
+							&& (data.id == null || data.id === record.header.id) && data.parentId === owner && (data.zIndex == null || Number.isSafeInteger(data.zIndex))
+						const autoUnnamedNet = !segmentWasNamed && isNewWire && data?.key === 'NET' && data?.value === ''
+							&& wire && wireContributes(wire, currentSegment)
+							&& ['key', 'value', 'parentId'].every(key => Object.hasOwn(data, key))
+							&& Object.keys(data).every(key => relevanceKeys.includes(key))
+							&& (data.x == null || Number.isFinite(data.x)) && (data.y == null || Number.isFinite(data.y))
+							&& ['keyVisible', 'valueVisible'].every(key => data[key] == null || typeof data[key] === 'boolean')
+							&& Object.keys(data).filter(key => !['id', 'x', 'y', 'keyVisible', 'valueVisible', 'key', 'parentId', 'value', 'zIndex'].includes(key)).every(key => data[key] == null)
+							&& (data.id == null || data.id === record.header.id) && data.parentId === owner && (data.zIndex == null || Number.isSafeInteger(data.zIndex))
+						const requestedNetAttr = segmentWasNamed && net && ['NET', 'Name'].includes(String(data?.key)) && data?.value === net && wire?.net === net
+						if (!wire || !validIdentity || !requestedGeometry.some(segment => wireContributes(wire, segment)) || !(autoRelevance || autoUnnamedNet && wire.net === '' || requestedNetAttr))
+							throw new Error(`新增 ATTR ${record.header.id} 不是本次新 WIRE 的有效网络或 Relevance 属性`)
+						continue
+					}
+					throw new Error(`写后出现非请求新增有效记录：${key.replace('\u0000', ':')}`)
+				}
+				for (const [wireId, entries] of changedAttrs) {
+					if (!before.wires.has(wireId) || !after.wires.has(wireId) || !requestedGeometry.some(segment => wireContributes(after.wires.get(wireId), segment)))
+						throw new Error(`旧 ATTR 所属 WIRE ${wireId} 不是本次保留并承接请求路径的同一导线`)
+					const oldGroup = (before.records ?? []).filter((record: any) => record.header.type === 'ATTR' && String(record.data?.parentId ?? '') === wireId)
+					const afterGroup = (after.records ?? []).filter((record: any) => record.header.type === 'ATTR' && String(record.data?.parentId ?? '') === wireId)
+					const oldAttrIds = oldGroup.map((record: any) => String(record.header.id)).sort()
+					const afterAttrIds = afterGroup.map((record: any) => String(record.header.id)).sort()
+					if (oldGroup.length !== afterGroup.length || oldGroup.length !== entries.length || oldAttrIds.some((id: string, index: number) => id !== afterAttrIds[index]))
+						throw new Error(`WIRE ${wireId} 的 ATTR 身份集合发生增删`)
+					const groupEntries = oldGroup.map((old: any) => ({ old, current: newRecords.get(recordKey(old)) }))
+					if (groupEntries.some((entry: any) => !entry.current || !entries.some(pair => pair.old === entry.old)))
+						throw new Error(`WIRE ${wireId} 的 ATTR 身份发生变化`)
+					const byZIndexThenId = (a: any, b: any) => Number(a.data?.zIndex) - Number(b.data?.zIndex) || String(a.header.id).localeCompare(String(b.header.id))
+					const oldZOrder = [...oldGroup].sort(byZIndexThenId).map((record: any) => String(record.header.id))
+					const afterZOrder = [...afterGroup].sort(byZIndexThenId).map((record: any) => String(record.header.id))
+					if (oldZOrder.some((id: string, index: number) => id !== afterZOrder[index])) throw new Error(`WIRE ${wireId} 的 ATTR 相对 zIndex 顺序发生变化`)
+					const offsets: number[] = groupEntries.map(({ old, current }: any) => Number(current.data.zIndex) - Number(old.data.zIndex))
+					const unchanged = offsets.every(offset => offset === 0)
+					const addedLineCountForWire = addedLines.filter((record: any) => String(record.data?.lineGroup ?? '') === wireId).length
+					const appended = addedLineCountForWire > 0 && offsets.every(offset => Number.isSafeInteger(oldGroup[0]?.data?.zIndex) && Number.isSafeInteger(offset) && offset === addedLineCountForWire)
+					if (!unchanged && !appended)
+						throw new Error(`WIRE ${wireId} 的 ATTR zIndex 未保持原值或统一增加新增 LINE 数量`)
+					if (appended) {
+						for (const { old, current } of groupEntries as any) {
+							if (!Number.isSafeInteger(old.data.zIndex) || !Number.isSafeInteger(current.data.zIndex)) throw new Error(`WIRE ${wireId} 的 ATTR zIndex 不是有限整数`)
+							const existing = drawingOrderChanges.find(change => change.id === String(old.header.id) && change.wireId === wireId)
+							if (existing) existing.after = current.data.zIndex
+							else drawingOrderChanges.push({ id: String(old.header.id), before: old.data.zIndex, after: current.data.zIndex, wireId })
+						}
+					}
+				}
+			}
 			for (let i = 0; i < segments.length; i++) {
 				const [x1, y1, x2, y2] = segments[i]
-				const wire = await eda.sch_PrimitiveWire.create(
-					[x1, y1, x2, y2],
-					nameNext ? net : undefined,
-					wireColor as any,
-					wireWidth as any,
-					wireType as any,
-				)
-				if (!wire)
-					throw new Error(`第 ${i + 1} 段导线创建失败（可能当前打开的不是原理图）`)
-				primitiveIds.push(safeState<string>(wire, 'getState_PrimitiveId'))
-				if (nameNext)
-					didName = true
+				const segmentWasNamed = Boolean(nameNext && net)
+				let before: any
+				try { before = await capture(expectedUuid) }
+				catch (error) {
+					if (writeAttempted) throwPartial(`写前读回失败：${String((error as any)?.message ?? error)}`, 'unknown', i + 1)
+					throw error
+				}
+				currentState = before
+				lastVerifiedPhase = i === 0 ? 'pre-write' : 'post-write'
+				lastVerifiedSegment = i || lastVerifiedSegment
+				let returned: any
+				let createError: any
+				let createAttempted = false
+				try {
+					returned = await awaitWithinOperationDeadline(
+						() => {
+							if (performance.now() >= operationDeadline) throw new Error(`第 ${i + 1} 段 create 前 drawWire 总时间预算已到期`)
+							createAttempted = true
+							createCalls++
+							writeAttempted = true
+							if (nameNext) didName = true
+							return eda.sch_PrimitiveWire.create([x1, y1, x2, y2], nameNext ? net : undefined, wireColor as any, wireWidth as any, wireType as any)
+						},
+						`第 ${i + 1} 段 create`,
+					)
+				}
+				catch (error) { createError = error }
+				if (!createAttempted) {
+					if (writeAttempted) throwPartial(`第 ${i + 1} 段 create 前预算到期；之前已有写入，停止后续动作：${String(createError?.message ?? createError)}`, 'unknown', i + 1)
+					throw createError
+				}
+				let after: any
+				try { after = await capturePostWrite(i + 1) }
+				catch (error) { throwPartial(`写后读回失败，create 结果可能已写：${String((error as any)?.message ?? error)}`, 'unknown', i + 1, undefined, wireIdSyncEvidence) }
+				currentState = after
+				lastVerifiedPhase = 'post-write'
+				lastVerifiedSegment = i + 1
+				if (nameNext && net) {
+					const targetWire = [...after.wires.values()].find((wire: any) => wireContributes(wire, [x1, y1, x2, y2])
+						&& wire.net === net && wire.sourceNets.some((attr: any) => attr.parentId === wire.id && ['NET', 'Name'].includes(String(attr.key)) && attr.value === net))
+					if (!targetWire)
+						partial = { stoppedAtSegment: i + 1, reason: `第 ${i + 1} 段命名目标「${net}」未在存活贡献线的源 NET value/parentId 与 getter.net 中一致读回`, state: 'partial' }
+					else
+						verifiedTargetNet = true
+				}
+				if (after.uuid !== before.uuid) {
+					partial = { stoppedAtSegment: i + 1, reason: `写入期间焦点 UUID 改变（${before.uuid}→${after.uuid}），create 结果可能已写`, state: 'unknown' }
+					currentState = before
+					throwPartial(partial.reason, 'unknown', i + 1)
+				}
+				const beforeIds = new Set<string>(before.wires.keys())
+				const afterIds = new Set<string>(after.wires.keys())
+				for (const id of afterIds) if (!beforeIds.has(id)) created.add(id)
+				for (const id of beforeIds) if (!afterIds.has(id)) removed.add(id)
+				const covering = [...after.wires.values()].filter((wire: any) => wireContributes(wire, [x1, y1, x2, y2])).map((wire: any) => wire.id)
+				coveredSegments[i] = covering
+				primitiveIds.splice(0, primitiveIds.length, ...new Set(coveredSegments.flat().filter((id: string) => after.wires.has(id))))
+				for (const id of covering) if (beforeIds.has(id)) reused.add(id)
+				const beforeLines = [...before.wires.values()].flatMap((wire: any) => wire.sourceLines)
+				const afterLines = [...after.wires.values()].flatMap((wire: any) => wire.sourceLines)
+				const oldGeometry = [...before.wires.values()].flatMap((wire: any) => wire.sourcePaths)
+				const requestedGeometry = segments.slice(0, i + 1).map((segment: any) => [...segment])
+				for (const [id, oldWire] of before.wires) {
+					const afterSourcePaths = [...after.wires.values()].flatMap((wire: any) => wire.sourcePaths)
+					if (!geometryPathsPreserved(oldWire.sourcePaths, afterSourcePaths)) {
+						partial = { stoppedAtSegment: i + 1, reason: `旧导线 ${id} 的原几何范围未完整保留`, state: 'partial', affectedId: id }
+						break
+					}
+					for (const oldLine of oldWire.sourceLines) {
+						const targetLine = oldLine.sdkLine
+						const exactDiagonal = targetLine[1] !== targetLine[3] && targetLine[0] !== targetLine[2]
+						const replacements = afterLines.filter((line: any) => exactDiagonal
+							? segmentKey(targetLine) === segmentKey(line.sdkLine)
+							: segmentOverlaps(targetLine, line.sdkLine))
+						if (!replacements.length || (exactDiagonal ? !replacements.some((line: any) => segmentKey(targetLine) === segmentKey(line.sdkLine)) : !segmentCovered(targetLine, replacements.map((line: any) => line.sdkLine))) || replacements.some((line: any) => styleKey(line) !== styleKey(oldLine))) {
+							partial = { stoppedAtSegment: i + 1, reason: `旧导线 ${id} 的 LINE 样式/几何未承接`, state: 'partial', affectedId: id }
+							break
+						}
+					}
+					if (partial) break
+					const oldNetKey = plain(oldWire.sourceNets.map((attr: any) => ({ key: attr.key, value: attr.value })).sort((a: any, b: any) => `${a.key}:${a.value}`.localeCompare(`${b.key}:${b.value}`)))
+					const oldSegments: Array<Array<number>> = (oldWire.sourcePaths as Array<Array<number>>).flatMap((path: Array<number>) => lineSegments(path))
+					const carriersBySegment: Array<Array<any>> = oldSegments.map((segment: Array<number>) => [...after.wires.values()].filter((wire: any) => wire.sourcePaths.flatMap((path: Array<number>) => lineSegments(path)).some((line: Array<number>) => segmentOverlapsOrMatches(segment, line))))
+					const carriers = [...new Map(carriersBySegment.flat().map((wire: any) => [wire.id, wire])).values()]
+					if (!carriers.length || carriersBySegment.some((items, index) => !items.length || !geometryPathsPreserved([oldSegments[index]], items.flatMap((wire: any) => wire.sourcePaths))) || carriers.some((wire: any) => plain(wire.sourceWireAttributes) !== plain(oldWire.sourceWireAttributes))) {
+						partial = { stoppedAtSegment: i + 1, reason: `旧导线 ${id} 的 WIRE 属性或旧几何承接发生变化`, state: 'partial', affectedId: id }
+						break
+					}
+					const oldHasNoConflictingName = !!net && oldWire.sourceNets.every((attr: any) => attr.value === '' || attr.value === net)
+					const touchesRequest = oldHasNoConflictingName && verifiedTargetNet
+						&& oldSegments.some((oldSegment: Array<number>) => requestedGeometry.some((requested: Array<number>) => segmentsTouch(oldSegment, requested)))
+					const carrierHasExpectedNets = (wire: any) => {
+						const actual = wire.sourceNets.map((attr: any) => ({ key: attr.key, value: attr.value })).sort((a: any, b: any) => `${a.key}:${a.value}`.localeCompare(`${b.key}:${b.value}`))
+						return plain(actual) === oldNetKey || (touchesRequest && actual.some((attr: any) => ['NET', 'Name'].includes(String(attr.key)) && attr.value === net) && actual.every((attr: any) => attr.value === '' || attr.value === net) && wire.net === net)
+					}
+					if (carriersBySegment.some(items => items.some((wire: any) => !carrierHasExpectedNets(wire) || wire.sourceNets.some((attr: any) => attr.parentId !== wire.id || typeof attr.value !== 'string')))) {
+						partial = { stoppedAtSegment: i + 1, reason: `旧导线 ${id} 的 NET 属性未按真实 value/parentId 承接`, state: 'partial', affectedId: id }
+						break
+					}
+					if (carriers.some((wire: any) => wire.color !== oldWire.color || wire.lineWidth !== oldWire.lineWidth || wire.lineType !== oldWire.lineType)) {
+						partial = { stoppedAtSegment: i + 1, reason: `旧导线 ${id} 的 getter 样式发生变化`, state: 'partial', affectedId: id }
+						break
+					}
+				}
+				if (!partial && afterLines.some((line: any) => !geometryPreserved(line.sdkLine, [...oldGeometry, ...requestedGeometry])))
+					partial = { stoppedAtSegment: i + 1, reason: '写入改变了请求路径以外的有效导线几何', state: 'partial' }
+				if (!partial && (wireColor != null || wireWidth != null || wireType != null)) {
+					const requested = [x1, y1, x2, y2]
+					const expectedStyle = { color: wireColor, width: wireWidth, type: wireType == null ? undefined : ['SOLID', 'SHORT_DASH', 'DOT'][wireType] }
+					const affected = [...after.wires.values()].filter((wire: any) => wireContributes(wire, requested))
+					const expectedStyleMatches = (wire: any, line: any) =>
+						(wireColor == null || (line.strokeColor === wireColor && wire.color === wireColor))
+						&& (wireWidth == null || (line.strokeWidth === wireWidth && wire.lineWidth === wireWidth))
+						&& (wireType == null || (line.strokeStyle === expectedStyle.type && wire.lineType === wireType))
+					if (!affected.length || affected.some((wire: any) => wire.sourceLines.filter((line: any) => segmentOverlaps(requested, line.sdkLine)).some((line: any) => !expectedStyleMatches(wire, line))
+						|| !wire.sourceLines.some((line: any) => segmentOverlaps(requested, line.sdkLine))))
+						partial = { stoppedAtSegment: i + 1, reason: `第 ${i + 1} 段显式样式未在源 LINE 与 getter 中一致读回`, state: 'partial' }
+				}
+				if (!partial) {
+					try { checkSnapshotChanges(before, after, requestedGeometry, segmentWasNamed, [x1, y1, x2, y2]) }
+					catch (error) { partial = { stoppedAtSegment: i + 1, reason: String((error as any)?.message ?? error), state: 'partial' } }
+				}
+				if (!partial && !segmentCovered([x1, y1, x2, y2], [...after.wires.values()].flatMap((wire: any) => wire.sourcePaths)))
+					partial = { stoppedAtSegment: i + 1, reason: `第 ${i + 1} 段未被连续有效几何覆盖`, state: 'unknown' }
+				if (createError || !returned) {
+					partial ??= { stoppedAtSegment: i + 1, reason: createError ? `create 抛错，写入结果未知：${String(createError?.message ?? createError)}` : 'create 返回空值，写入结果未知', state: 'unknown' }
+				}
+				if (!covering.length) partial ??= { stoppedAtSegment: i + 1, reason: '写后读回未找到覆盖本段的存活导线', state: 'unknown' }
+				currentState = after
+				if (partial) throwPartial(partial.reason, partial.state, partial.stoppedAtSegment, partial.affectedId)
 				nameNext = false // 命名只用于第一段，其余段无名
 			}
-			// 读回验证（0.10.23：官方 create 返回值不可信——命名段读回真实 NET，带不上名如实报，杜绝"报成功实际无名"）
+			// 最终核对固定初始焦点，并要求全部请求段仍有连续有效几何覆盖。
+			let finalState: any
+			try { finalState = await capture(expectedUuid) }
+			catch (error) { throwPartial(`最终焦点/source/getter 复核失败：${String((error as any)?.message ?? error)}`, 'unknown') }
+			currentState = finalState
+			lastVerifiedPhase = 'final'
+			if (!segments.every(segment => segmentCovered(segment, [...finalState.wires.values()].flatMap((wire: any) => wire.sourcePaths))))
+				throwPartial('最终读回发现请求路径未被存活导线连续覆盖', 'partial')
+			const finalIds = [...finalState.wires.values()].filter((wire: any) => segments.some(segment => wireContributes(wire, segment))).map((wire: any) => wire.id)
+			primitiveIds.splice(0, primitiveIds.length, ...finalIds)
+			const createdFinal = [...created].filter(id => finalState.wires.has(id))
+			const removedFinal = [...removed].filter(id => !finalState.wires.has(id))
+			const reusedFinal = [...reused].filter(id => finalState.wires.has(id))
+			// 读回验证不依赖 create 返回对象 ID，按最终存活线的 NET 属性核实命名结果。
 			let readback: { namedWireId?: string, net?: string, verified: boolean } | undefined
-			if (didName && net) {
-				const namedId = primitiveIds[0]
-				await new Promise(resolve => setTimeout(resolve, 300))
-				try {
-					const wires = (await eda.sch_PrimitiveWire.getAll()) ?? []
-					const found = wires.find(w => safeState<string>(w, 'getState_PrimitiveId') === namedId)
-					const actual = found ? safeState<string>(found, 'getState_Net') : undefined
-					readback = { namedWireId: namedId, net: actual ?? null as any, verified: actual === net }
-				}
-				catch {
-					readback = { namedWireId: namedId, net: null as any, verified: false }
-				}
+			if (didName && net && finalState) {
+				const named = [...finalState.wires.values()].find((wire: any) => finalIds.includes(wire.id) && wire.net === net && wire.sourceNets?.some((attr: any) => attr.parentId === wire.id && (attr.key === 'NET' || attr.key === 'Name') && attr.value === net))
+				readback = { namedWireId: named?.id, net: named?.sourceNets?.find((attr: any) => attr.parentId === named.id && attr.value === net)?.value ?? null as any, verified: !!named }
 			}
+			if (didName && net && readback?.verified) {
+				const namedWire = finalState.wires.get(readback.namedWireId!)
+				if (namedWire?.net !== net)
+					readback.verified = false
+			}
+			if (didName && net && !readback?.verified)
+				throwPartial(`命名目标「${net}」未在最终有效 NET value/parentId 中读回`, 'partial')
+			if (partial) throwPartial(partial.reason, partial.state, partial.stoppedAtSegment, partial.affectedId)
 			return {
-				primitiveIds,
-				segments: primitiveIds.length,
+				primitiveIds: finalIds,
+				segments: createCalls,
+				created: createdFinal,
+				reused: reusedFinal,
+				removed: removedFinal,
+				...(partial ? { partial } : {}),
+				...(finalState ? { verification: { focusUuid: finalState.uuid, sourceAndModelReadback: true, coverageSegments: coveredSegments.length } } : {}),
 				named: didName,
 				...(net ? { net } : {}),
+				...(drawingOrderChanges.length ? { drawingOrderChanges } : {}),
 				...(readback ? { readback, ...(readback.verified ? {} : { note: `命名段读回网名「${readback.net ?? '(读取失败)'}」与目标「${net}」不符——导线已画出但可能没带上名，请用 schematic.listWires 复核后用 setWireNet 补名` }) } : {}),
 				// 0.10.26（0.10.24 终验实锤）：官方对命名导线会在导线中点自动落一个 NET 属性标签——
 				// 它与 placeNetLabel 的标签是两套，同网并存即重复（DRC "多个网络名"类警告），且属性标签删不掉
@@ -2362,75 +2983,349 @@ export const schematicCommands: Array<ICommandDef> = [
 			if (params.lineWidth != null)
 				property.lineWidth = Number(params.lineWidth)
 			if (params.lineType != null) {
+				if (typeof params.lineType !== 'string')
+					throw new Error('lineType 必须是字符串：solid、dashed 或 dotted')
 				const m: Record<string, number> = { solid: 0, dashed: 1, dotted: 2 }
-				property.lineType = m[String(params.lineType)] ?? 0
+				const requestedLineType = params.lineType
+				if (!Object.hasOwn(m, requestedLineType))
+					throw new Error('lineType 仅支持 solid、dashed 或 dotted')
+				property.lineType = m[requestedLineType]
 			}
 			if (params.newNet != null)
 				property.net = String(params.newNet)
 			if (!Object.keys(property).length)
 				throw new Error('至少提供一个要修改的属性（color / lineWidth / lineType / newNet）')
-			let ids: Array<string> = []
+			const wires = await eda.sch_PrimitiveWire.getAll()
+			if (!Array.isArray(wires))
+				throw new Error('读取原理图导线失败：getAll 未返回数组，未执行修改')
+			let targets: Array<{ id: string, wire: any }> = []
 			if (params.primitiveId) {
-				ids = [String(params.primitiveId)]
+				const id = String(params.primitiveId)
+				const wire = wires.find(w => safeState<string>(w, 'getState_PrimitiveId') === id)
+				if (!wire)
+					throw new Error(`原理图导线 ${id} 不存在，未执行修改`)
+				targets = [{ id, wire }]
 			}
 			else if (params.net) {
-				const wires = (await eda.sch_PrimitiveWire.getAll()) ?? []
-				ids = wires
+				targets = wires
 					.filter(w => safeState<string>(w, 'getState_Net') === String(params.net))
-					.map(w => safeState<string>(w, 'getState_PrimitiveId'))
-					.filter(Boolean) as Array<string>
-				if (!ids.length)
+					.map(w => ({ id: safeState<string>(w, 'getState_PrimitiveId'), wire: w }))
+					.filter((entry): entry is { id: string, wire: any } => typeof entry.id === 'string' && !!entry.id)
+				if (!targets.length)
 					throw new Error(`没有找到网络 ${params.net} 的导线`)
 			}
 			else {
 				throw new Error('缺少参数 primitiveId 或 net（二选一）')
 			}
+			const changesStyle = Object.keys(property).some(k => k === 'color' || k === 'lineWidth' || k === 'lineType')
+			const startingDoc = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			if (!startingDoc?.uuid || startingDoc.documentType !== 1)
+				throw new Error('焦点文档不是有效的原理图页，整批未执行修改')
+			const sourceBefore = await eda.sys_FileManager.getDocumentSource()
+			if (typeof sourceBefore !== 'string' || !sourceBefore.trim())
+				throw new Error('无法读取当前原理图源码，整批未执行修改')
+			const parsedBefore = parseSourceLog(sourceBefore)
+			if (parsedBefore.uuid !== startingDoc.uuid)
+				throw new Error('焦点原理图页与源码 UUID 不一致，整批未执行修改')
+			const sourceWires = resolveRecords(parsedBefore, 'WIRE')
+			const sourceAttrs = resolveRecords(parsedBefore, 'ATTR')
+			const sourceLines = resolveRecords(parsedBefore, 'LINE')
+			const sourceLineTypeByGetter: Record<number, string> = { 0: 'SOLID', 1: 'SHORT_DASH', 2: 'DOT' }
+			const originals = new Map<string, { state: Record<string, unknown>, net: string, attrMode: 'none' | 'empty' | 'named', netAttrId?: string, netAttrData?: Record<string, unknown>, getterAttrs: Array<{ id: string, key: string, value: unknown }>, lines: Array<{ id: string, lineGroup: unknown, startX: unknown, startY: unknown, endX: unknown, endY: unknown, strokeColor: unknown, strokeWidth: unknown, strokeStyle: unknown }>, lineTypeEncodingVerified: boolean }>()
+			for (const { id, wire } of targets) {
+				if (!sourceWires.has(`WIRE\u0000${id}`))
+					throw new Error(`导线 ${id} 在当前源码中不存在，整批未执行修改`)
+				const net = safeState<unknown>(wire, 'getState_Net')
+				const state = { color: safeState<unknown>(wire, 'getState_Color'), lineWidth: safeState<unknown>(wire, 'getState_LineWidth'), lineType: safeState<unknown>(wire, 'getState_LineType'), line: safeState<unknown>(wire, 'getState_Line') }
+				if (typeof net !== 'string' || state.color === undefined || state.lineWidth === undefined || state.lineType === undefined || state.line === undefined)
+					throw new Error(`导线 ${id} 的网络、样式或几何读回不可信，整批未执行修改`)
+				const directLines = Array.from(sourceLines.values()).filter(record => (record.data as Record<string, unknown>)?.lineGroup === id)
+				if (!directLines.length)
+					throw new Error(`导线 ${id} 在源码中没有对应 LINE 段，整批未执行修改`)
+				const lineStates = directLines.map(record => {
+					const data = record.data as Record<string, unknown>
+					for (const endpoint of ['startX', 'startY', 'endX', 'endY'] as const) {
+						if (!Object.hasOwn(data, endpoint) || typeof data[endpoint] !== 'number' || !Number.isFinite(data[endpoint]))
+							throw new Error(`导线 ${id} 的 LINE 源码端点 ${endpoint} 缺失或非有限数值，整批未执行修改`)
+					}
+					if (!Object.hasOwn(data, 'strokeColor') || !Object.hasOwn(data, 'strokeWidth') || !Object.hasOwn(data, 'strokeStyle'))
+						throw new Error(`导线 ${id} 的 LINE 源码缺少 strokeColor/strokeWidth/strokeStyle 字段，整批未执行修改`)
+					if (data.strokeColor !== state.color || data.strokeWidth !== state.lineWidth)
+						throw new Error(`导线 ${id} 的 LINE 源码颜色或线宽与对象 getter 不一致，整批未执行修改`)
+					return { id: String(record.header.id), lineGroup: data.lineGroup, startX: data.startX, startY: data.startY, endX: data.endX, endY: data.endY, strokeColor: data.strokeColor, strokeWidth: data.strokeWidth, strokeStyle: data.strokeStyle }
+				})
+				const lineTypeEncodingVerified = typeof state.lineType === 'number'
+					&& Object.hasOwn(sourceLineTypeByGetter, state.lineType)
+					&& lineStates.every(line => line.strokeStyle === sourceLineTypeByGetter[state.lineType as number])
+				if (property.lineType != null && !lineTypeEncodingVerified)
+					throw new Error(`导线 ${id} 的源 LINE.strokeStyle 与对象 lineType 尚无已核实的数值映射，整批未执行修改`)
+				let attrs: any[]
+				try {
+					const result = await eda.sch_PrimitiveAttribute.getAll(id)
+					if (!Array.isArray(result))
+						throw new Error('属性接口未返回数组')
+					attrs = result
+				}
+				catch (error) {
+					throw new Error(`导线 ${id} 的 NET/Name 属性读取失败，整批未执行修改：${error instanceof Error ? error.message : String(error)}`)
+				}
+				const live: Array<{ id: string, key: string, value: unknown }> = []
+				for (const attr of attrs) {
+					const key = attr?.getState_Key?.()
+					if (typeof key !== 'string')
+						throw new Error(`导线 ${id} 的属性键读回不可信，整批未执行修改`)
+					if (!/^(NET|Name)$/i.test(key))
+						continue
+					const attrId = attr?.getState_PrimitiveId?.()
+					const value = attr?.getState_Value?.()
+					if (typeof attrId !== 'string' || !attrId || typeof value !== 'string')
+						throw new Error(`导线 ${id} 的 NET/Name 属性值或 ID 读回不可信，整批未执行修改`)
+					live.push({ id: attrId, key, value })
+				}
+				const direct = Array.from(sourceAttrs.values()).filter(record => {
+					const data = record.data as Record<string, unknown>
+					return data?.parentId === id && typeof data.key === 'string' && /^(NET|Name)$/i.test(data.key)
+				})
+				if (live.length !== direct.length)
+					throw new Error(`导线 ${id} 的 NET/Name 属性数量与源码不一致，整批未执行修改`)
+				const sourceKeyByLiveId = new Map<string, string>()
+				for (const attr of live) {
+					const record = direct.find(item => String(item.header.id) === attr.id)
+					const data = record?.data as Record<string, unknown> | undefined
+					const getterAlias = /^Name$/i.test(attr.key) && typeof data?.key === 'string' && /^NET$/i.test(data.key)
+					if (!data || data.parentId !== id || (!getterAlias && data.key !== attr.key) || data.value !== attr.value)
+						throw new Error(`导线 ${id} 的 NET/Name 属性与源码不一致，整批未执行修改`)
+					sourceKeyByLiveId.set(attr.id, String(data.key))
+				}
+				const nets = live.filter(attr => /^NET$/i.test(sourceKeyByLiveId.get(attr.id) ?? ''))
+				const names = live.filter(attr => /^Name$/i.test(sourceKeyByLiveId.get(attr.id) ?? ''))
+				if (names.length || nets.length > 1)
+					throw new Error(`导线 ${id} 存在 Name-only 或重复 NET/Name 属性，整批未执行修改`)
+				if (nets.length === 1 && nets[0].value !== net)
+					throw new Error(`导线 ${id} 的显式 NET 属性与网络 getter 不一致，整批未执行修改`)
+				if (nets.length === 0 && net !== '')
+					throw new Error(`导线 ${id} 有效网络名缺少显式 NET 属性，整批未执行修改`)
+				const sourceNetRecord = nets.length ? direct.find(record => String(record.header.id) === nets[0].id) : undefined
+				originals.set(id, { state, net, attrMode: nets.length ? (net === '' ? 'empty' : 'named') : 'none', ...(nets.length ? { netAttrId: nets[0].id, netAttrData: { ...(sourceNetRecord?.data as Record<string, unknown>) } } : {}), getterAttrs: live.map(attr => ({ ...attr })), lines: lineStates, lineTypeEncodingVerified })
+			}
+			const focusedAgain = await eda.dmt_SelectControl.getCurrentDocumentInfo()
+			if (focusedAgain?.uuid !== startingDoc.uuid || focusedAgain?.documentType !== 1)
+				throw new Error('整批预检期间焦点原理图页发生变化，整批未执行修改')
+			const snapshot = await captureDocumentSnapshot('schematic.modifyWire', 1)
+			const preflightSourceMatch = compareDocumentSources(sourceBefore, snapshot.source)
+			if (snapshot.documentUuid !== startingDoc.uuid || !preflightSourceMatch.equal)
+				throw new Error('整批预检后原理图源码发生变化，整批未执行修改')
 			const modified: Array<string> = []
 			const failedIds: Array<string> = []
-			// 0.10.24 原子化（P10：官方 modify 多字段合并修改可能整体失效）——样式（颜色/线宽/线型）与改名（net）分步执行
-			const wireSteps: Array<Record<string, unknown>> = []
-			const styleProps: Record<string, unknown> = {}
+			const requestStyle: Record<string, unknown> = {}
 			for (const k of ['color', 'lineWidth', 'lineType']) {
 				if (property[k] != null)
-					styleProps[k] = property[k]
+					requestStyle[k] = property[k]
 			}
-			if (Object.keys(styleProps).length)
-				wireSteps.push(styleProps)
-			if (property.net != null)
-				wireSteps.push({ net: property.net })
-			for (const id of ids) {
-				let okAny = false
-				let threw = false
-				for (const stepProps of wireSteps) {
-					try {
-						if (await eda.sch_PrimitiveWire.modify(id, stepProps as any))
-							okAny = true
+			const readback: Array<{ id: string, fields: Record<string, { actual: unknown, expected: unknown, verified: boolean | null }>, sdkSucceeded: boolean, verified: boolean }> = []
+			try {
+			await withDocumentRecovery(snapshot, async (write) => {
+				const getters: Record<string, string> = { color: 'getState_Color', lineWidth: 'getState_LineWidth', lineType: 'getState_LineType', net: 'getState_Net' }
+				const callPropsById = new Map<string, Record<string, unknown>>()
+				const stableWithoutValue = (value: unknown) => {
+					const normalize = (item: unknown): unknown => {
+						if (Array.isArray(item)) return item.map(normalize)
+						if (item && typeof item === 'object') {
+							return Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, normalize(entry)]))
+						}
+						return item
 					}
-					catch {
-						threw = true
-					}
+					if (!value || typeof value !== 'object' || Array.isArray(value)) return JSON.stringify(value)
+					const { value: _value, ...rest } = value as Record<string, unknown>
+					return JSON.stringify(normalize(rest))
 				}
-				if (okAny || !threw)
+				const verifyPostWrite = async (id: string, before: NonNullable<ReturnType<typeof originals.get>>, callProps: Record<string, unknown>, recordReadback: boolean) => {
+					await new Promise(resolve => setTimeout(resolve, 400))
+					await assertSnapshotFocused(snapshot)
+					const wiresAfter = await eda.sch_PrimitiveWire.getAll()
+					if (!Array.isArray(wiresAfter)) throw new Error(`导线 ${id} 修改后对象读回不可用`)
+					const sourceAfterText = await eda.sys_FileManager.getDocumentSource()
+					await assertSnapshotFocused(snapshot)
+					if (typeof sourceAfterText !== 'string' || !sourceAfterText.trim()) throw new Error(`导线 ${id} 修改后源码读回不可用`)
+					const sourceAfter = parseSourceLog(sourceAfterText)
+					if (sourceAfter.uuid !== snapshot.documentUuid) throw new Error(`导线 ${id} 修改后源码 UUID 与快照不一致`)
+					const afterWires = resolveRecords(sourceAfter, 'WIRE')
+					const afterAttrs = resolveRecords(sourceAfter, 'ATTR')
+					const afterLines = resolveRecords(sourceAfter, 'LINE')
+					const found = wiresAfter.find(w => safeState<string>(w, 'getState_PrimitiveId') === id)
+					const fields: Record<string, { actual: unknown, expected: unknown, verified: boolean | null }> = {}
+					let fieldsVerified = Boolean(found) && afterWires.has(`WIRE\u0000${id}`)
+					for (const field of ['color', 'lineWidth', 'lineType', 'net'] as const) {
+						const actual = found ? safeState<unknown>(found, getters[field]) : undefined
+						const expected = Object.hasOwn(callProps, field) ? callProps[field] : field === 'net' ? before.net : before.state[field]
+						const verified = actual === expected
+						fields[field] = { actual: actual ?? null, expected, verified }
+						fieldsVerified &&= verified
+					}
+					const actualLine = found ? safeState<unknown>(found, 'getState_Line') : undefined
+					const geometryVerified = JSON.stringify(actualLine) === JSON.stringify(before.state.line)
+					fields.line = { actual: actualLine ?? null, expected: before.state.line, verified: geometryVerified }
+					fieldsVerified &&= geometryVerified
+					const directLines = Array.from(afterLines.values()).filter(item => (item.data as Record<string, unknown>)?.lineGroup === id)
+					const expectedColor = callProps.color
+					const expectedWidth = callProps.lineWidth
+					const expectedLineType = callProps.lineType
+					const sourceLineChecks = directLines.map(item => {
+						const data = item.data as Record<string, unknown>
+						const lineId = String(item.header.id)
+						const previous = before.lines.find(line => line.id === lineId)
+						const fieldsExist = Object.hasOwn(data, 'strokeColor') && Object.hasOwn(data, 'strokeWidth') && Object.hasOwn(data, 'strokeStyle')
+						const identityVerified = !!previous && data.lineGroup === previous.lineGroup
+							&& data.startX === previous.startX && data.startY === previous.startY && data.endX === previous.endX && data.endY === previous.endY
+						const colorVerified = fieldsExist && data.strokeColor === expectedColor
+						const widthVerified = fieldsExist && data.strokeWidth === expectedWidth
+						let typeVerified: boolean | null
+						if (expectedLineType === before.state.lineType)
+							typeVerified = !!previous && data.strokeStyle === previous.strokeStyle
+						else if (before.lineTypeEncodingVerified && typeof expectedLineType === 'number' && Object.hasOwn(sourceLineTypeByGetter, expectedLineType))
+							typeVerified = data.strokeStyle === sourceLineTypeByGetter[expectedLineType]
+						else typeVerified = null
+						return { id: lineId, strokeColor: data.strokeColor, strokeWidth: data.strokeWidth, strokeStyle: data.strokeStyle, identityVerified, colorVerified, widthVerified, typeVerified }
+					})
+					const linesVerified = directLines.length === before.lines.length && sourceLineChecks.length === before.lines.length
+						&& sourceLineChecks.every(line => line.identityVerified && line.colorVerified && line.widthVerified && line.typeVerified === true)
+					fields.sourceLineStyle = { actual: sourceLineChecks, expected: { strokeColor: expectedColor, strokeWidth: expectedWidth, lineType: expectedLineType }, verified: linesVerified }
+					fieldsVerified &&= linesVerified
+					const directAttrs = Array.from(afterAttrs.values()).filter(item => {
+						const data = item.data as Record<string, unknown>
+						return data?.parentId === id && typeof data.key === 'string' && /^(NET|Name)$/i.test(data.key)
+					})
+					const matchingNets = directAttrs.filter(item => /^NET$/i.test(String((item.data as Record<string, unknown>).key)))
+					const expectedNet = Object.hasOwn(callProps, 'net') ? callProps.net : before.net
+					const sourceNetRecord = matchingNets.length === 1 ? matchingNets[0] : undefined
+					const sourceNetData = sourceNetRecord?.data as Record<string, unknown> | undefined
+					const sourceAttrStable = !!sourceNetRecord && !!sourceNetData
+						&& String(sourceNetRecord.header.id) === before.netAttrId && sourceNetData.parentId === id
+						&& stableWithoutValue(sourceNetData) === stableWithoutValue(before.netAttrData)
+					const expectedAttrMode = before.attrMode === 'none' && expectedNet !== '' ? 'named' : before.attrMode
+					const newNetAttrVerified = before.attrMode === 'none' && expectedAttrMode === 'named'
+						&& directAttrs.length === 1 && matchingNets.length === 1 && sourceNetData?.parentId === id && sourceNetData?.value === expectedNet
+					const attrVerified = expectedAttrMode === 'none'
+						? directAttrs.length === 0
+						: directAttrs.length === 1 && matchingNets.length === 1 && sourceNetData?.value === expectedNet
+							&& (before.attrMode === 'none' ? newNetAttrVerified : sourceAttrStable)
+					fields.netAttribute = { actual: matchingNets.map(item => (item.data as Record<string, unknown>).value), expected: expectedNet, verified: attrVerified }
+					fieldsVerified &&= attrVerified
+					const verified = fieldsVerified
+					if (recordReadback) readback.push({ id, fields, sdkSucceeded: true, verified })
+					if (!verified) {
+						const sourceAttrsFor = (records: typeof sourceAttrs) => {
+							const matches = Array.from(records.values()).filter(item => {
+								const data = item.data as Record<string, unknown>
+								return data?.parentId === id && typeof data.key === 'string' && /^(NET|Name)$/i.test(data.key)
+							})
+							return { records: matches.slice(0, 4).map(item => {
+								const data = item.data as Record<string, unknown>
+								return { id: String(item.header.id), key: data.key, value: data.value, parentId: data.parentId, display: data.display ?? null }
+							}), omitted: Math.max(0, matches.length - 4) }
+						}
+						const sourceLinesFor = (records: typeof sourceLines) => {
+							const matches = Array.from(records.values()).filter(item => (item.data as Record<string, unknown>)?.lineGroup === id)
+							return { records: matches.slice(0, 4).map(item => {
+								const data = item.data as Record<string, unknown>
+								return { id: String(item.header.id), lineGroup: data.lineGroup, strokeStyle: data.strokeStyle, strokeWidth: data.strokeWidth, strokeColor: data.strokeColor, start: [data.startX, data.startY], end: [data.endX, data.endY] }
+							}), omitted: Math.max(0, matches.length - 4) }
+						}
+						const safeGetterAttrs = async () => {
+							try {
+								const result = await withTimeout(eda.sch_PrimitiveAttribute.getAll(id), 2000, `导线 ${id} 写后属性诊断读取`)
+								if (!Array.isArray(result)) return []
+								return result.filter(attr => /^(NET|Name)$/i.test(String(attr?.getState_Key?.() ?? ''))).slice(0, 4).map(attr => ({ id: attr?.getState_PrimitiveId?.() ?? null, key: attr?.getState_Key?.() ?? null, value: attr?.getState_Value?.() ?? null, display: (attr as any)?.getState_Display?.() ?? null }))
+							}
+							catch { return [{ readError: true }] }
+						}
+						const diagnostic = {
+							failedFields: Object.entries(fields).filter(([, value]) => value.verified !== true).map(([field]) => field),
+							getters: Object.fromEntries(['color', 'lineWidth', 'lineType', 'net', 'line'].filter(field => fields[field]).map(field => [field, fields[field]])),
+							attributes: { before: { source: sourceAttrsFor(sourceAttrs), getter: before.getterAttrs }, after: { source: sourceAttrsFor(afterAttrs), getter: await safeGetterAttrs() } },
+							lines: { before: sourceLinesFor(sourceLines), after: sourceLinesFor(afterLines) },
+							targetWire: { before: sourceWires.has(`WIRE\u0000${id}`), afterGetter: Boolean(found), afterSource: afterWires.has(`WIRE\u0000${id}`) }, callProps, docUuid: snapshot.documentUuid,
+						}
+						const boundDiagnostic = (value: unknown): unknown => {
+							if (typeof value === 'string') return value.length <= 96 ? value : `${value.slice(0, 93)}...`
+							if (Array.isArray(value)) return value.map(boundDiagnostic)
+							if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 16).map(([key, entry]) => [key, boundDiagnostic(entry)]))
+							return value
+						}
+						throw new Error(`导线 ${id} 对象、网络属性或几何后验不一致；诊断=${JSON.stringify(boundDiagnostic(diagnostic))}`)
+					}
+					return { fields, verified }
+				}
+				for (const { id } of targets) {
+					const before = originals.get(id)!
+					const callProps = {
+						color: Object.hasOwn(requestStyle, 'color') ? requestStyle.color : before.state.color,
+						lineWidth: Object.hasOwn(requestStyle, 'lineWidth') ? requestStyle.lineWidth : before.state.lineWidth,
+						lineType: Object.hasOwn(requestStyle, 'lineType') ? requestStyle.lineType : before.state.lineType,
+						...(property.net != null ? { net: property.net as string } : changesStyle && before.attrMode !== 'none' ? { net: before.net } : {}),
+					}
+					const result: unknown = await write(() => eda.sch_PrimitiveWire.modify(id, callProps as any))
+					if (result == null || result === false) throw new Error(`导线 ${id} 修改接口返回空值或 false`)
+					callPropsById.set(id, callProps)
+					await verifyPostWrite(id, before, callProps, true)
 					modified.push(id)
-				else
-					failedIds.push(id)
+				}
+				for (const { id } of targets) await verifyPostWrite(id, originals.get(id)!, callPropsById.get(id)!, false)
+			})
 			}
-			// 读回验证（0.10.23：官方 modify 假成功前科——返回非空但保存后没生效，成败以读回为准）。
-			// 只验证能可靠读回的字段：newNet → getState_Net
-			const readback: Array<{ id: string, net?: string, verified: boolean }> = []
-			if (property.net != null && modified.length) {
-				await new Promise(resolve => setTimeout(resolve, 400))
-				const wires = (await eda.sch_PrimitiveWire.getAll()) ?? []
-				for (const id of [...modified]) {
-					const found = wires.find(w => safeState<string>(w, 'getState_PrimitiveId') === id)
-					const actualNet = found ? safeState<string>(found, 'getState_Net') : undefined
-					const ok = actualNet != null && actualNet === property.net
-					readback.push({ id, net: actualNet ?? null as any, verified: ok })
-					if (!ok) {
-						modified.splice(modified.indexOf(id), 1)
-						failedIds.push(id)
+			catch (error) {
+				const recovery = (error as Error & { cause?: Record<string, unknown> })?.cause
+				if (recovery?.restored === true) {
+					await new Promise(resolve => setTimeout(resolve, 400))
+					let restoredWires: any
+					try { restoredWires = await eda.sch_PrimitiveWire.getAll() }
+					catch { restoredWires = undefined }
+					let modelRestored = Array.isArray(restoredWires)
+					for (const { id } of targets) {
+						const before = originals.get(id)!
+						const wire = Array.isArray(restoredWires) ? restoredWires.find(w => safeState<string>(w, 'getState_PrimitiveId') === id) : undefined
+						modelRestored &&= Boolean(wire)
+						for (const [field, getter] of [['color', 'getState_Color'], ['lineWidth', 'getState_LineWidth'], ['lineType', 'getState_LineType']] as const)
+							modelRestored &&= safeState<unknown>(wire, getter) === before.state[field]
+						modelRestored &&= safeState<unknown>(wire, 'getState_Net') === before.net
+						modelRestored &&= JSON.stringify(safeState<unknown>(wire, 'getState_Line')) === JSON.stringify(before.state.line)
+						let attrs: any
+						try { attrs = await eda.sch_PrimitiveAttribute.getAll(id) }
+						catch { modelRestored = false; continue }
+						if (!Array.isArray(attrs)) {
+							modelRestored = false
+							continue
+						}
+						const netAttrs = attrs.filter(attr => /^(NET|Name)$/i.test(String(attr?.getState_Key?.() ?? '')))
+						const sourceNetAttrs = Array.from(sourceAttrs.values()).filter(record => {
+							const data = record.data as Record<string, unknown>
+							return data?.parentId === id && typeof data.key === 'string' && /^(NET|Name)$/i.test(data.key)
+						})
+						if (before.attrMode === 'none') {
+							modelRestored &&= netAttrs.length === 0 && sourceNetAttrs.length === 0
+							continue
+						}
+						const sourceNet = sourceNetAttrs.length === 1 ? sourceNetAttrs[0] : undefined
+						const sourceNetData = sourceNet?.data as Record<string, unknown> | undefined
+						const getterNet = netAttrs.length === 1 ? netAttrs[0] : undefined
+						const getterKey = String(getterNet?.getState_Key?.() ?? '')
+						const getterId = getterNet?.getState_PrimitiveId?.()
+						const getterValue = getterNet?.getState_Value?.()
+						const sourceBackedNet = !!sourceNet && !!sourceNetData
+							&& /^NET$/i.test(String(sourceNetData.key)) && sourceNetData.parentId === id
+							&& String(sourceNet.header.id) === before.netAttrId && sourceNetData.value === before.net
+						const getterMatchesSource = getterId === before.netAttrId && getterValue === before.net
+							&& (/^NET$/i.test(getterKey) || /^Name$/i.test(getterKey) && sourceBackedNet)
+						modelRestored &&= netAttrs.length === 1 && sourceBackedNet && getterMatchesSource
+					}
+					if (!modelRestored) {
+						const operationError = error instanceof Error ? error.message : String(error)
+						throw new Error(`源码快照已恢复，但目标导线对象 getter/属性恢复未确认：${operationError}`, {
+							cause: { ...recovery, partial: true, restored: false, retryable: false, modelRestored: false },
+						})
 					}
 				}
+				throw error
 			}
 			return { modified, failed: failedIds, ...(readback.length ? { readback } : {}) }
 		},
@@ -2599,8 +3494,10 @@ export const schematicCommands: Array<ICommandDef> = [
 		handler: async (params) => {
 			if (!params.net)
 				throw new Error('缺少参数 net')
+			if (params.dryRun !== undefined && typeof params.dryRun !== 'boolean')
+				throw new Error('dryRun 必须是布尔值')
 			const net = String(params.net)
-			const dryRun = Boolean(params.dryRun)
+			const dryRun = params.dryRun ?? false
 
 			// --- 网表成员审计（0.10.45 起带回退：getNetlistFile 返空时自动用 PADS 文本网表，GPT -05） ---
 			const getNetMembers = async (): Promise<Array<string>> => {
@@ -3111,7 +4008,7 @@ export const schematicCommands: Array<ICommandDef> = [
 			if (!params.skipAudit) {
 				try {
 					const drcRaw = await eda.sch_Drc.check(true, false, true)
-					const drcGroups = Array.isArray(drcRaw) ? drcRaw : []
+					const drcGroups = checkedSchematicDrcEntries(drcRaw)
 					const drcTotal = drcGroups.reduce((s: number, e: any) => s + (typeof e?.count === 'number' ? e.count : 1), 0)
 					audit = {
 						drc: { totalCount: drcTotal, groups: drcGroups, note: '明细见 EDA 输出面板' },
@@ -3220,6 +4117,12 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '{ key, value }',
 		example: { cmd: 'schematic.setAttribute', params: { primitiveId: 'xxx', key: 'Designator', value: 'R4' } },
 		handler: async (params) => {
+			if (typeof params.primitiveId !== 'string' || !params.primitiveId.trim())
+				throw new Error('primitiveId 必须是非空字符串')
+			if (typeof params.key !== 'string' || !params.key.trim())
+				throw new Error('key 必须是非空字符串')
+			if (typeof params.value !== 'string')
+				throw new Error('value 必须是字符串；需要清空属性时请显式传空字符串')
 			const compId = String(params.primitiveId)
 			const key = String(params.key)
 			const value = String(params.value)
@@ -4097,8 +5000,12 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '{ floating: [{ primitiveId, net, x, y, worldX, worldY }], deleted, failed, unprocessed?, batches?, method, diagnostics, warning?, dryRun }（全失败时附 manualDelete 手动框选指引；unprocessed 为熔断/预算退出时未轮到的浮标，再次调用接着删）',
 		example: { cmd: 'schematic.pruneFloatingLabels', params: { dryRun: true } },
 		handler: async (params) => {
-			const dryRun = Boolean(params.dryRun)
-			const allowSourceRewrite = Boolean(params.allowSourceRewrite)
+			if (params.dryRun !== undefined && typeof params.dryRun !== 'boolean')
+				throw new Error('dryRun 必须是布尔值')
+			if (params.allowSourceRewrite !== undefined && typeof params.allowSourceRewrite !== 'boolean')
+				throw new Error('allowSourceRewrite 必须是布尔值')
+			const dryRun = params.dryRun ?? false
+			const allowSourceRewrite = params.allowSourceRewrite ?? false
 			const batchSize = Math.max(1, Number(params.batchSize) || 5)
 			// 浮空标签是官方枚举盲区（getAll 不返回 parentId=$$root 的属性），走文档源码扫描
 			const floatingRaw = await scanFloatingNetLabels()
@@ -4166,7 +5073,9 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '{ floating, duplicates, rotationSuspects, misplaced（dryRun 体检四类清单，每条带 id/net/世界坐标/问题/建议）, fixed, pruned, failed, remaining, dryRun }',
 		example: { cmd: 'schematic.fixNetLabels', params: { dryRun: true } },
 		handler: async (params) => {
-			const dryRun = params.dryRun !== false
+			if (params.dryRun !== undefined && typeof params.dryRun !== 'boolean')
+				throw new Error('dryRun 必须是布尔值')
+			const dryRun = params.dryRun ?? true
 			const angle = ((Number(params.angle ?? 180) % 360) + 360) % 360
 			const netFilter = params.net != null ? String(params.net) : undefined
 			const { labels, wireLines } = await scanNetLabelAttrsFromSource()
@@ -5091,9 +6000,9 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.runDrc',
-		summary: '运行原理图 DRC 检查（需先激活原理图图页）。注意：存在致命错误时 pcb.importChanges 会静默失败（返回 false 无提示），导入前必须先清到 0 致命',
+		summary: '运行原理图 DRC 检查（需先激活原理图图页）；官方结果结构未知时明确报错，不把异常返回当 0 项通过。存在致命错误时 pcb.importChanges 可能静默失败，导入前须先清到 0 致命',
 		params: [],
-		returns: '{ passed, totalCount, fatalCount, groups }（官方实际按类型聚合返回 {type, count}，与文档的逐条结构不符，已做兼容）',
+		returns: '{ passed, totalCount, fatalCount, groups, note? }；groups 按宿主实际结果保留逐条或 {type,count} 聚合结构，未知结构报错',
 		example: { cmd: 'schematic.runDrc' },
 		handler: async () => {
 			const runOnce = async (): Promise<{ passed: boolean, totalCount: number, fatalCount: number, groups: Array<any> }> => {
@@ -5107,7 +6016,7 @@ export const schematicCommands: Array<ICommandDef> = [
 						throw new Error('当前激活的不是原理图图页，无法运行原理图 DRC。请先用 editor.openDocument 激活图页')
 					throw err
 				}
-				const groups = Array.isArray(errors) ? errors : []
+				const groups = checkedSchematicDrcEntries(errors)
 				// 官方实际返回按类型聚合的 { type, count }（文档写的是逐条 ISCH_DrcError，两者都兼容）
 				const countOf = (e: any) => (typeof e?.count === 'number' ? e.count : 1)
 				const totalCount = groups.reduce((sum: number, e: any) => sum + countOf(e), 0)
@@ -5131,9 +6040,9 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.runDrcDetailed',
-		summary: '运行原理图 DRC 并返回逐条违规明细（0.10.23，P08 探针结论：官方 eda.sch_Drc.check(strict, ui, includeVerboseError=true) 返回 Array<ISCH_DrcError>，逐条含 type/rule/net/primitives[{name, designator, primitiveId, sheet}]——pro-api-types 25928-26005 行实锤）。⚠️ 0.10.25 定论：该明细重载 pro-api-types 标注「ADD since EDA v4.2」——EDA 4.1.60 运行时不支持逐条明细，调用参数正确也只返回聚合 {type,count}（aggregated:true），明细只能看客户端 DRC 输出面板；v4.2+ 运行时才有逐条。与 runDrc 的区别：runDrc 返回按类型聚合的 {type,count}，本指令在支持的运行时返回 violations 明细数组（primitiveId 可用于画布跳转定位）',
+		summary: '运行原理图 DRC 并返回宿主实际给出的逐条违规或聚合结果；EDA 4.1.78 已实测返回逐条明细，其他版本按返回结构判断，不能仅按版本推断。结果结构未知时报错，不报告通过',
 		params: [],
-		returns: '{ passed, totalCount, fatalCount, warnCount, violations: [{ type, rule, net?, primitives: [{ name?, designator?, primitiveId, sheet? }] }], aggregated? }（若官方运行时返回聚合结构而非逐条明细，violations 原样透传并标 aggregated:true）',
+		returns: '{ passed, totalCount, fatalCount, warnCount, violations, aggregated, note? }；逐条结构含 type/rule/net?/primitives，聚合结构含 type/count 并标 aggregated:true；未知结构报错',
 		example: { cmd: 'schematic.runDrcDetailed' },
 		handler: async () => {
 			const runOnce = async (): Promise<{ passed: boolean, totalCount: number, fatalCount: number, warnCount: number, violations: Array<any>, aggregated: boolean }> => {
@@ -5147,7 +6056,7 @@ export const schematicCommands: Array<ICommandDef> = [
 						throw new Error('当前激活的不是原理图图页，无法运行原理图 DRC。请先用 editor.openDocument 激活图页')
 					throw err
 				}
-				const list = Array.isArray(errors) ? errors : []
+				const list = checkedSchematicDrcEntries(errors)
 				// 官方文档承诺逐条 ISCH_DrcError（type/rule/primitives/net），运行时也可能退化为聚合 {type,count}——两种都兼容
 				const aggregated = list.some((e: any) => typeof e?.count === 'number' && !e?.primitives)
 				const violations = list.map((e: any) => {
@@ -5179,27 +6088,47 @@ export const schematicCommands: Array<ICommandDef> = [
 			const first = await runOnce()
 			await new Promise(resolve => setTimeout(resolve, 800))
 			const second = await runOnce()
-			return {
-				...second,
-				...(second.aggregated ? { note: '官方运行时返回的是聚合结构（{type,count}），未给出逐条明细——逐条明细重载 ADD since EDA v4.2（pro-api-types 26002 行），当前 4.1.x 运行时不支持，明细只能看客户端 DRC 输出面板' } : {}),
-				...(first.totalCount !== second.totalCount
-					? { note: `首次结果为过渡态（${first.totalCount} 条），已自动复跑取稳定值` }
-					: {}),
-			}
+			const notes: Array<string> = []
+			if (second.aggregated)
+				notes.push('官方运行时返回聚合结构（{type,count}），没有完整逐条明细；请按返回结构判断，不按 EDA 版本推断')
+			if (first.totalCount !== second.totalCount)
+				notes.push(`首次与复跑数量不同（${first.totalCount}→${second.totalCount}）；当前结果可能仍在刷新，不能仅凭两次计数确认稳定`)
+			return { ...second, ...(notes.length ? { note: notes.join('；') } : {}) }
 		},
 	},
 	{
 		name: 'schematic.listNets',
-		summary: '列出原理图全部网络（原理图侧网络读回自查）',
+		summary: '列出原理图网络。EDA 4.1 用 PADS 网表和命名导线回退；自动网名可恢复，但 detail:true 无法可靠归属无网络名导线，须用 getNetlist 核对引脚；回退失败会报错',
 		params: [
 			{ name: 'detail', type: 'boolean', description: '是否返回每个网络的导线明细，默认 false（仅网络名列表）' },
 		],
 		returns: '网络名列表，或 [{ net, wires }]',
 		example: { cmd: 'schematic.listNets' },
 		handler: async (params) => {
+			if (params.detail !== undefined && typeof params.detail !== 'boolean')
+				throw new Error('detail 必须是布尔值')
+			if (isEda42OrNewer()) {
+				if (!params.detail)
+					return await eda.sch_Net.getAllNetsName()
+				return await eda.sch_Net.getAllNets()
+			}
+			// EDA 4.1.x returns [] for both sch_Net methods even when the page has nets.
+			// The existing PADS netlist path captures generated net names; wires add
+			// standalone named segments that may not have any component pins.
+			const pinMap = await pinNetMapFromPadsText()
+			if (!pinMap)
+				throw new Error('schematic.listNets：EDA 4.1 网表回退不可用，无法可靠列出全部网络；请检查活动原理图和网表生成结果')
+			const wires = (await eda.sch_PrimitiveWire.getAll() ?? []).map(w => ({
+				primitiveId: safeState<string>(w, 'getState_PrimitiveId'),
+				net: safeState<string>(w, 'getState_Net'),
+				line: safeState<Array<number>>(w, 'getState_Line'),
+				lineWidth: safeState<number>(w, 'getState_LineWidth'),
+			}))
+			const names = [...new Set([...pinMap.values(), ...wires.map(w => w.net).filter((n): n is string => Boolean(n))])].sort()
 			if (!params.detail)
-				return await eda.sch_Net.getAllNetsName()
-			return await eda.sch_Net.getAllNets()
+				return names
+			return names.map(net => ({ net, wires: wires.filter(w => w.net === net),
+				...(wires.some(w => !w.net) ? { note: 'EDA 4.1 不提供自动网络的导线归属；空网络名导线未计入 wires' } : {}) }))
 		},
 	},
 	{
@@ -5226,23 +6155,27 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.exportBom',
-		summary: '导出 BOM 物料清单（返回 base64 文件数据，AI 可自行落盘；配合 smt.queryComponent 可核价下单）',
+		summary: '导出宿主原始 BOM 文件及实测格式信息（base64 不转换）；EDA 4.1.78 的 csv 实为 UTF-16LE 制表符文本，按返回 format/encoding/delimiter 解析',
 		params: [
 			{ name: 'fileName', type: 'string', description: '文件名，默认 schematic-bom' },
 			{ name: 'fileType', type: 'string', description: 'xlsx | csv，默认 xlsx' },
 		],
-		returns: '{ fileName, size, mimeType, base64 }',
+		returns: '{ fileName, size, mimeType, base64, format, encoding?, delimiter?, note? }；base64 保留宿主原始字节，格式字段由文件头和表头识别',
 		example: { cmd: 'schematic.exportBom', params: { fileType: 'csv' } },
 		handler: async (params) => {
-			const fileType = (params.fileType === 'csv' ? 'csv' : 'xlsx') as 'xlsx' | 'csv'
+			if (params.fileType != null && params.fileType !== 'csv' && params.fileType !== 'xlsx')
+				throw new Error('fileType 仅支持 csv 或 xlsx')
+			const fileType = (params.fileType ?? 'xlsx') as 'xlsx' | 'csv'
+			const requestedName = params.fileName == null ? '' : String(params.fileName).trim()
+			const fileStem = requestedName.replace(new RegExp(`\\.${fileType}$`, 'i'), '')
 			const file = await eda.sch_ManufactureData.getBomFile(
-				params.fileName ? String(params.fileName) : undefined,
+				fileStem || undefined,
 				fileType,
 			)
 			const result = await fileToResult(file, `schematic-bom.${fileType}`)
 			if (!result)
 				throw new Error('BOM 导出失败：官方返回空（请确认已激活原理图图页且图中有器件）')
-			return result
+			return { ...result, ...describeBomFile(result, fileType) }
 		},
 	},
 	{
@@ -5257,10 +6190,14 @@ export const schematicCommands: Array<ICommandDef> = [
 		example: { cmd: 'schematic.exportPng', params: { width: 2048 } },
 		handler: async (params) => {
 			const resolution: Record<string, number> = {}
-			if (params.width != null)
-				resolution.width = Number(params.width)
-			if (params.height != null)
-				resolution.height = Number(params.height)
+			for (const key of ['width', 'height'] as const) {
+				if (params[key] == null)
+					continue
+				const value = params[key]
+				if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 4096)
+					throw new Error(`${key} 必须是 1 至 4096 之间的正整数`)
+				resolution[key] = value
+			}
 			const file = await eda.sch_ManufactureData.getPngFile(
 				params.fileName ? String(params.fileName) : undefined,
 				Object.keys(resolution).length ? resolution as any : undefined,
@@ -5372,7 +6309,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.modifyText',
-		summary: '修改已有原理图文本（内容/位置/字号/颜色/旋转）',
+		summary: '修改已有原理图文本（内容/位置/字号/颜色/旋转）；EDA 4.1.78 实机确认保存后会回退且本指令拒绝执行，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'primitiveId', type: 'string', required: true, description: '文本图元 ID' },
 			{ name: 'content', type: 'string', description: '新内容' },
@@ -5385,6 +6322,7 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '{ modified }',
 		example: { cmd: 'schematic.modifyText', params: { primitiveId: 'xxx', content: 'V1.1' } },
 		handler: async (params) => {
+			requireEda42('schematic.modifyText')
 			if (!params.primitiveId)
 				throw new Error('缺少参数 primitiveId')
 			const property: Record<string, any> = {}
@@ -5466,7 +6404,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.getPrimitivesInRegion',
-		summary: '查询指定矩形区域内的原理图图元（返回 id+类型；布局避障用）',
+		summary: '查询指定矩形区域内的原理图图元（返回 id+类型；布局避障用）；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'left', type: 'number', required: true, description: '区域左边界（10mil 单位）' },
 			{ name: 'right', type: 'number', required: true, description: '区域右边界' },
@@ -5476,6 +6414,7 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '[{ primitiveId, primitiveType }]',
 		example: { cmd: 'schematic.getPrimitivesInRegion', params: { left: 300, right: 600, top: 300, bottom: 600 } },
 		handler: async (params) => {
+			requireEda42('schematic.getPrimitivesInRegion')
 			for (const k of ['left', 'right', 'top', 'bottom']) {
 				if (params[k] == null)
 					throw new Error(`缺少参数 ${k}`)
@@ -5491,7 +6430,7 @@ export const schematicCommands: Array<ICommandDef> = [
 	},
 	{
 		name: 'schematic.getPrimitiveAtPoint',
-		summary: '查询指定坐标处的原理图图元（返回 id+类型）',
+		summary: '查询指定坐标处的原理图图元（返回 id+类型）；EDA 4.1.78 实机确认不支持，需 EDA 4.2 或更高版本（4.2 尚未实机验收）',
 		params: [
 			{ name: 'x', type: 'number', required: true, description: '坐标 X（10mil 单位）' },
 			{ name: 'y', type: 'number', required: true, description: '坐标 Y' },
@@ -5499,6 +6438,7 @@ export const schematicCommands: Array<ICommandDef> = [
 		returns: '{ primitiveId, primitiveType } 或 null',
 		example: { cmd: 'schematic.getPrimitiveAtPoint', params: { x: 550, y: 400 } },
 		handler: async (params) => {
+			requireEda42('schematic.getPrimitiveAtPoint')
 			if (params.x == null || params.y == null)
 				throw new Error('缺少参数 x / y')
 			const p = await eda.sch_Document.getPrimitiveAtPoint(Number(params.x), Number(params.y))

@@ -70,6 +70,30 @@ async function main() {
 		assert.equal(calls.length, 0, 'invalid teamUuid is rejected before the SDK call');
 	}
 
+	for (const badDetail of ['bad', 1, null]) {
+		calls = [];
+		await assert.rejects(() => list.handler({ detail: badDetail }), /detail 必须是布尔值/);
+		assert.equal(calls.length, 0, 'invalid detail is rejected before the SDK call');
+	}
+
+	const exportFile = projectCommands.find(command => command.name === 'project.exportFile').handler;
+	let exportCalls = 0;
+	globalThis.eda.sys_FileManager = { getProjectFile: async () => { exportCalls++; return null; } };
+	await assert.rejects(() => exportFile({ fileType: 'invalid' }), /fileType 必须是 epro 或 epro2/);
+	assert.equal(exportCalls, 0, 'invalid export format is rejected before the SDK call');
+
+	const open = projectCommands.find(command => command.name === 'project.open').handler;
+	let openCalls = 0;
+	const originalGetProjectInfo = globalThis.eda.dmt_Project.getProjectInfo;
+	globalThis.eda.dmt_Project.getProjectInfo = async () => undefined;
+	globalThis.eda.dmt_Project.openProject = async () => { openCalls++; return false; };
+	await assert.rejects(() => open({ projectUuid: 'missing' }), /未调用 openProject/);
+	assert.equal(openCalls, 0, 'missing project is rejected before switching current project');
+	globalThis.eda.dmt_Project.getProjectInfo = originalGetProjectInfo;
+
+	const importFile = projectCommands.find(command => command.name === 'project.importFile').handler;
+	await assert.rejects(() => importFile({ fileName: 'bad.epro2', base64: '@' }), /base64 不是有效的文件内容编码/);
+
 	calls = [];
 	infoCalls.length = 0;
 	result = ['first', 'second', 'third'];

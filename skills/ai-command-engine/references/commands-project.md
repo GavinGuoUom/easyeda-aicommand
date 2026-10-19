@@ -43,10 +43,10 @@ This command is read-only. It does not clear unknown-write protection or automat
 | `project.getInfoOf` | Information for a specified project | Verify the document tree of a specified project. | Check available parameters in the target instance's help. |
 | `project.list` | List projects. Can specify a team (`detail:true` fetches each project's information and is slower). | Find projects for a target team. | Check available parameters in the target instance's help. |
 | `project.create` | Create a project. | Start a separate project. | If the write result is unknown, stop later writes. |
-| `project.open` | Open a specified project and switch the current project. The official API fails with “project open failed” when the current project has unsaved changes; run `schematic.save` before switching. | Switch to a specified project or document. | Save unsaved changes in the current project first. |
+| `project.open` | Open a specified project and switch the active project in the current window. The SDK declaration warns that unsaved data in the old project may be lost; a failure response is not protection for unsaved work. | Switch only after confirming the current project is saved, or when the user explicitly allows discarding unsaved changes. | Do not call when the current unsaved state is unconfirmed or must be preserved. Missing or unauthorized targets are rejected before `openProject`, but valid targets have no unsaved-change protection. |
 | `project.moveToFolder` | Move a project into a folder (empty means root). | Organize project folders. | If the write result is unknown, stop later writes. |
-| `project.exportFile` | Export `.epro` or `.epro2` (save the base64 locally for backup or migration). | Backup, delivery, or independent inspection. | Successful export does not prove content acceptance. |
-| `project.importFile` | Import an external file as a new project (since 0.10.35; `.PcbDoc`, `.SchDoc`, `.epro`, etc. infer `fileType`; if omitted, uses the current team and `New Project`). | Receive an external design or synchronize content. | Treat empty return or exception as an unknown result; do not resend. |
+| `project.exportFile` | Export `.epro` or `.epro2` (save the base64 locally for backup or migration). | Backup, delivery, or independent inspection. | `fileType` accepts only `epro` or `epro2` and defaults to `epro`. Successful export does not prove content acceptance. |
+| `project.importFile` | Import an external file as a new project. `.PcbDoc`, `.SchDoc`, `.epro`, and `.epro2` can infer `fileType`. `newProjectName` sets the new display name. | Receive an external design or synchronize content. | For online `.epro2`, an omitted name is derived from reliable root metadata. Name derivation and description preservation passed limited EDA 4.1.78 samples. If a reliable name cannot be derived or it conflicts, require an explicit name. Treat empty return or exception as unknown; do not resend. |
 | `project.getDocumentSource` | Read JSON source data of the active document (faster for whole-document read-only analysis than querying primitives individually). | Verify effective records read-only. | Source coordinates cannot be used directly as public API coordinates. |
 | `project.modifyTitleBlock` | Modify the title block. `data` keys must already exist in the frame; check `titleBlockData` with `getPageInfo` first. The API cannot switch `Page Size` or `Symbol`. | Update existing title-block fields. | Only modifies existing fields; does not change paper size. |
 
@@ -77,6 +77,8 @@ This command is read-only. It does not clear unknown-write protection or automat
 - If the target `schematicUuid` is omitted, the page is copied within the same schematic.
 - Since 0.10.37, the copy is read back and verified. The response includes `name`, `parentSchematicUuid`, and `sourcePageUuid`; an ownership anomaly includes a warning.
 - The new page name may be generated as `source-name_N`.
+- If the SDK does not return an acceptable new UUID, the failed `error.cause` may include `sdkResultType`, safe `sdkResultValue`, and `sdkResultIsSourceUuid`. This diagnostic distinguishes `null`, `undefined`, scalars, and other types. It does not recursively inspect objects or call their `toJSON` or `toString` methods.
+- The diagnostic does not change UUID acceptance rules or the single SDK call. Failure still returns `partial:true` and `retryable:false`; it does not retry, save, or roll back. It adds failure evidence only and does not mean SDK copying or UUID persistence has been fixed. In one independent-window second-generation copy test on v0.20.49, the SDK returned `undefined`; the raw values from two earlier failures were not recorded. At the observed point after failure, 64 document and metadata files were unchanged. This does not prove atomic failure or absence of delayed side effects. The old UID change and intermittent failures remain unexplained; do not infer a version regression.
 
 ### Additional notes for `project.renameSchematicPage`
 
@@ -102,6 +104,7 @@ This command is read-only. It does not clear unknown-write protection or automat
 - Do not retry automatically.
 - First inspect with `project.getInfo` and `project.listPcbs` (read-only).
 - A successful copy is identified by the returned `pcbUuid`.
+- If copy readback fails or the object identity, geometry, or nets differ after save and reopen, stop and assess the impact. Do not manually change Unique ID, automatically copy again, or generate a netlist.
 
 ```json
 {
@@ -114,6 +117,21 @@ This command is read-only. It does not clear unknown-write protection or automat
 If `error.cause.partial=true`, do not copy again. Follow the read-only checks above.
 
 ## Unknown result from project import
+
+On EDA 4.1.78, the import API uses `newProjectFriendlyName` as the display name of a new project. The plugin maps its `newProjectName` argument to that field. If a name is supplied, the plugin checks whether a project with that name already exists in the current team before calling the SDK.
+
+If no name is supplied, ordinary archive imports keep the archived project name; first confirm it will not conflict with an existing project. Since v0.20.39, `.epro2` imports derive a new name only from `project2.json.title` at the archive root. If the title cannot be read reliably or already exists, require an explicit `newProjectName`. Do not infer from the filename, add a suffix, or overwrite an existing project. Metadata name derivation passed limited EDA 4.1.78 samples; this does not establish other formats or offline paths.
+
+Since v0.20.44, description passthrough applies only to online JLCEDA Pro `.epro2` imports. Read a string `description` only from the unique root `project2.json` that parses reliably as an ordinary object. Pass it unchanged, including empty strings, whitespace, and newlines, to `saveTo.newProjectDescription` in the same SDK call. Name derivation still strictly validates and trims `title`. If `newProjectName` is explicit, description extraction is optional; malformed metadata does not add a pre-import rejection. There is no new user parameter, post-write modification, retry, or separate save; timeouts propagate as the original timeout error. Offline imports, other formats, `introduction`, `tags`, and Panel behavior are unchanged. Local checks and limited EDA 4.1.78 samples covering a Chinese multiline description, derived name, metadata and archive readback, and reopening the project passed. Empty descriptions, explicit names, and malformed metadata have not all been accepted on the host. This does not guarantee lossless import or persistence of routed PCBs or poured copper.
+
+## Project-operation protections since v0.20.39
+
+- Before a write, verify the target type, current project, and destination Board slot. Reject mismatches before calling the SDK.
+- Project operations use a shared SDK time limit. A timeout does not mean an issued call was cancelled. Do not start dependent writes until its result is clear.
+- After copying a schematic page or PCB, read back the new object's identity and ownership. Treat an SDK `false`, empty value, or unknown result as failure or partial outcome; do not report outer success or resend the write automatically.
+- After deletion, read the project tree to confirm the target is gone. When moving a project, verify its location before and after using the requested UUID.
+- `project.getDocumentSource` reads only the active document and accepts no UUID parameter. If focus is invalid or document identity cannot be confirmed, reject explicitly; do not substitute another document.
+- Rejections for eight cases, including no active document and invalid objects, were verified on EDA 4.1.78. Copying an empty valid Board and one schematic page passed limited save/reopen checks; page copying still has failures and unresolved old UID behavior. There was no real folder UUID for a non-root move, and offline folder behavior remains unverified; do not infer those paths work.
 
 If `project.importFile` returns empty, throws, or does not return a valid project UUID after calling the SDK, report `partial:true`, `retryable:false`, and `outcome:unknown`.
 

@@ -83,7 +83,7 @@
 
 ## 实际操作演示
 
-以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.20.1 的实机验收记录。
+以下两段动画均录制于扩展 v0.10.89、EDA Pro 4.1.60，展示既有操作能力，不是 v0.20.50 的实机验收记录。
 
 ### 原理图：多脚 MCU、外围元件、短连线与标签
 
@@ -107,22 +107,30 @@
 
 ## 版本状态
 
-**v0.20.1 为当前版本。**本版移除扩展对外的 `cbb.*` 与 `module.*` 指令命名空间。独立“模块复用”扩展仍是单独项目，本次没有修改。类型检查、正式构建和 15 组现有回归通过；运行程序与原始 v0.20.1 候选包对照，仅发布元数据和路径标记不同。实际注册 205 条指令，不含 `cbb.*` 或 `module.*`，且没有重名。v0.20.1 尚未安装到真实 EDA 宿主。中文嘉立创 EDA 市场包已准备好，由使用者上传；上传和审批状态待定。详见 [v0.20.1 版本说明](docs/releases/v0.20.1_ZH.md)和[英文版](docs/releases/v0.20.1.md)。
+**v0.20.50 是基于 v0.20.49 核心的中文菜单与文档打包版，本版不新增核心写入操作。**本版汇总 v0.20.11–v0.20.49 期间的修正与已明确边界。类型检查、正式构建和 31 组现有模拟回归通过；运行程序去掉构建路径标记后与市场候选版本一致，manifest 字段也无差异。发布包尚未重新安装到 EDA 宿主验证。中文市场包已重新提交，正在审核；当前公开上架版本仍为 v0.10.143，不能据此认定 v0.20.50 已通过审核或上架。v0.20.50 按 GitHub 正式发布（非预发布）交付。详见 [v0.20.50 版本说明](docs/releases/v0.20.50_ZH.md)和[英文版](docs/releases/v0.20.50.md)。
+
+当前兼容性和操作边界：
+
+- EDA 4.1.78 下，需要 EDA 4.2 的 14 条指令均已停用并在版本检查处拒绝；EDA 4.2 下的正向执行和持久性尚未验收。
+- `routeTrack` 与 SES 线段输入受插件策略保护：任何短于 1 mil 的线段都会在写入前被拒绝。这是插件策略，不是 SDK 最短长度限制。
+- `pcb.connectComponentPadDirect` 暂时停用；兼容入口会在访问工程或 SDK 前拒绝调用。
+- `modifyPour` 中改网或改名的请求会在写入前拒绝。自动布线 SES 回灌已禁用；检查和明确导入仍是分开的操作。
+
+这些保护和分项检查不代表所有底层问题、几何结果、覆铜填充或持久性问题都已修复。证据范围和限制见版本说明。
 
 页面展示的“小机器人画电路板”图标是项目 Logo；市场发布图标文件为 `images/logo-marketplace.png`。
 
-## v0.20.1 下载与安装
+## v0.20.50 下载与安装
 
-v0.20.1 版本的扩展包、技能包、校验文件和源码包均按 tag `v0.20.1` 获取：
+下载 v0.20.50 GitHub 正式发布附件：
 
-- [扩展包 ai-command-engine_v0.20.1.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine_v0.20.1.eext)
-- [配套技能包 ai-command-engine-skill_en-zh_v0.20.1.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine-skill_en-zh_v0.20.1.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/SHA256SUMS.txt)
-- [v0.20.1 源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.1.zip)
-
+- [中文版市场扩展包 ai-command-engine_v0.20.50_zh-CN.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/ai-command-engine_v0.20.50_zh-CN.eext)
+- [英文主版、中文备用的独立技能包 ai-command-engine-skill_en-zh_v0.20.50.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/ai-command-engine-skill_en-zh_v0.20.50.zip)
+- [v0.20.50 源码 ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.50.zip)
 
 
-新版技能包以英文 `SKILL.md` 和参考文件为主，中文备用位于 `SKILL_ZH.md` 与 `references/zh/`。两种说明共用一个技能目录，不需安装两个自动触发技能。请用 `SHA256SUMS.txt` 校验本次发布附件。
+
+新版技能包以英文 `SKILL.md` 和参考文件为主，中文备用位于 `SKILL_ZH.md` 与 `references/zh/`。两种说明共用一个技能目录，不需安装两个自动触发技能。请按发布页的校验文件核对附件 SHA-256。
 
 技能 ZIP 解压后，将 `ai-command-engine/` 整个目录安装到所用 AI 工具的技能目录，保留 `references/` 和脚本等子目录，不能只复制 `SKILL.md`。代理不单独打包；下载源码 ZIP 后，按[安装与使用指南](docs/QUICKSTART.md)安装 Node.js 依赖并运行本地代理。扩展、代理和技能分别安装，扩展市场不会替使用者安装代理或技能。
 
@@ -137,7 +145,7 @@ npm ci
 node bridge/command-proxy.mjs
 ```
 
-ZIP 用户在解压后的仓库目录运行 `npm ci` 和 `node bridge/command-proxy.mjs`。保留代理终端，再从 [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases) 下载 `.eext`，在 EDA 插件管理界面导入、启用并允许外部交互。然后将完整的 [`skills/ai-command-engine/`](https://github.com/quhuii-lgtm/easyeda-aicommand/tree/main/skills/ai-command-engine) 安装到 AI 工具的技能目录，并在 EDA 菜单点击 AI Command → 启动桥接。安装扩展不会在本机部署代理或向 AI 工具安装技能；完整步骤见[首次使用指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md)。
+ZIP 用户在解压后的仓库目录运行 `npm ci` 和 `node bridge/command-proxy.mjs`。保留代理终端，再从 [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases) 下载 `.eext`，在 EDA 插件管理界面导入、启用并允许外部交互。然后将完整的 [`skills/ai-command-engine/`](https://github.com/quhuii-lgtm/easyeda-aicommand/tree/main/skills/ai-command-engine) 安装到 AI 工具的技能目录，并在 EDA 菜单点击“AI 指令引擎”→“启动桥接”。安装扩展不会在本机部署代理或向 AI 工具安装技能；完整步骤见[首次使用指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md)。
 
 Windows 提供可选的 URL 协议启动方式；注册和生命周期说明见[桥接生命周期文档](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/BRIDGE-LIFECYCLE.md)。普通调用不需要 GitHub CLI；只有选择使用可选的问题上报功能时才需要它。SMT 物料查询另需[嘉立创开放平台](https://open.jlc.com)凭据，配置见[物料查询指南](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md#5-可选-smt-物料查询)。
 

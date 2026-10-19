@@ -172,7 +172,9 @@ const def = (name: string, kind: DfmKind, params: ICommandDef['params'], summary
 	returns: kind === 'pcb'
 		? '{ results, expectedCount, issues, coverage, upstreamPassed, complete, passed, reportedCopper, documentUuid, checkType, inputs, timestamp, upstream }'
 		: '{ results, expectedCount, issues, coverage, upstreamPassed, complete, passed, documentUuid, checkType, inputs, timestamp, upstream }',
-	example: { cmd: name },
+	example: { cmd: name, params: kind === 'pcb'
+		? { material: JLC_SUPPORTED_MATERIALS[0], thickness: 1.6, outerCopperOz: 1, innerCopperOz: 1 }
+		: kind === 'smt' ? { standard: 'economy', thickness: 1.6 } : { minSpacingMm: 0.13 } },
 	handler: async values => runDfmCommand(kind, values),
 })
 

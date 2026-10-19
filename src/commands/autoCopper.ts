@@ -5,7 +5,7 @@ import { readPourFillReadback } from '../pcb/autoCopper/pourReadback';
 import { configureCopperRuntime } from '../pcb/autoCopper/runtime';
 import { normalizeBoardOutlinePolylines } from '../pcb/boardOutline';
 import { createGeometryHost } from '../pcb/geometryHost';
-import { parseSourceLog, resolveRecords } from '../pcb/sourcelog';
+import { parseSourceLine, parseSourceLog, resolveRecords } from '../pcb/sourcelog';
 
 interface Point { x: number; y: number }
 type Target = Record<string, any> & { primitiveId: string; type: string; net: string };
@@ -31,6 +31,11 @@ interface AutoCopperPlan {
 	coverage: Record<string, unknown>;
 	warnings: Array<Record<string, unknown>>;
 	provenance: Record<string, unknown>;
+}
+
+interface CopperConnectionRuleSnapshot {
+	status: 'candidates-found' | 'missing';
+	records: Array<Record<string, unknown>>;
 }
 
 const TOP = 1;
@@ -60,6 +65,75 @@ function stableJson(value: unknown): string {
 			? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort(item[key])]))
 			: item;
 	return JSON.stringify(sort(value)) ?? 'undefined';
+}
+
+export function copperConnectionRuleSnapshot(source: string): CopperConnectionRuleSnapshot {
+	const parsedRules = source.split(/\r?\n/).map((line, index) => parseSourceLine(line, index + 1)).filter((item): item is NonNullable<typeof item> => item !== null);
+	const effectiveRules = new Map<string, (typeof parsedRules)[number]>();
+	for (const record of parsedRules) {
+		if (record.header.type !== 'RULE' || record.header.id == null)
+			continue;
+		const key = `${record.header.type}\u0000${String(record.header.id)}`;
+		const current = effectiveRules.get(key);
+		if (!current || Number(record.header.ticket ?? 0) >= Number(current.header.ticket ?? 0))
+			effectiveRules.set(key, record);
+	}
+	const records: Array<Record<string, unknown>> = [];
+	for (const record of effectiveRules.values()) {
+		if (record.data === '')
+			continue;
+		let id: unknown;
+		try {
+			id = JSON.parse(String(record.header.id ?? ''));
+		}
+		catch {
+			continue;
+		}
+		if (!Array.isArray(id) || String(id[0]).toUpperCase() !== 'RULE' || String(id[1]).toUpperCase() !== 'COPPER')
+			continue;
+		const data = record.data && typeof record.data === 'object' && !Array.isArray(record.data)
+			? record.data as Record<string, any>
+			: {};
+		const ruleContext = data.ruleContext && typeof data.ruleContext === 'object' && !Array.isArray(data.ruleContext)
+			? data.ruleContext as Record<string, any>
+			: {};
+		for (const selector of ['sglPad', 'mulPad', 'track']) {
+			if (!(selector in ruleContext))
+				continue;
+			const selectorData = ruleContext[selector];
+			const contents = Array.isArray(selectorData?.content) ? selectorData.content : [];
+			if (contents.length === 0) {
+				records.push({
+					selector,
+					ruleId: record.header.id,
+					sourceLine: record.line,
+					isOpen: selectorData?.isOpen ?? null,
+					selectorStatus: 'unknown',
+					reason: 'source selector 缺少 content 候选',
+				});
+				continue;
+			}
+			contents.forEach((item: any, index: number) => {
+				const entry = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+				const field = (key: string, value: unknown) => value === undefined
+					? { status: 'unknown', reason: `source 缺少 ${key}`, sourcePath: `ruleContext.${selector}.content[${index}].${key}` }
+					: { status: 'known', raw: value, sourcePath: `ruleContext.${selector}.content[${index}].${key}` };
+				records.push({
+					selector,
+					ruleId: record.header.id,
+					sourceLine: record.line,
+					isOpen: selectorData?.isOpen ?? null,
+					layerId: entry.layerId ?? null,
+					connectionType: field('connType', entry.connType),
+					thermalGap: { ...field('spoSpac', entry.spoSpac), unit: { status: 'unknown', reason: 'source spoSpac 存储单位未确认' } },
+					spokeWidth: { ...field('spoWidth', entry.spoWidth), unit: { status: 'unknown', reason: '源码字段单位语义未确认' } },
+					spokeAngle: { ...field('spoAng', entry.spoAng), unit: { status: 'unknown', reason: '源码字段单位语义未确认' } },
+					unitLabel: ruleContext.unit ?? null,
+				});
+			});
+		}
+	}
+	return { status: records.length ? 'candidates-found' : 'missing', records };
 }
 
 function readArray(host: GeometryHost, api: any, label: string, ...args: unknown[]): Promise<any[]> {
@@ -381,6 +455,26 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 		chamferWidth: input.chamferWidth,
 	};
 	const drcRules = await upstream.drcRules.getPcbDrcRuleContext();
+	const connectionRuleSnapshot = copperConnectionRuleSnapshot(baseline.source);
+	const copperConnectionRules = [...netGroups.values()].map(targets => {
+		const net = targets[0].net;
+		const candidates = connectionRuleSnapshot.records.filter(record => record.layerId === targetLayerId || record.layerId === null);
+		return {
+			net,
+			layerId: targetLayerId,
+			generationType,
+			source: 'baseline.source',
+			sourceStatus: connectionRuleSnapshot.status,
+			candidates,
+			selection: {
+				status: 'unknown',
+				reason: '当前可读源码只能证明存在的候选记录，无法确认覆铜实际选择的 selector',
+			},
+			preserveSilos: generationType === 'pour'
+				? { status: 'known', value: false, source: 'pcb_PrimitivePour.create preserveSilos argument' }
+				: { status: 'not-applicable' },
+		};
+	});
 	const groups: Array<Record<string, unknown>> = [];
 	const plannedPrimitives: PolygonPlan[] = [];
 	const groupClearanceByNet = new Map<string, any>();
@@ -406,7 +500,8 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 		const copperAreaRaw = await upstream.targetCollectors.collectCopperAreaClipObstacles(targets, net, targetLayerId);
 		host.checkBudget();
 		const copperAreaObstacles = upstream.drcRules.applyDrcClearanceToObstacles(copperAreaRaw, net, drcRules, 'copper area clipping', { generationType, layer: targetLayerId });
-		const targetMarginAdjustment = core.applyDrcAwareTargetMargins(targets, config, avoidanceObstacles.concat(traceObstacles, copperAreaObstacles));
+		const expansionObstacles = avoidanceObstacles.concat(traceObstacles, copperAreaObstacles).sort((a: any, b: any) => String(a.primitiveId).localeCompare(String(b.primitiveId)) || String(a.type).localeCompare(String(b.type)) || String(a.clearanceRulePath).localeCompare(String(b.clearanceRulePath)));
+		const targetMarginAdjustment = core.applyDrcAwareTargetMargins(targets, config, expansionObstacles);
 		host.checkBudget();
 		let polygonData = core.makeCleanPourPolygonData(targetMarginAdjustment.targets, config, boundaryObstacles, avoidanceObstacles, traceObstacles, copperAreaObstacles, { edgeShieldObstacles });
 		host.checkBudget();
@@ -451,6 +546,37 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 		}
 		if (polygons.length === 0)
 			unresolved.push(`网络 ${net} 层 ${layer.name} 无可执行多边形：${clearanceClipResult.reason ?? '几何裁剪结果为空'}`);
+		let localExpansionAssessment: 'proven-no-expansion' | 'uncertain' | undefined;
+		const reducedTargets = targetMarginAdjustment.targets.filter((target: any) => target.autoReducedExpansion === true);
+		if (generationType === 'pour' && expansion > 0 && reducedTargets.length > 0) {
+			const singleTarget = layerTargets.length === 1 && targets.length === 1 ? targets[0] : undefined;
+			const bodySource = singleTarget ? makeKnownRectPadBodySource(singleTarget, input, upstream) : undefined;
+			const onlyGroupPolygon = groupPolygons.length === 1 ? groupPolygons[0] as any : undefined;
+			const plannedSource = onlyGroupPolygon && onlyGroupPolygon.holeCount === 0 && Array.isArray(onlyGroupPolygon.polygonSources) && onlyGroupPolygon.polygonSources.length === 1
+				? onlyGroupPolygon.polygonSources[0]
+				: undefined;
+			const exactBodyMatch = bodySource && plannedSource && comparePolygonSource(bodySource, plannedSource).matches;
+			const decimalBodyMatch = bodySource && singleTarget && plannedSource && assessExactDecimalRectBody(singleTarget, plannedSource) === 'equal';
+			if ((exactBodyMatch || decimalBodyMatch) && singleTarget && plannedSource) {
+				localExpansionAssessment = 'proven-no-expansion';
+				const target = singleTarget!;
+				unresolved.push(`焊盘 ${target.primitiveId} 的请求扩展 ${expansion}mil 被间距规则完全限制，最终区域与焊盘铜本体相同，不满足局部扩铜目标`);
+			}
+			else {
+				localExpansionAssessment = 'uncertain';
+			}
+			warnings.push({
+				code: 'localCopperExpansionAssessment',
+				net,
+				layer: layer.name,
+				requestedMil: expansion,
+				status: localExpansionAssessment,
+				reason: localExpansionAssessment === 'proven-no-expansion'
+					? '最终单一轮廓与单个标准矩形焊盘本体精确等价'
+					: '不能以单个标准矩形焊盘和最终单一无孔轮廓严格证明本体等价；保持现有可执行状态',
+				targets: reducedTargets.map((target: any) => ({ id: target.primitiveId, boundaryMargin: target.boundaryMargin ?? 0, blockers: target.expansionBlockers ?? [] })),
+			});
+		}
 		const { polygons: _sdkPolygons, ...clearanceSummary } = clearanceClipResult as any;
 		const resolved = {
 			targetMarginAdjustment,
@@ -467,7 +593,7 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 		};
 		groups.push({ key: `${net}:${targetLayerId}`, net, layer: layer.name, layerId: targetLayerId, targets: targets.map(target => target.primitiveId), plannedPrimitiveIndexes: groupPolygons.map(item => item.primitiveIndex), genericCopperClearanceRule: genericClearance ?? null, resolved, diagnostics: diagnostics.slice() });
 		if (targetMarginAdjustment.reducedCount > 0 || resolved.boundaryReducedExpansionCount > 0)
-			warnings.push({ code: 'upstreamExpansionReduced', net, layer: layer.name, requestedMil: expansion, reducedMarginCount: targetMarginAdjustment.reducedCount, boundaryReducedCount: resolved.boundaryReducedExpansionCount, resolved: targetMarginAdjustment.targets.map((target: any) => ({ id: target.primitiveId, boundaryMargin: target.boundaryMargin ?? expansion, autoReducedExpansion: target.autoReducedExpansion ?? false, boundaryReducedExpansion: target.boundaryReducedExpansion ?? false })) });
+			warnings.push({ code: 'upstreamExpansionReduced', net, layer: layer.name, requestedMil: expansion, reducedMarginCount: targetMarginAdjustment.reducedCount, boundaryReducedCount: resolved.boundaryReducedExpansionCount, resolved: targetMarginAdjustment.targets.map((target: any) => ({ id: target.primitiveId, boundaryMargin: target.boundaryMargin ?? expansion, autoReducedExpansion: target.autoReducedExpansion ?? false, boundaryReducedExpansion: target.boundaryReducedExpansion ?? false, blockers: target.expansionBlockers ?? [] })) });
 		if (polygonData.multiPadBoundaryStrategy || polygonData.multiPadUnionBoundaryFallback || polygonData.multiPadHybridDegradationReasons)
 			warnings.push({ code: 'upstreamBoundaryResolution', net, layer: layer.name, strategy: polygonData.multiPadBoundaryStrategy, unionFallback: polygonData.multiPadUnionBoundaryFallback ?? false, hybridDegradationReasons: polygonData.multiPadHybridDegradationReasons ?? [] });
 		const neckDebug = (clearanceClipResult as any)?.debug ?? {};
@@ -574,6 +700,7 @@ async function makePlan(host: GeometryHost, sdk: any, rawParams: Record<string, 
 		search: '上游按目标外接范围有限收集候选；collectors 对数据层执行完整 getAll 后再按搜索范围筛选',
 		drc: '完整读取规则；候选网络需解析到通用铜间距规则，收集到的异网障碍逐一解析，计划网络之间另作保守包围框净距核对；不代表完整板级 DRC 结论',
 		crossGroupClearance,
+		copperConnectionRules,
 		excludedTargets,
 		unresolved,
 	};
@@ -606,6 +733,135 @@ function mathPolygon(sdk: any, plan: PolygonPlan): any {
 	if (!polygon)
 		throw new Error(`网络 ${plan.net} 层 ${plan.layer} 的 plannedPrimitives 无法创建 SDKPolygon`);
 	return polygon;
+}
+
+function makeKnownRectPadBodySource(target: any, input: Record<string, any>, upstream: any): unknown[] | undefined {
+	if (!target || !['Pad', 'ComponentPad'].includes(target.type) || target.shapeKind !== 'rect' || Number(target.roundRadius) !== 0 || Number(target.rotation) !== 0 || input.enableChamfer !== false)
+		return undefined;
+	if (![target.x, target.y, target.shapeWidth, target.shapeHeight, target.rotation].every(finite) || target.shapeWidth <= 0 || target.shapeHeight <= 0)
+		return undefined;
+	const halfWidth = target.shapeWidth / 2;
+	const halfHeight = target.shapeHeight / 2;
+	const points = [
+		{ x: -halfWidth, y: -halfHeight },
+		{ x: halfWidth, y: -halfHeight },
+		{ x: halfWidth, y: halfHeight },
+		{ x: -halfWidth, y: halfHeight },
+	].map(point => upstream.targetGeometry.makeWorldPoint(target, point));
+	if (points.some((point: any) => !finite(point?.x) || !finite(point?.y)))
+		return undefined;
+	const first = points[0];
+	const source: unknown[] = [first.x, first.y, 'L'];
+	for (let index = 1; index < points.length; index++)
+		source.push(points[index].x, points[index].y);
+	source.push(first.x, first.y);
+	return source;
+}
+
+interface ExactDecimal { coefficient: bigint; exponent: number }
+
+function exactDecimal(value: unknown): ExactDecimal | undefined {
+	if (!finite(value))
+		return undefined;
+	const text = String(value);
+	if (text.length > 32)
+		return undefined;
+	const match = /^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(text);
+	if (!match)
+		return undefined;
+	const exponentPart = match[4] === undefined ? 0 : Number(match[4]);
+	if (!Number.isInteger(exponentPart) || Math.abs(exponentPart) > 400)
+		return undefined;
+	const fraction = match[3] ?? '';
+	let coefficient = BigInt(`${match[1] === '-' ? '-' : ''}${match[2]}${fraction}`);
+	let exponent = exponentPart - fraction.length;
+	if (Math.abs(exponent) > 400)
+		return undefined;
+	while (coefficient !== 0n && coefficient % 10n === 0n) {
+		coefficient /= 10n;
+		exponent++;
+	}
+	return { coefficient, exponent };
+}
+
+function addExactDecimals(first: ExactDecimal, second: ExactDecimal): ExactDecimal | undefined {
+	const exponent = Math.min(first.exponent, second.exponent);
+	const firstShift = first.exponent - exponent;
+	const secondShift = second.exponent - exponent;
+	if (Math.max(firstShift, secondShift) > 800)
+		return undefined;
+	let coefficient = first.coefficient * (10n ** BigInt(firstShift)) + second.coefficient * (10n ** BigInt(secondShift));
+	let resultExponent = exponent;
+	while (coefficient !== 0n && coefficient % 10n === 0n) {
+		coefficient /= 10n;
+		resultExponent++;
+	}
+	return { coefficient, exponent: resultExponent };
+}
+
+function negateExactDecimal(value: ExactDecimal): ExactDecimal {
+	return { coefficient: -value.coefficient, exponent: value.exponent };
+}
+
+function halfExactDecimal(value: ExactDecimal): ExactDecimal {
+	return { coefficient: value.coefficient * 5n, exponent: value.exponent - 1 };
+}
+
+function compareExactDecimals(first: ExactDecimal, second: ExactDecimal): number | undefined {
+	const difference = addExactDecimals(first, negateExactDecimal(second));
+	return difference ? difference.coefficient > 0n ? 1 : difference.coefficient < 0n ? -1 : 0 : undefined;
+}
+
+function assessExactDecimalRectBody(target: any, plannedSource: unknown): 'equal' | 'different' | 'unsupported' {
+	const x = exactDecimal(target?.x);
+	const y = exactDecimal(target?.y);
+	const width = exactDecimal(target?.shapeWidth);
+	const height = exactDecimal(target?.shapeHeight);
+	if (!x || !y || !width || !height || width.coefficient <= 0n || height.coefficient <= 0n || !Array.isArray(plannedSource))
+		return 'unsupported';
+	let source = plannedSource;
+	if (Array.isArray(source[0])) {
+		if (source.length !== 1)
+			return 'unsupported';
+		source = source[0];
+	}
+	if (source.length !== 11 || source[2] !== 'L')
+		return 'unsupported';
+	const ring: Array<{ x: ExactDecimal; y: ExactDecimal }> = [];
+	for (let index = 0; index < source.length;) {
+		if (index === 2) {
+			index++;
+			continue;
+		}
+		const pointX = exactDecimal(source[index]);
+		const pointY = exactDecimal(source[index + 1]);
+		if (!pointX || !pointY)
+			return 'unsupported';
+		ring.push({ x: pointX, y: pointY });
+		index += 2;
+	}
+	if (ring.length !== 5 || compareExactDecimals(ring[0].x, ring[4].x) !== 0 || compareExactDecimals(ring[0].y, ring[4].y) !== 0)
+		return 'unsupported';
+	ring.pop();
+	const halfWidth = halfExactDecimal(width);
+	const halfHeight = halfExactDecimal(height);
+	const minX = addExactDecimals(x, negateExactDecimal(halfWidth));
+	const maxX = addExactDecimals(x, halfWidth);
+	const minY = addExactDecimals(y, negateExactDecimal(halfHeight));
+	const maxY = addExactDecimals(y, halfHeight);
+	if (!minX || !maxX || !minY || !maxY)
+		return 'unsupported';
+	const expected = [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }];
+	const equalPoint = (first: typeof expected[number], second: typeof expected[number]) => compareExactDecimals(first.x, second.x) === 0 && compareExactDecimals(first.y, second.y) === 0;
+	if (ring.some((point, index) => ring.slice(index + 1).some(other => equalPoint(point, other))))
+		return 'unsupported';
+	for (let start = 0; start < ring.length; start++) {
+		for (const reverse of [false, true]) {
+			if (expected.every((point, index) => equalPoint(point, ring[(start + (reverse ? -index : index) + ring.length * 2) % ring.length])))
+				return 'equal';
+		}
+	}
+	return 'different';
 }
 
 async function getPlan(params: Record<string, any>) {
@@ -719,18 +975,40 @@ async function executePlan(params: Record<string, any>) {
 					throw new Error(`重建前覆铜 ${id} 读回为空`);
 				if (typeof pourObject.rebuildCopperRegion !== 'function')
 					throw new Error(`覆铜 ${id} 不支持 rebuildCopperRegion`);
-				const poured = await host.write(`重建覆铜填充 ${id}`, async () => await pourObject.rebuildCopperRegion());
-				if (!poured) {
-					resultRecord.status = 'border-read-back; rebuild returned no fill object; fill unverified';
-					throw new Error(`覆铜 ${id} 重建未返回实填充对象，已创建边框保留，填充结果未验证`);
+				const outcome = await host.write(`重建覆铜填充 ${id}`, async () => ({ returned: await pourObject.rebuildCopperRegion() }));
+				const poured = outcome.returned;
+				const rebuildReturn: Record<string, unknown> = {
+					present: poured !== undefined,
+					type: poured === null ? 'null' : typeof poured,
+					id: null,
+				};
+				if (poured !== null && (typeof poured === 'object' || typeof poured === 'function')) {
+					try {
+						rebuildReturn.id = state<string>(poured, 'PrimitiveId') ?? (poured as any).id ?? null;
+					}
+					catch (error) {
+						rebuildReturn.idReadError = error instanceof Error ? error.message : String(error);
+					}
 				}
-				resultRecord.status = 'border-read-back; rebuild returned; fill pending';
-				const fillReadback = await readPourFillReadback(host, eda, {
-					primitiveId: id,
-					net: planned.net,
-					layerId: planned.layerId,
-					plannedSource,
-				});
+				resultRecord.rebuildReturn = rebuildReturn;
+				resultRecord.status = 'border-read-back; fill readback pending';
+				let fillReadback: Awaited<ReturnType<typeof readPourFillReadback>>;
+				try {
+					fillReadback = await readPourFillReadback(host, eda, {
+						primitiveId: id,
+						net: planned.net,
+						layerId: planned.layerId,
+						plannedSource,
+					});
+				}
+				catch (error) {
+					const wrapped = (error instanceof Error ? error : new Error(String(error))) as Error & { cause?: unknown };
+					const prior = wrapped.cause && typeof wrapped.cause === 'object' ? wrapped.cause as Record<string, unknown> : {};
+					resultRecord.fillReadback = prior.fillReadback ?? { readError: wrapped.message };
+					resultRecord.status = 'border-read-back; fill readback failed';
+					wrapped.cause = { ...prior, rebuildReturn };
+					throw wrapped;
+				}
 				resultRecord.fillReadback = fillReadback;
 				resultRecord.parentReadback = fillReadback.parent;
 				resultRecord.filledReadback = fillReadback.filledRegions;

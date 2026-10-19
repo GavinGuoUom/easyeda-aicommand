@@ -3,29 +3,41 @@ import { rm } from 'node:fs/promises'
 import { build } from 'esbuild'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 
 const pcbBundle = 'test/.review-destructive-recovery-pcb.mjs'
 const schematicBundle = 'test/.review-destructive-recovery-schematic.mjs'
+const sesBundle = 'test/.review-destructive-recovery-ses.mjs'
+const realSes = readFileSync(resolve('test/fixtures/auto-route-real-v223.ses'), 'utf8')
 try {
 await Promise.all([
 	build({ entryPoints: ['src/commands/pcb.ts'], outfile: pcbBundle, bundle: true, format: 'esm', platform: 'node', target: 'node24' }),
 	build({ entryPoints: ['src/commands/schematic.ts'], outfile: schematicBundle, bundle: true, format: 'esm', platform: 'node', target: 'node24' }),
+	build({ stdin: { contents: "export { parseAutoRouteSes, mapSesRoutes } from '../src/engine/autoRouteSes.ts'", resolveDir: resolve('test'), sourcefile: 'review-destructive-recovery-ses.ts' }, outfile: sesBundle, bundle: true, format: 'esm', platform: 'node', target: 'node24' }),
 ])
 const { pcbCommands } = await import(pathToFileURL(resolve(pcbBundle)).href)
 const { schematicCommands } = await import(pathToFileURL(resolve(schematicBundle)).href)
+const { parseAutoRouteSes, mapSesRoutes } = await import(pathToFileURL(resolve(sesBundle)).href)
+const sesExpected = mapSesRoutes(parseAutoRouteSes(realSes), [{ id: 1, name: 'TopLayer', type: 'SIGNAL' }, { id: 2, name: 'BottomLayer', type: 'SIGNAL' }])
 
 const pcbStatus = pcbCommands.find(c => c.name === 'pcb.autoRouteStatus').handler
+const pcbStart = pcbCommands.find(c => c.name === 'pcb.autoRouteStart').handler
+const pcbStop = pcbCommands.find(c => c.name === 'pcb.autoRouteStop').handler
 const dedupe = schematicCommands.find(c => c.name === 'schematic.dedupeWireNets').handler
 async function freshPcbStatus(caseName) {
 	const module = await import(`${pathToFileURL(resolve(pcbBundle)).href}?case=${encodeURIComponent(caseName)}`)
 	return module.pcbCommands.find(c => c.name === 'pcb.autoRouteStatus').handler
+}
+async function freshPcbStart(caseName) {
+	const module = await import(`${pathToFileURL(resolve(pcbBundle)).href}?case=${encodeURIComponent(caseName)}`)
+	return module.pcbCommands.find(c => c.name === 'pcb.autoRouteStart').handler
 }
 async function freshDedupe(caseName) {
 	const module = await import(`${pathToFileURL(resolve(schematicBundle)).href}?case=${encodeURIComponent(caseName)}`)
 	return module.schematicCommands.find(c => c.name === 'schematic.dedupeWireNets').handler
 }
 const sourceFor = (uuid, extra = '') => `{"type":"DOCHEAD","id":"head"}||{"docType":"${uuid.startsWith('pcb') ? 'PCB' : 'SCH'}","uuid":"${uuid}"}|\n${extra}`
-const mutatedSource = uuid => sourceFor(uuid, '{"type":"NET","id":"partial"}||{}|\n')
+const mutatedSource = uuid => sourceFor(uuid, '{"type":"NET","ticket":1,"id":"partial"}||{"name":"partial-net"}|\n')
 let checks = 0
 function check(condition, label) {
 	assert.ok(condition, label)
@@ -36,6 +48,11 @@ async function expectReject(fn, label) {
 	try { await fn() }
 	catch (error) { check(true, label); return error }
 	assert.fail(label)
+}
+function assertAutoRouteQueryOnly(result, jobId, label) {
+	check(result.state === 'COMPLETED' && result.jobId === jobId, `R2 ${label}返回明确任务状态`)
+	check(result.imported === false && result.autoImportEnabled === false, `R2 ${label}报告自动回灌已停用`)
+	check(typeof result.note === 'string' && /停用|关闭|仅查询|不自动回灌/.test(result.note), `R2 ${label}包含停用说明`)
 }
 
 function makeStorage(options = {}) {
@@ -60,16 +77,38 @@ function makeStorage(options = {}) {
 
 function makePcb(options = {}) {
 	const uuid = options.uuid ?? `pcb-${Math.random().toString(36).slice(2)}`
-	const initialSource = sourceFor(uuid)
-	let currentSource = options.initialSource ?? initialSource
 	let focus = { documentType: 3, uuid }
 	let focusCalls = 0
+	let jobCounter = 0
 	let restoreCalls = 0
 	const events = []
 	const storage = makeStorage(options)
+	const state = {
+		lines: [], vias: [], arcs: [], nextLine: 0,
+	}
+	if (options.realRoutes) {
+		state.arcs.push({ id: 'old-arc', net: 'OLD_NET', layer: 1, widthMil: 8, start: { x: 10, y: 10 }, end: { x: 20, y: 10 }, angle: 90, locked: false, sourceData: { keep: 'old arc' } })
+	}
+	const routeRecordData = item => item.sourceData ?? { net: item.net, geometry: item }
+	const pcbSource = () => {
+		const rows = [
+			{ type: 'DOCHEAD', id: 'head', data: { docType: 'PCB', uuid } },
+			{ type: 'POURED', id: 'poured-1', data: { layer: 1, net: 'GND', polygon: [0, 0, 50, 0, 50, 50, 0, 50] } },
+			...state.lines.map(item => ({ type: 'LINE', id: item.id, data: routeRecordData(item) })),
+			...state.vias.map(item => ({ type: 'VIA', id: item.id, data: routeRecordData(item) })),
+			...state.arcs.map(item => ({ type: 'ARC', id: item.id, data: routeRecordData(item) })),
+		]
+		return rows.map((row, index) => `${JSON.stringify({ type: row.type, ...(row.id ? { id: row.id } : {}), ticket: index + 1 })}||${JSON.stringify(row.data)}`).join('|\n')
+	}
+	const initialSource = options.initialSource ?? pcbSource()
+	let currentSource = initialSource
 	let releaseOutput
 	const outputGate = options.waitOutput ? new Promise(resolve => { releaseOutput = resolve }) : Promise.resolve()
 	const touch = () => { currentSource = mutatedSource(uuid) }
+	const getters = values => Object.fromEntries(Object.entries(values).map(([key, value]) => [`getState_${key}`, () => value]))
+	const lineObject = item => ({ ...getters({ PrimitiveId: item.id, Net: item.net, Layer: item.layer, LineWidth: item.widthMil, StartX: item.a.x, StartY: item.a.y, EndX: item.b.x, EndY: item.b.y, PrimitiveLock: Boolean(item.locked) }) })
+	const viaObject = item => ({ ...getters({ PrimitiveId: item.id, Net: item.net, X: item.x, Y: item.y, Diameter: item.diameterMil, HoleDiameter: item.holeDiameterMil, ViaType: item.viaType === 'through' ? 0 : item.viaType ?? 0, PrimitiveLock: Boolean(item.locked) }) })
+	const arcObject = item => ({ ...getters({ PrimitiveId: item.id, Net: item.net, Layer: item.layer, LineWidth: item.widthMil, StartX: item.start.x, StartY: item.start.y, EndX: item.end.x, EndY: item.end.y, ArcAngle: item.angle, PrimitiveLock: Boolean(item.locked) }) })
 	const eda = {
 			dmt_SelectControl: { getCurrentDocumentInfo: async () => {
 			focusCalls++
@@ -105,21 +144,44 @@ function makePcb(options = {}) {
 				if (options.waitOutput)
 					await outputGate
 			}
+			const payload = _url.endsWith('/sessions/create')
+				? { id: `session-${uuid}` }
+					: _url.endsWith('/jobs/enqueue')
+						? { id: `job-${uuid}-${++jobCounter}` }
+					: isOutput
+						? { data: Buffer.from(realSes, 'utf8').toString('base64'), filename: 'autoroute.ses' }
+						: _url.endsWith('/system/status')
+							? { status: 'ok' }
+							: { state: 'COMPLETED', stage: 'done', output: { statistics: {} } }
 			return {
 				ok: true,
-				json: async () => isOutput
-					? { data: btoa('(session pcb\n  (base_design demo))'), filename: 'autoroute.ses' }
-					: { state: 'COMPLETED', stage: 'done', output: { statistics: {} } },
+				json: async () => payload,
 				text: async () => '',
 			}
 		} },
+		pcb_ManufactureData: { getDsnFile: async () => new File(['dsn'], 'design.dsn') },
+		pcb_Layer: { getAllLayers: async () => [{ id: 1, name: 'TopLayer', type: 'SIGNAL' }, { id: 2, name: 'BottomLayer', type: 'SIGNAL' }] },
 		pcb_Document: {
 			startCalculatingRatline: async () => { events.push('ratline') },
 			importAutoRouteSesFile: async () => {
 				events.push('import')
-				touch()
 				if (options.shiftFocusOnImport)
 					focus = { documentType: 3, uuid: `${uuid}-other` }
+				if (options.realRoutes) {
+					if (options.importMode === 'false-no-touch') return false
+					if (options.importMode === 'throw' || options.importMode === 'false') {
+						touch()
+						if (options.importMode === 'throw') throw new Error('import threw after partial change')
+						return false
+					}
+					state.lines.push(...sesExpected.lines.map((item, index) => ({ ...item, id: `ses-line-${index + 1}`, locked: false })))
+					state.vias.push(...sesExpected.vias.map((item, index) => ({ ...item, id: `ses-via-${index + 1}`, viaType: item.viaType ?? 0, locked: false })))
+					currentSource = pcbSource()
+				}
+				else if (options.importMode === 'false-no-touch')
+					return false
+				else
+					touch()
 				if (options.importMode === 'throw')
 					throw new Error('import threw after partial change')
 				if (options.importMode === 'false')
@@ -128,10 +190,13 @@ function makePcb(options = {}) {
 			},
 		},
 		pcb_PrimitiveLine: {
-			getAllPrimitiveId: async () => ['old-line'],
-			delete: async ids => { events.push(`delete-line:${ids.join(',')}`); touch(); return true },
+			getAll: async () => state.lines.map(lineObject),
+			getAllPrimitiveId: async () => state.lines.map(item => item.id),
+			get: async id => state.lines.some(item => item.id === id) ? lineObject(state.lines.find(item => item.id === id)) : undefined,
+			delete: async ids => { events.push(`delete-line:${ids.join(',')}`); touch(); state.lines = state.lines.filter(item => !ids.includes(item.id)); return true },
 		},
 		pcb_PrimitiveArc: {
+			getAll: async () => state.arcs.map(arcObject),
 			getAllPrimitiveId: async () => {
 				if (options.arcThrows)
 					throw new Error('arc enumeration failed')
@@ -139,17 +204,20 @@ function makePcb(options = {}) {
 			},
 			delete: async ids => {
 				events.push(`delete-arc:${ids.join(',')}`)
-				touch()
 				if (options.arcMode === 'throw')
 					throw new Error('arc delete threw after partial change')
 				if (options.arcMode === 'false')
 					return false
+				state.arcs = state.arcs.filter(item => !ids.includes(item.id))
+				currentSource = pcbSource()
 				return true
 			},
 		},
 		pcb_PrimitiveVia: {
-			getAllPrimitiveId: async () => ['old-via'],
-			delete: async ids => { events.push(`delete-via:${ids.join(',')}`); touch(); return true },
+			getAll: async () => state.vias.map(viaObject),
+			getAllPrimitiveId: async () => state.vias.map(item => item.id),
+			get: async id => state.vias.some(item => item.id === id) ? viaObject(state.vias.find(item => item.id === id)) : undefined,
+			delete: async ids => { events.push(`delete-via:${ids.join(',')}`); touch(); state.vias = state.vias.filter(item => !ids.includes(item.id)); return true },
 		},
 		pcb_Drc: { check: async () => {
 			events.push('drc')
@@ -158,7 +226,7 @@ function makePcb(options = {}) {
 			return []
 		} },
 	}
-	return { eda, events, storage, initialSource, releaseOutput, get source() { return currentSource }, get restoreCalls() { return restoreCalls } }
+	return { eda, events, storage, initialSource, releaseOutput, state, get source() { return currentSource }, get restoreCalls() { return restoreCalls }, setImportMode: value => { options.importMode = value }, focusBack: () => { focus = { documentType: 3, uuid } } }
 }
 
 function makeSchematic(options = {}) {
@@ -314,8 +382,9 @@ async function runDedupe(options = {}) {
 // Empty or failed source snapshots must stop before either command mutates the page.
 for (const [label, opts] of [['empty', { initialSource: '' }], ['throw', { sourceThrows: true }]]) {
 	const pcb = makePcb(opts); globalThis.eda = pcb.eda
-	await expectReject(() => pcbStatus({ jobId: `pcb-snapshot-${label}` }), `R2 快照${label}时拒绝并保持零删除/导入`)
-	check(!pcb.events.some(e => e.startsWith('delete-') || e === 'import'), `R2 快照${label}不调用破坏接口`)
+	const result = await pcbStatus({ jobId: `pcb-snapshot-${label}`, noImport: false })
+	assertAutoRouteQueryOnly(result, `pcb-snapshot-${label}`, `${label}源码查询`)
+	check(!pcb.events.some(e => e === 'output-start' || e.startsWith('delete-') || e === 'import') && pcb.restoreCalls === 0, `R2 ${label}状态查询不读取输出、不读写板级源码`)
 	const sch = makeSchematic(opts); globalThis.eda = sch.eda
 	await expectReject(() => dedupe(), `R3 快照${label}时拒绝并保持零删除/创建`)
 	check(!sch.events.some(e => e.startsWith('delete:') || e.startsWith('create:')), `R3 快照${label}不调用破坏接口`)
@@ -366,8 +435,9 @@ for (const [label, options, expectedValues] of [
 // Moving focus between snapshot and first write must never target the other page.
 {
 	const pcb = makePcb({ switchFocusOnGetCall: 6 }); globalThis.eda = pcb.eda
-	await expectReject(() => pcbStatus({ jobId: 'pcb-focus-before-write' }), 'R2 写前焦点变化被拒绝')
-	check(!pcb.events.some(e => e.startsWith('delete-') || e === 'import'), 'R2 写前换焦点时零删除/导入')
+	const result = await pcbStatus({ jobId: 'pcb-focus-before-write', noImport: true })
+	assertAutoRouteQueryOnly(result, 'pcb-focus-before-write', '状态查询不依赖焦点')
+	check(!pcb.events.some(e => e === 'output-start' || e.startsWith('delete-') || e === 'import') && pcb.restoreCalls === 0, 'R2 状态查询零 SES 输出、板级读取与写入')
 	const sch = makeSchematic({ switchFocusOnGetCall: 2 }); globalThis.eda = sch.eda
 	await expectReject(() => dedupe(), 'R3 枚举期间焦点变化被拒绝')
 	check(!sch.events.some(e => e.startsWith('delete:') || e.startsWith('create:')), 'R3 写前换焦点时零删除/创建')
@@ -376,68 +446,35 @@ for (const [label, options, expectedValues] of [
 // Arc enumeration failure is a preflight error, never an empty-list fallback.
 {
 	const pcb = makePcb({ arcThrows: true }); globalThis.eda = pcb.eda
-	await expectReject(() => pcbStatus({ jobId: 'pcb-arc-enum-fails' }), 'R2 圆弧枚举失败向上报告')
-	check(!pcb.events.some(e => e.startsWith('delete-') || e === 'import'), 'R2 圆弧枚举失败时零删除/导入')
+	const result = await pcbStatus({ jobId: 'pcb-arc-enum-fails', noImport: false })
+	assertAutoRouteQueryOnly(result, 'pcb-arc-enum-fails', '状态查询不枚举圆弧')
+	check(!pcb.events.some(e => e === 'output-start' || e.startsWith('delete-') || e === 'import') && pcb.restoreCalls === 0, 'R2 圆弧接口异常不影响只读任务状态')
 }
 
-// Every partial clear, failed import, and schematic rebuild failure restores the whole source.
-for (const [label, opts] of [
-	['arc-false', { arcMode: 'false' }],
-	['arc-throw', { arcMode: 'throw' }],
-	['import-false', { importMode: 'false' }],
-	['import-throw', { importMode: 'throw' }],
-]) {
-	const pcb = makePcb(opts); globalThis.eda = pcb.eda
-	const error = await expectReject(() => pcbStatus({ jobId: `pcb-${label}` }), `R2 ${label}恢复后仍明确报错`)
-	check(error.cause?.restored === true && error.cause?.retryable === true, `R2 ${label}错误含 restored/retryable`)
-	check(pcb.source === pcb.initialSource, `R2 ${label}整页源码精确恢复`)
+// NoImport is accepted for compatibility; all values perform identical status-only queries.
+for (const [label, noImport] of [['omitted', undefined], ['true', true], ['false', false]]) {
+	const pcb = makePcb({ uuid: `pcb-no-import-${label}` }); globalThis.eda = pcb.eda
+	const start = await freshPcbStart(`no-import-${label}`), status = await freshPcbStatus(`no-import-${label}`)
+	const jobId = (await start({ skipDrc: true })).jobId
+	const eventsBefore = pcb.events.length
+	const result = await status({ jobId, ...(noImport === undefined ? {} : { noImport }) })
+	assertAutoRouteQueryOnly(result, jobId, `noImport=${String(noImport)}`)
+	check(!pcb.events.slice(eventsBefore).some(event => event === 'output-start' || event === 'import' || event.startsWith('delete-') || event === 'drc'), `R2 noImport=${String(noImport)}不取输出、不写入、不运行DRC`)
+	check(pcb.restoreCalls === 0 && pcb.source === pcb.initialSource, `R2 noImport=${String(noImport)}不改写源码`)
+	const repeated = await status({ jobId })
+	assertAutoRouteQueryOnly(repeated, jobId, `noImport=${String(noImport)}显式重复查询`)
 }
 
-// A safely restored job can be retried; a committed job never clears twice, even if DRC throws.
+// COMPLETED releases the matching default slot without consuming explicit lookup of that job.
 {
-	const jobId = 'pcb-retry-after-restore'
-	const mock = makePcb({ importMode: 'false', jobId }); globalThis.eda = mock.eda
-	const first = await expectReject(() => pcbStatus({ jobId }), 'R2 回灌失败恢复后保留业务失败')
-	check(first.cause?.restored === true, 'R2 同一job恢复成功可重试')
-	mock.eda.pcb_Document.importAutoRouteSesFile = async () => { mock.events.push('import'); return true }
-	const second = await pcbStatus({ jobId })
-	check(second.imported === true, 'R2 恢复后的同一job重试成功')
-}
-{
-	const jobId = 'pcb-applied-once'
-	const mock = makePcb({ drcThrows: true }); globalThis.eda = mock.eda
-	const first = await pcbStatus({ jobId })
-	check(first.imported === true && mock.events.filter(e => e === 'import').length === 1, 'R2 DRC异常不撤销成功导入')
-	const second = await pcbStatus({ jobId })
-	check(second.imported === false && mock.events.filter(e => e.startsWith('delete-') || e === 'import').length === 4, 'R2 成功任务重复查询不再清线或导入')
-}
-
-// A completed job is reserved synchronously before the output request can await.
-{
-	const isolatedPcbStatus = await freshPcbStatus('concurrent-status')
-	const mock = makePcb({ waitOutput: true, uuid: 'pcb-parallel-status' })
-	globalThis.eda = mock.eda
-	const first = isolatedPcbStatus({ jobId: 'pcb-parallel-job' })
-	while (!mock.events.includes('output-start'))
-		await new Promise(resolve => setImmediate(resolve))
-	await expectReject(() => isolatedPcbStatus({ jobId: 'pcb-parallel-job' }), 'R2 同job并发状态查询被 applying 拒绝')
-	check(mock.storage.values.size === 0 && !mock.events.some(e => e.startsWith('delete-') || e === 'import'), 'R2 并发第二次查询零新增快照/删除/导入')
-	mock.releaseOutput()
-	const result = await first
-	check(result.imported === true && mock.events.filter(e => e === 'import').length === 1, 'R2 并发查询最终只成功导入一次')
-}
-
-// Failed restore variants must expose the complete recovery credential and never delete new IDs.
-for (const mode of ['false', 'throw', 'undefined', 'wrong', 'empty', 'focus']) {
-	const pcb = makePcb({ importMode: 'false', restoreMode: mode, shiftFocusOnImport: mode === 'focus' })
-	globalThis.eda = pcb.eda
-	const isolatedPcbStatus = await freshPcbStatus(`restore-${mode}`)
-	const error = await expectReject(() => isolatedPcbStatus({ jobId: `pcb-restore-${mode}` }), `R2 恢复${mode}返回 partial`)
-	check(error.cause?.partial === true && error.cause?.restored === false && error.cause?.retryable === false, `R2 恢复${mode}标记 partial`)
-	check(error.cause?.recovery?.documentUuid && error.cause?.recovery?.storageKey && error.cause?.recovery?.source === pcb.initialSource, `R2 恢复${mode}附完整凭据`)
-	const eventCount = pcb.events.filter(e => e.startsWith('delete-') || e === 'import').length
-	await expectReject(() => isolatedPcbStatus({ jobId: `pcb-restore-${mode}` }), `R2 恢复${mode}后阻止同job再次清线`)
-	check(pcb.events.filter(e => e.startsWith('delete-') || e === 'import').length === eventCount, `R2 恢复${mode}不重复写入`)
+	const pcb = makePcb({ uuid: 'pcb-default-slot-status' }); globalThis.eda = pcb.eda
+	const start = await freshPcbStart('default-slot-status'), status = await freshPcbStatus('default-slot-status')
+	const first = await start({ skipDrc: true })
+	assertAutoRouteQueryOnly(await status({ noImport: true }), first.jobId, '默认job完成查询')
+	const second = await start({ skipDrc: true })
+	check(second.jobId !== first.jobId, 'R2 COMPLETED 查询释放默认 job slot')
+	assertAutoRouteQueryOnly(await status({ jobId: first.jobId, noImport: false }), first.jobId, 'slot释放后显式旧job查询')
+	check(pcb.restoreCalls === 0 && pcb.source === pcb.initialSource && !pcb.events.some(event => event === 'output-start' || event === 'import' || event.startsWith('delete-') || event === 'drc'), 'R2 默认与显式查询均无板级副作用')
 }
 
 for (const [label, opts] of [
@@ -522,5 +559,5 @@ for (const mode of ['false', 'throw', 'undefined', 'wrong', 'empty', 'focus']) {
 console.log(`\n${checks} 项通过`)
 }
 finally {
-	await Promise.all([rm(resolve(pcbBundle), { force: true }), rm(resolve(schematicBundle), { force: true })])
+	await Promise.all([rm(resolve(pcbBundle), { force: true }), rm(resolve(schematicBundle), { force: true }), rm(resolve(sesBundle), { force: true })])
 }

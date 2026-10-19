@@ -84,7 +84,7 @@ Use `pcb.getPadExpansionPlan` / `pcb.expandPads` to plan and perform pad expansi
 
 ## Operation demonstrations
 
-Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not acceptance records for v0.20.1.
+Both animations were recorded with extension v0.10.89 and EDA Pro 4.1.60. They demonstrate existing operations and are not acceptance records for v0.20.50.
 
 ### Schematic: multi-pin MCU, supporting parts, short wires, and labels
 
@@ -108,24 +108,33 @@ The extension, proxy, and AI skill are installed separately. The proxy runs loca
 
 ## Release status
 
-**v0.20.1 is the current release.** This version removes the `cbb.*` and `module.*` command namespaces from the extension. The independent module-reuse extension remains a separate project and is unchanged. TypeScript checking, production build, and 15 existing regression suites passed. The runtime matches the original v0.20.1 candidate except for publication metadata and path labels. A total of 205 commands are registered, with no `cbb.*` or `module.*` commands and no duplicate names. v0.20.1 has not been installed in a live EDA host. The Chinese EDA marketplace package is prepared for user upload; upload and approval are pending. See the [v0.20.1 release notes](docs/releases/v0.20.1.md) and [Chinese release notes](docs/releases/v0.20.1_ZH.md).
+**v0.20.50 is the Chinese-menu and documentation package built on the v0.20.49 core. It adds no core write operations.** Its changes collect fixes and documented boundaries from v0.20.11–v0.20.49. TypeScript checking, the production build, and 31 existing simulated regression suites passed. Runtime verification found no difference from the marketplace-candidate program after removing build-path markers, and the manifest fields matched. The v0.20.50 package has not been reinstalled for host verification. The Chinese marketplace package has been resubmitted and is under review; the publicly listed marketplace version remains v0.10.143, and approval or listing of v0.20.50 has not been confirmed. v0.20.50 is a formal GitHub release, not a prerelease. See the [v0.20.50 release notes](docs/releases/v0.20.50.md) and [Chinese release notes](docs/releases/v0.20.50_ZH.md).
+
+Current compatibility and operation boundaries include:
+
+- On EDA 4.1.78, 14 commands requiring EDA 4.2 are disabled and rejected at the version boundary. Positive execution and persistence on EDA 4.2 have not been accepted.
+- `routeTrack` and SES segment inputs are subject to a plugin policy that rejects any segment shorter than 1 mil before writing. This is not an SDK minimum-length limit.
+- `pcb.connectComponentPadDirect` is temporarily disabled; the compatibility entry point rejects calls before project or SDK access.
+- `modifyPour` requests that change a pour's net or name are rejected before writing. Automatic autorouter SES reinjection is disabled; review and explicit import remain separate steps.
+
+These controls and scoped checks do not mean that all underlying issues, geometry, copper-fill results, or persistence behavior are fixed. See the release notes for the limits and evidence scope.
 
 The “little robot drawing a circuit board” shown on the page is the project logo. The marketplace icon file is `images/logo-marketplace.png`.
 
+<a id="v02050-downloads-and-installation"></a>
 <a id="v0200-downloads-and-installation"></a>
 
-## v0.20.1 downloads and installation
+## v0.20.50 downloads and installation
 
-Download the v0.20.1 release files:
+Download these v0.20.50 formal release assets:
 
-- [Extension package: ai-command-engine_v0.20.1.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine_v0.20.1.eext)
-- [Companion skill package: ai-command-engine-skill_en-zh_v0.20.1.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/ai-command-engine-skill_en-zh_v0.20.1.zip)
-- [SHA256SUMS.txt](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.1/SHA256SUMS.txt)
-- [v0.20.1 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.1.zip)
-
+- [Chinese marketplace extension package: ai-command-engine_v0.20.50_zh-CN.eext](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/ai-command-engine_v0.20.50_zh-CN.eext)
+- [English-primary, Chinese-fallback skill package: ai-command-engine-skill_en-zh_v0.20.50.zip](https://github.com/quhuii-lgtm/easyeda-aicommand/releases/download/v0.20.50/ai-command-engine-skill_en-zh_v0.20.50.zip)
+- [v0.20.50 source ZIP](https://github.com/quhuii-lgtm/easyeda-aicommand/archive/refs/tags/v0.20.50.zip)
 
 
-The English-first skill ZIP includes `SKILL.md` and English references, plus `SKILL_ZH.md` and `references/zh/` as the Chinese fallback. These are two documentation versions inside one installed skill; do not install the fallback as a second automatic skill. Verify both release files with `SHA256SUMS.txt`.
+
+The English-first skill ZIP includes `SKILL.md` and English references, plus `SKILL_ZH.md` and `references/zh/` as the Chinese fallback. These are two documentation versions inside one installed skill; do not install the fallback as a second automatic skill. Verify the release assets against the published checksum file.
 
 After extracting the skill ZIP, install the entire `ai-command-engine/` directory in your AI tool’s skill directory, keeping subdirectories such as `references/` and scripts; do not copy only `SKILL.md`. The proxy is not packaged separately. Download the source ZIP, then follow the [installation and usage guide](docs/QUICKSTART.md) to install Node.js dependencies and run the local proxy. The extension, proxy, and skill are separate installs; the extension marketplace will not install the proxy or skill for you.
 
@@ -140,7 +149,7 @@ npm ci
 node bridge/command-proxy.mjs
 ```
 
-If you downloaded a ZIP, run `npm ci` and `node bridge/command-proxy.mjs` from the extracted repository directory. Keep the proxy terminal open. Then download the `.eext` package from [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases), import and enable it in the EDA extension manager, and allow external interaction. Install the complete [`skills/ai-command-engine/`](https://github.com/quhuii-lgtm/easyeda-aicommand/tree/main/skills/ai-command-engine) directory in your AI tool’s skill directory, then click AI Command → Start Bridge in the EDA menu. Installing the extension does not deploy the proxy locally or install the skill in your AI tool. See the [first-use guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md) for complete instructions.
+If you downloaded a ZIP, run `npm ci` and `node bridge/command-proxy.mjs` from the extracted repository directory. Keep the proxy terminal open. Then download the `.eext` package from [Releases](https://github.com/quhuii-lgtm/easyeda-aicommand/releases), import and enable it in the EDA extension manager, and allow external interaction. Install the complete [`skills/ai-command-engine/`](https://github.com/quhuii-lgtm/easyeda-aicommand/tree/main/skills/ai-command-engine) directory in your AI tool’s skill directory, then use the Chinese EDA menu AI 指令引擎 → 启动桥接. Installing the extension does not deploy the proxy locally or install the skill in your AI tool. See the [first-use guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md) for complete instructions.
 
 Windows users can optionally start the proxy through a URL protocol. See the [bridge lifecycle documentation](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/BRIDGE-LIFECYCLE.md) for registration and lifecycle details. GitHub CLI is not needed for ordinary use; it is needed only if you choose the optional issue-reporting feature. SMT parts lookup also requires [JLC Open Platform](https://open.jlc.com) credentials; see the [parts lookup guide](https://github.com/quhuii-lgtm/easyeda-aicommand/blob/main/docs/QUICKSTART.md#5-可选-smt-物料查询).
 

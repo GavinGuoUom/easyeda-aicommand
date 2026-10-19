@@ -12,6 +12,8 @@ Read this page only for fanout, local copper, pad expansion, or net silkscreen t
 4. The plugin writes and reads back each item. If some items fail, retain objects already created, inspect the current board, and do not replay the old plan. These commands do not automatically perform board-level DRC, save, or manufacturing acceptance.
 5. Run applicable checks and save. To establish persistence, close and reopen the document, then check it again.
 
+Copper operations share the SDK total time limit. A timeout does not mean an issued call was cancelled; do not start dependent writes or replay the plan until the outcome is clear.
+
 | Task | Plan → execute | Additional confirmation required |
 | --- | --- | --- |
 | Fine-pitch pad fanout | `pcb.getFanoutPlan` → `pcb.fanout` | Only routes from pads to breakout vias; the remaining nets still need routing. |
@@ -28,6 +30,26 @@ Select targets by component, pad, or net. IDs must come from the current PCB. Se
 `pour` is clipped by copper-pour rules and may leave only a boundary or no fill; `fill` is a fixed conductive shape. The two modes are not interchangeable automatically. Plans are grouped by net and copper layer; do not combine different nets into one copper shape. Current board-outline handling accepts only a verified single closed loop. If the outline has curves, multiple loops, or incomplete obstacle information, do not treat a partial plan as safe geometry.
 
 After creating or rebuilding a copper pour, use `pcb.getPourFillReadback` for a read-only check of the associated fill, parent boundary, net, and layer. A nonempty fill path does not prove that the geometry is correct or meets manufacturing requirements. If readback fails or is unknown, stop relying on the write; a partial failure from an earlier command must not be reported as success.
+
+New copper pours can specify `net`; `modifyPour` is not currently used to change the net or name of an existing pour. Manual operation in the EDA UI remains available; afterward check pour ordering, rebuild, and read back the actual fill. Do not recommend that AI automatically delete and recreate a pour as a lossless net/name change.
+
+The v0.20.40 `pourCopper` single-R path candidate accepts only a one-dimensional path or exactly one wrapper layer and checks all seven items for exact equality; it rejects multiple rings, additional nesting, or changed parameters. Raw and normalized inputs are available for diagnosis. Unified candidate regression and newer-host validation remain pending.
+
+Starting with v0.20.22, `pcb.autoCopper(pour)` independently reads back the actual fill even when the rebuild call returns empty. It reports success only after checking the parent boundary, net, layer, boundary, and valid fill. If there is still no fill, it returns a non-retryable partial write and retains the created boundary ID; inspect the live board first and do not rebuild again or delete automatically. This version has not received positive host acceptance for generating a solid fill.
+
+Starting with v0.20.23, IDs in the rebuild return object are diagnostic only and do not prove that they identify fills newly created by this operation; `createdIds` should list only confirmed newly created boundaries. Before cleanup, check the drawing source and associated IDs; do not delete based directly on rebuild return IDs. An isolated host test on 2026-10-18 confirmed that an old underlying ID was not included in `createdIds`; the new top-level boundary still had no solid fill, so automatic copper has not passed.
+
+Starting with v0.20.24, if foreign-net obstacles reduce the target expansion to zero, the plan warns about the first triggering obstacle and clearance rule. The plan is non-executable only when it can strictly prove that the final contour of a positive-expansion `pour` plan for one standard rectangular pad equals the pad itself. Complex or unprovable shapes are reported as uncertain. `executable=true` means only that plan checks allow execution; it does not guarantee that the host creates fill. Do not infer a larger boundary by increasing `expansion`; check the actual contours in `plannedPrimitives` and `warnings`.
+
+In v0.20.43, the existing standard single-rectangle gate additionally recognizes `Pad` / `ComponentPad`, without changing its conditions. Finite `Number` values are converted through decimal `String` into a local `BigInt` rational model to exactly compare the four corners from center ± half-size and the closed edges; a different start point or winding direction is allowed. This does not change global geometry comparison, use tolerance or rounding, or ignore tiny expansions. If unsupported or strict comparison differs, the result remains uncertain. This method cannot restore precision inside the host or guarantee a fix for all no-fill issues. Candidate local and host validation remain pending. Four small islands that do not touch the pad are assessed separately.
+
+The v0.20.39 `autoCopper` connection-rule candidate preserves original sources and selection state. Unknown selection or inapplicable coverage in `fill` mode is diagnostic information only and does not guarantee fill generation. It does not change the `autoCopper` default of `false`, fixed copper regions, or execution semantics. Final local review and host acceptance remain pending.
+
+- The v0.20.46 candidate retains source `thermalGap.raw` and `sourcePath`, while keeping the unit as `unknown`. `unitLabel` is recorded separately and is not used to infer mm or mil. Copper-rule `selection` remains `unknown`.
+- `pcb.getComponentPads` adds a per-pad, read-only `heatWelding` diagnostic with statuses `null`, `config`, `unavailable`, `exception`, and `invalid`. Only an explicit `null` from the getter is recorded as `null`.
+- Read exceptions return `{status:"exception",error:{message}}`; invalid values return `{status:"invalid",returnedType,reason}`. If the getter is unavailable, it returns `{status:"unavailable"}`.
+- `config.value` lists only `connectionMethod`, `divergenceSpacing`, `divergenceLineWidth`, and `divergenceAngle`. Missing optional fields are not filled with zero. Reading a configuration does not prove override priority or which rule the host actually used.
+- No command parameters or write behavior were added. Local and host validation remain pending; this does not mean the four-island geometry issue is fixed.
 
 ## Pad Expansion and Net Silkscreen
 
@@ -260,5 +282,5 @@ This page describes network constraints and manufacturing exports.
 | --- | --- | --- | --- |
 | `pcb.exportGerber` | Gerber board-manufacturing files (usually zip) | For backup, delivery, or independent review. | Successful export does not mean the contents have passed acceptance. |
 | `pcb.exportPickPlace` | Pick-and-place coordinates | For backup, delivery, or independent review. | Successful export does not mean the contents have passed acceptance. |
-| `pcb.exportDsn` | Specctra DSN (first step for external autorouting: `exportDsn` → external router → import with `importAutoRouteSes`) | When handing off to an external autorouter. | Successful export does not mean the contents have passed acceptance. |
+| `pcb.exportDsn` | Specctra DSN (first step for external autorouting: `exportDsn` → external router → import with `importAutoRouteSes`) | When handing off to an external autorouter; if the filename is omitted, `board` is used. | Successful export does not mean the contents have passed acceptance. |
 | `pcb.exportNetlist` | PCB netlist.<br>Since v0.10.104, rejects zero-byte files and empty base64; parse and check the export anyway. | For backup, delivery, or independent review. | Since v0.10.104, rejects zero-byte files and empty base64; parse and check the export anyway. |

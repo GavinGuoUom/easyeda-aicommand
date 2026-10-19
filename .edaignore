@@ -20,14 +20,10 @@
 debug.log
 /bridge/jlc-credentials.json
 /bridge/backups/
+/backups/
 /bridge/lane-log-*.jsonl
 /bridge/lane-log-error.txt
 /bridge/proxy-restart.log
 __pycache__/
-
 *.tsbuildinfo
 /images/logo.png
-/skills/ai-command-engine/tests/
-/AGENTS.md
-/.sdk-manifest.json
-/.edaignore

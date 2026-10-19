@@ -1,32 +1,27 @@
 {
   "name": "ai-command-engine",
   "uuid": "29aa51f0bed4411d866cb7a7a249231a",
-  "displayName": "AI Command Engine",
-  "description": "通过本地代理与 AI 技能驱动嘉立创 EDA 专业版的原理图、PCB、工程及元件库操作；需另行安装本地代理并启用 AI 技能。",
-  "version": "0.20.1",
+  "displayName": "AI 指令引擎",
+  "description": "AI 指令引擎：为 AI 编程工具提供简易 JSON 指令接口，内部封装嘉立创 EDA 专业版扩展 API，支持宏指令组合与布线知识库",
+  "version": "0.20.50",
   "publisher": "ai-command-engine",
   "engines": {
     "eda": "^3.2.0"
   },
   "license": "Apache-2.0",
   "repository": {
-    "type": "github",
-    "url": "https://github.com/quhuii-lgtm/easyeda-aicommand"
+    "type": "extension-store",
+    "url": ""
   },
-  "categories": [
-    "Schematic",
-    "PCB",
-    "Library",
-    "Project"
-  ],
+  "categories": "Other",
   "keywords": [
     "Tool"
   ],
   "images": {
     "logo": "./images/logo-marketplace.png"
   },
-  "homepage": "https://github.com/quhuii-lgtm/easyeda-aicommand",
-  "bugs": "https://github.com/quhuii-lgtm/easyeda-aicommand/issues",
+  "homepage": "",
+  "bugs": "",
   "activationEvents": {
     "onStartupFinished": true
   },
@@ -36,16 +31,16 @@
     "home": [
       {
         "id": "aiCommand",
-        "title": "AI Command",
+        "title": "AI 指令引擎",
         "menuItems": [
           {
             "id": "About",
-            "title": "About...",
+            "title": "关于插件…",
             "registerFn": "about"
           },
           {
             "id": "ListCommands",
-            "title": "List Commands...",
+            "title": "指令列表…",
             "registerFn": "listCommands"
           },
           {
@@ -65,7 +60,7 @@
           },
           {
             "id": "SmtQuery",
-            "title": "SMT Part Query...",
+            "title": "SMT 物料查询…",
             "registerFn": "openSmtQuery"
           }
         ]
@@ -74,16 +69,16 @@
     "sch": [
       {
         "id": "aiCommand",
-        "title": "AI Command",
+        "title": "AI 指令引擎",
         "menuItems": [
           {
             "id": "About",
-            "title": "About...",
+            "title": "关于插件…",
             "registerFn": "about"
           },
           {
             "id": "ListCommands",
-            "title": "List Commands...",
+            "title": "指令列表…",
             "registerFn": "listCommands"
           },
           {
@@ -103,7 +98,7 @@
           },
           {
             "id": "SmtQuery",
-            "title": "SMT Part Query...",
+            "title": "SMT 物料查询…",
             "registerFn": "openSmtQuery"
           }
         ]
@@ -112,16 +107,16 @@
     "pcb": [
       {
         "id": "aiCommand",
-        "title": "AI Command",
+        "title": "AI 指令引擎",
         "menuItems": [
           {
             "id": "About",
-            "title": "About...",
+            "title": "关于插件…",
             "registerFn": "about"
           },
           {
             "id": "ListCommands",
-            "title": "List Commands...",
+            "title": "指令列表…",
             "registerFn": "listCommands"
           },
           {
@@ -141,7 +136,7 @@
           },
           {
             "id": "SmtQuery",
-            "title": "SMT Part Query...",
+            "title": "SMT 物料查询…",
             "registerFn": "openSmtQuery"
           }
         ]

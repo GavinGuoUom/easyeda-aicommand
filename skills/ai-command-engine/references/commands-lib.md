@@ -77,3 +77,44 @@ Exceptions and details:
 4. Create a footprint using the same process.
 5. Bind the symbol and footprint with `deviceCreate`.
 6. Find the bound device with `library.searchDevice`.
+
+**Verified behavior and limits**
+
+`lib.deviceCreate` in the v0.20.29 candidate reads an explicitly supplied 3D model before writing and verifies the model UUID and library UUID; the default model library is the device library. It fails explicitly without creating the device if the model cannot be read, its identity does not match, or the API cannot verify it. This path still awaits acceptance on a newer host.
+
+If `lib.symbolOpenInEditor` or `lib.footprintOpenInEditor` receives the exact SDK error `[object Object]`, the plugin adds target information and preserves the original `cause`. Do not infer that the resource is missing from this message. This new diagnostic still awaits acceptance on a newer host.
+
+- `Create` creates an empty resource and returns its UUID; `UpdateSource` writes document source back to the library.
+- `Search` supports keyword, category, and pagination. An empty `key` lists all resources; `classification` filters by category. `page` must be a positive integer and defaults to 1; `itemsOfPage` must be a positive integer and defaults to 20.
+- `Get` reads the specified resource. If official `lib.footprintGet` returns `[object Object]`, the plugin states that the cause cannot be determined and preserves the original error. Do not treat this as proof that the footprint does not exist.
+- `Copy` copies a resource to a target library and requires `targetLibraryUuid`. Duplicate names in the target library may make copying fail.
+- `Modify` changes resource properties; setting a property to `null` clears it. The UUID may change after a modification.
+- Search returns objects such as `[{uuid, name, description, ...}]`.
+
+For `lib.symbolModify`, the plugin verifies the symbol UUID and library UUID before writing. If `name` is omitted, it preserves the original name and letter case. After SDK success, it uses a fresh `get` to compare each requested value and all non-requested properties. If the UUID changes, it searches for a unique candidate and reads it back again. It checks `name`, `description`, `classification`, `type`, `libraryType`, `cbbUuid`, `subPartNames`, `otherProperty`, and library identity. If values differ, it throws an operation failure and preserves `partial:true`, `retryable:false`, `sdkModified:true`, `before`, `after`, `differences`, `candidateUuid`, `uuid`, and `verify` in `cause`. Do not write again or retry automatically. A macro stops later steps on `partial:true`, even if `stopOnError:false`. The v0.20.33 EDA 4.1.78 A02 host test passed for changing only `description` on a temporary symbol while preserving name case and every non-requested field. This evidence covers only that modification shape, not every property combination.
+
+**`lib.deviceCreate` specifics**
+
+- `lib.deviceCreate` binds a symbol and footprint into a library device.
+- For cross-library resources, provide `symbolLibraryUuid` and `footprintLibraryUuid`; if omitted, `libraryUuid` for the new device is used.
+- Example: `{"libraryUuid":"target library UUID","name":"Test resistor","symbolUuid":"symbol UUID","symbolLibraryUuid":"symbol library UUID","footprintUuid":"footprint UUID","footprintLibraryUuid":"footprint library UUID"}`.
+- To create a new ordinary blank symbol, pass `symbolType:2`; `symbolUuid` is then unnecessary.
+- Check branch availability in the installed version's help and by reading the result back.
+- Prefer `get` immediately after creation. If project-library lookup does not support that query, search by name and match the returned creation UUID; do not create it again.
+- Test 134 proved that cross-library resources can enter a project, but an older version falsely reported failure at the final `get`.
+- A successful create call does not replace checking the full response and resource identity.
+
+`lib.deviceGetByLcscIds` accepts one `lcscIds` value or an array for batch lookup, for example `"C1523"` or `["C1523","C17168"]`. `allowMultiMatch?` returns all matches when a C-number has multiple results. Since v0.20.28, `diagnostic?:boolean` defaults to false. One EDA 4.1.78 host query confirmed diagnostic output; the historical identity anomaly did not recur in that sample. With `diagnostic:true`, success returns `{result, diagnostic}`. `result` is the unfiltered SDK response; diagnostics include a pre-call snapshot of the three actual arguments and the UTC start and end times. The SDK is called only once, with no retry; empty returns or exceptions follow the original error path and may have no diagnostics. EDA 4.1.78 once returned library B when library A was requested. `ok=true` does not prove library identity; diagnostic output is not sufficient identity acceptance for placement or copying. This feature is unavailable in private deployments.
+
+`lib.deviceModify` supports rebinding through `symbolUuid` or `footprintUuid`, and changing properties such as designator, manufacturer, or supplier through `property`.
+
+**Recommended library workflow**
+
+Do not use this group for ordinary project placement. For LCSC Mall parts, use `library.searchDevice` or `library.getDeviceByLcsc` to place into the project. This group is for accumulating and maintaining custom library resources:
+
+1. Create a symbol with `symbolCreate`.
+2. Draw the symbol in the editor.
+3. Write its content back with `symbolUpdateSource`.
+4. Create and update a footprint using the corresponding workflow.
+5. Bind the symbol and footprint with `deviceCreate`.
+6. Search for the bound device with `library.searchDevice`.

@@ -1,16 +1,10 @@
-# 连接、路由、坐标与激活
+# 连接与环境
 
-## 1. 健康检查与启动
+## 首次安装
 
-首次安装：获取完整源码仓库，在包含 `package-lock.json` 的目录运行 `npm ci`，然后运行 `node bridge/command-proxy.mjs`。
+首次安装先获取完整源码仓库，在含 `package-lock.json` 的目录执行 `npm ci`，再运行 `node bridge/command-proxy.mjs`。要求 Node.js >=20.17.0，代理需要 `ws`。不要只复制代理脚本，也不要使用 `npm ci --omit=dev`。已有正常环境时不必重复安装。
 
-要求 Node.js >=20.17.0，代理需要 `ws`。
-
-不要只复制单个代理脚本，也不要使用 `npm ci --omit=dev`。
-
-默认地址为 `http://127.0.0.1:49720`。本技能可独立安装，不依赖作者本机的其他技能或调试网关。
-
-EDA 中须启用扩展并允许外部交互，配套指令代理须运行。SMT 物料查询由代理本地执行，不要求 EDA 在线。
+本技能可独立安装，不依赖作者本机的其他技能或调试网关。EDA 中须启用扩展并允许外部交互，配套指令代理须运行。SMT 物料查询由代理本地执行，不要求 EDA 在线。
 
 发往 EDA 的命令先查询 `GET /connections`，核对实例与工程。每条请求顶层带 `cmd`、`instanceId` 和可选 `params`；`/select` 不能代替请求路由。同一窗口只由一个写入者操作。
 
@@ -18,209 +12,108 @@ EDA 中须启用扩展并允许外部交互，配套指令代理须运行。SMT 
 
 实例显示 `paused:true` 时，由使用者在 EDA 菜单恢复连接，不自行绕过暂停。
 
-下面 curl 示例使用 Bash 语法。
+## 连接和发送
 
-Windows PowerShell 用户使用 `Invoke-RestMethod`，完整步骤在仓库安装指南。
-
-```bash
-curl http://127.0.0.1:49720/health
-curl http://127.0.0.1:49720/connections
-```
-
-### 1a. 代理未运行
-
-连接拒绝时，在已安装依赖的仓库目录启动 `node bridge/command-proxy.mjs`，或 Windows 的 `bridge/launch-proxy.bat`。
-
-保留进程并核对健康响应。
-
-默认手动启动。
-
-仓库提供 `bridge/install-url-scheme.ps1` 与 `bridge/uninstall-url-scheme.ps1` 注册/注销 `ai-command-proxy://` 协议。
-
-自动启动入口为 `ai-command-proxy://start`。
-
-注册只提供启动入口，不代表代理已经启动。
-
-启动仍依赖已安装依赖及明确启动动作，不能把等待自动恢复当成首次安装步骤。
-
-所有实例断开后代理默认 300 秒退出。
-
-`PROXY_IDLE_MS=0` 可用于需要常驻的本机配置。
-
-启动器须检查健康响应中的 `ok`、`service` 与 `lifecycleProtocol=1`。
-
-旧版或其他服务应拒绝，不自动停止或重启现有服务。
-
-重连后重新查询实例，不猜测 ID 是否改变。
-
-普通用户保持默认 49720。
-
-只设代理 `PORT` 不会同步修改插件、启动器和 Python 助手的目标地址。
-
-### 1b. 有代理但无实例
-
-确认 EDA 已打开工程，插件已启用且允许外部交互。
-
-需要时点击 AI Command → 连接指令代理。
-
-若用户曾点击断开菜单暂停该实例，必须由用户点击连接恢复，AI 不绕过暂停。
-
-## 2. 核对窗口
-
-`GET /connections` 返回实例、版本、工程信息与暂停状态。
-
-按用户指定工程核对目标。
-
-工程名或身份仍有歧义时先澄清，不自动选最新版本、最新连接或第一项。
-
-每个完整 `/command` 请求都带顶层 `instanceId`，单窗口也一样。
-
-`POST /select` 是全局选择，不替代请求级路由。
-
-`/help` 等发现接口使用全局所选实例，其能力未必等于你的目标版本，核对版本后再使用。
-
-同一窗口焦点共享。
-
-不同 AI 不并发修改同一个窗口。
-
-重装、重连或离线后重新查询并核对目标，未知实例不会改投其他窗口。
-
-## 4. 查询指令能力
-
-```bash
-curl 'http://127.0.0.1:49720/help?cmd=schematic.placeDevice'
-curl http://127.0.0.1:49720/help
-```
-
-参数拿不准先查目标版本手册和在线帮助，不猜参数。
-
-分类指令表主要描述 `params`，不是省略实例 ID 的许可。
-
-## 6. 坐标与单位（⚠️ 极易混淆）
-
-| 画布 | 单位 | Y 轴 | 有效范围 |
-| --- | --- | --- | --- |
-| 原理图/符号 | **10mil**（1 单位 = 10mil） | +Y 向上 | 先查图框：A4 约 1170×825 单位，建议留 50 边距 |
-| PCB/封装 | **mil**（1mm ≈ 39.37mil） | +Y 向上 | 以板框为准 |
-
-- ⚠️ 两者相差 10 倍，混用会把图元放到十万八千里外。
-- 原理图网格吸附按当前图页设置。
-- 坐标单位为10mil，不把固定5或10倍数作为指令限制。
-- 格点是否合规由当前DRC规则判断。
-- **图纸尺寸查询**：原理图用 `schematic.getPageInfo`（返回 titleBlock 的 `width`/`height`，单位 10mil。
-- A4 = 1170×825，A3 = 1630×1150 左右，以实际读取为准）。
-- PCB 板框尺寸用 `pcb.getPrimitivesInRegion` 扫全板找 Region 图元换算，或截图比对。
-- 图框尺寸不是定值：先 `schematic.getPageInfo` 读 `width`/`height` 再放器件。
-- 原理图坐标的正Y方向向上。
-- 矩形锚点是左上角(minX,maxY)。
-- 传入的y表示矩形上沿。
-- height沿Y减小方向延伸。
-- 做布局换算时不要把屏幕坐标（向下为正）直接当世界坐标用。
-- `listRects`/`checkRectOverlap`（0.9.4 起）返回归一化 `span:{x1,y1,x2,y2}`，一律用 span 计算。
-- **图纸/图框切换（0.9.4 起明确）**：`project.modifyTitleBlock` 只能改当前图框**已存在**的字段（先 `schematic.getPageInfo` 看 titleBlockData 有哪些键）。
-- 传不存在的键官方抛 TypeError。
-- Page Size和Symbol不能通过该接口切换纸张。
-- 用户须在EDA界面修改纸张。
-- 修改后用`getPageInfo`的width和height核对尺寸。
-- size或Symbol可能仍显示旧文本。
-- 层：`"top"` / `"bottom"`。
-
-## 7. 文档激活（⚠️ 0.8.2 起有类型守卫）
-
-任何 `schematic.*` / `pcb.*` 指令前，必须先激活对应类型文档：
+1. `GET http://localhost:49720/health` 检查服务。
+2. `GET /connections` 获取实例，按工程和文档核对目标。
+   - 不能只看版本、连接时间或 selected。
+3. 显式指定实例查询工程，再用返回的 UUID 打开目标文档：
 
 ```json
-{ "cmd": "editor.openDocument", "instanceId": "<已核对的实例ID>", "params": { "uuid": "<图页或PCB的uuid>" } }
+{"instanceId":"<当前核实的 ID>","cmd":"project.getInfo","params":{}}
+{"instanceId":"<当前核实的 ID>","cmd":"editor.openDocument","params":{"uuid":"<目标文档 UUID>"}}
 ```
 
-- 原理图页 uuid 从 `project.listSchematicPages` 获取，其他文档从 `project.getInfo` 的文档树核对。
-- 激活后在页级指令中携带 `params.__docUuid` 核对，不能只检查类型。
-- ⚠️ 焦点不对时指令会明确报错（这是守卫，不是 bug），重新 openDocument 即可。
+以上分别提交到 `POST /command`，Content-Type 为 `application/json`。
 
-## 3. 发送完整请求
+每条请求前刷新连接并核对身份。
 
-将占位符替换为刚核对的实例 ID：
+instanceId 放顶层，不能放进 params。
 
-```bash
-curl -X POST http://127.0.0.1:49720/command -H 'Content-Type: application/json' -d '{"cmd":"project.getInfo","instanceId":"<已核对的实例ID>","params":{}}'
-```
+离线目标应明确拒绝，不改投其他窗口。
 
-顶层是 `cmd`、`instanceId`、可选 `params`。
+参数查 `GET /help?cmd=<命令名>`。
 
-当前代理对发往 EDA 的缺 ID 请求直接拒绝，不会落到全局选中实例。
+多窗口可在指定实例上调用 `__help`，以该安装版结果为准。
 
-成功返回 `ok:true`。
+失败先读 error.message、suggestion 和部分完成信息。
 
-失败可能为 HTTP 错误，也可能 HTTP 200 但 `ok:false`，必须检查返回体。
+服务未运行时，确认 EDA 扩展已启用“允许外部交互”。
 
-遇到 `UNKNOWN_INSTANCE` / `TARGET_OFFLINE`，重新查询连接并核对身份。
+再运行配套 `bridge/launch-proxy.bat` 或已注册的 `ai-command-proxy://start`。
 
-不要通过重选别的工程来消除报错。
+检查启动器返回的 `ok`、`service` 与 `lifecycleProtocol=1`。
 
-宏仅在外层带 `instanceId`，`params.steps` 中的子命令继承同一实例，不各自路由。
+旧版或其他服务应拒绝。
 
-## 8. 其他编辑器操作
+不自动停止或重启现有服务。
 
-| 指令 | 作用 | 使用时机 | 用法 | 限制 |
-| --- | --- | --- | --- | --- |
-| `editor.listTabs` | 列出当前窗口页签。 | 选择或确认文档页签时。 | 无 | 页签ID应从本窗口实际返回取得。 |
-| `editor.screenshot` | 截取当前编辑器视口。 | 需要查看当前画布外观时。 | `zoomToAll?`, `tabId?` | 后台窗口可能返回旧缓存帧。 |
-| `schematic.exportPng` | **视觉验收首选**（独立渲染管线，窗口后台也出全图。<br>返回**全部原理图页打包成 ZIP** 的 base64——PK 开头，先解 ZIP 再读每页 PNG） | 备份、交付或独立检查时使用。 | 无 | 单边尺寸不超过4096px。 |
-| `editor.zoomToAll` | 缩放至全部图元。 | 需要查看整体布局时。 | `tabId?` | 缩放成功不证明后台画布已重绘。 |
-| `editor.zoomToRegion` | 缩放至指定区域。 | 需要查看局部内容时。 | `left/right/top/bottom`, `tabId?` | 坐标单位取决于当前文档。 |
-| `editor.closeDocument` | 关闭指定页签并检查结果。 | 已完成保存且需要关闭页面时。 | `uuid?`, `tabId?` | 未知页签状态不能当作已关闭。 |
+启动器可能复用兼容的现有进程，不等于重启。
 
-- **区域截图**（无原生指令，两步 macro 等效）：`zoomToRegion` 对准区域 → `screenshot` 截视口。
+## 单位与画布
 
-```json
-{
-	"cmd": "macro",
-	"instanceId": "<已核对的实例ID>",
-	"params": {
-		"steps": [
-			{ "cmd": "editor.zoomToRegion", "params": { "left": 100, "right": 200, "top": 200, "bottom": 100 } },
-			{ "cmd": "editor.screenshot", "params": {} }
-		]
-	}
-}
-```
+| 对象 | 单位与坐标 |
+| --- | --- |
+| 原理图/符号 | 1 单位 = 10mil，+Y 向上，按当前图页栅格设置对齐，不限定固定倍数 |
+| PCB/封装 | mil，1mm ≈ 39.37mil，+Y 向上 |
+| 原理图矩形 | 锚点为左上角 (minX,maxY)，height 向下延伸；计算边界优先用 span |
+| PCB drawOutline | 对外 x/y 为左下角 |
+| 文档源码 | 原理图源码 Y 与 API Y 符号相反，转换时核对 |
 
-100和200是演示坐标。
-使用前替换为目标区域。
+原理图先用 `schematic.getPageInfo` 读实际 width/height（A4 约 1170×825），PCB 以实际板框为准。
 
-left<right、top>bottom，Y 向上取大值。
+纸张变化以尺寸读回为准，不能只看 size/Symbol 文本。
 
-截图结果在macro返回的steps[1].base64中。
+## 超时和断连
 
-## 5. 超时、进度与写保护
+- 客户端等待超时不取消 EDA 操作。
+- 先查 `task.list` / `task.get`（有 taskId 时）及目标内容，再决定恢复。
+- 支持进度上报的长命令，每次进度会重置代理的 300 秒等待。
+- 连接 ping/pong 不代表任务在推进。
+- 写命令按窗口串行排队。
+- 批量操作优先一次提交，不用并发单条创建提速。
+- 失败项、batches、unprocessed 和 partial 均须检查。
+- 断连后重新核对实例、工程和文档。
+- 重连/停止再启动可能保留 ID，重载扩展可能换 ID。
+- 排查执行顺序可读代理目录的 `lane-log-*.jsonl`。
+- 恢复未确认时保留写保护。
 
-默认等待为 300 秒。
+## 升级与心跳
 
-部分长命令通过进度心跳延长等待，外层熔断、宿主异常仍可能失败，不能承诺永不超时。
+扩展与代理配套更新。
 
-超时不等于取消。
+`/connections` 的 version 只代表扩展。
 
-对有 taskId 的长任务用 `task.get` 查结果，必要时 `task.list` 找任务，再只读核对现场。
+代理还须核对进程路径、启动时间及所用文件版本。
 
-普通写不一定登记任务表，不能把任务表为空当作旧写已结束。
+覆盖文件不会更新运行中的进程。
 
-0.10.73 写结果不确定时进入实例写保护，入队和出队都检查。
+升级前完成或安全停止操作，保存并关闭旧 EDA 窗口，再更新重开。
 
-期间读可继续，写被拒。
+旧代理仍驻留时，先查在途任务、排队写入和结果未知的写保护，确认安全后才结束旧进程。
 
-只有对应指令的可信迟到结果，或确认旧写状态后的显式 `write.acknowledge` 才能解除。
+不要盲目强停共享代理。
 
-不能自动解除、靠等待解除，或将长任务去重推广为所有命令都可以原样重发。
+EDA 4.1.60 实测后台 10 秒计时器可能降到约 60 秒。
 
-写指令按窗口排队。
+0.10.80 代理约每 20 秒发应用 ping，扩展回 pong。
 
-`editor.openDocument/closeDocument` 也会排队，宏整体占一条通道。
+静默先探测，无回应且没有在途命令时才退役连接。
 
-排队不保证宿主操作成功，始终检查逐项结果与读回。
+计时延迟本身不等于断线。
 
-日志在代理目录的 `lane-log-*.jsonl`，写盘异常另见 `lane-log-error.txt`。
+仅在升级或修复连接时做专项验收：
 
-更多处置见 [pitfalls](pitfalls.md)。
+1. 两个正式安装窗口分别查询页签，核对各自 instanceId。
+2. 分别菜单重连、停止、启动。
+   - 检查无重复实例、另一窗口正常、离线 ID 请求明确拒绝。
+3. 后台测试须实际覆盖降频条件，再核对连接身份、连接时间和查询。
+   - 临时诊断按授权执行并清理。
+4. 区分模拟、宿主模块和正式安装包证据。
+
+2026-10-07，EDA 4.1.60 + 正式 0.10.80 已通过上述双窗口及约 60 秒降频测试。
+
+未覆盖断网、睡眠和长期运行。
 
 ## 冷启动与开发调试连接排查
 
@@ -241,3 +134,10 @@ WebSocket、监听地址和 Windows 启动器不变。
 正常使用安装包不需要启动开发服务器。
 
 不要靠启动无关调试服务来掩盖桥接故障。
+
+
+## 项目相关技能
+
+项目目标、记录和阶段验收使用 `hw-project`。已有图纸美化使用 `eda-schematic-layout`。官方设计资料见另行安装的 `hw-project` 中的 `07-官方资料.md`。
+
+上述其他技能按任务需要另行安装，不随本技能分发；不能把作者本机路径当成安装要求。

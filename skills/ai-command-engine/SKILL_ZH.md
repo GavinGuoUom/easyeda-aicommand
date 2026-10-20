@@ -9,7 +9,7 @@ description: 通过本地 HTTP 指令查询、绘制、修改和检查嘉立创 
 
 用于操作嘉立创 EDA 专业版。连接方式、实例选择和参数查询见[连接与环境](references/zh/setup.md)。
 
-v0.20.50 中文发布包的菜单入口为“AI 指令引擎”，包含“指令列表…”和桥接操作；命令名与 JSON 参数不变。当前4.1.78暂停的14项功能按版本说明保持拒绝。
+v0.20.51 为本地验收版，修正 connectPin 坐标精度与 listPours 填充状态；EDA 4.1.78 的五组引脚连接及已填充/未填充铜区已通过保存重开核对。该结果不代表整图 DRC 或其他接口通过。中文菜单入口为“AI 指令引擎”，包含“指令列表…”和桥接操作；命令名与 JSON 参数不变。当前4.1.78暂停的14项功能按版本说明保持拒绝。
 
 ## 使用边界
 
@@ -26,6 +26,7 @@ v0.20.50 中文发布包的菜单入口为“AI 指令引擎”，包含“指�
 | 任务或调用时机 | 文件 |
 | --- | --- |
 | 首次连接、选窗口、坐标单位或激活文档 | [连接与环境](references/zh/setup.md) |
+| 制造导出、BOM 与坐标格式 | [生产文件操作要求](references/zh/生产文件操作要求.md) |
 | 按类别和推荐使用频率查指令 | [指令分类](references/zh/commands-frequency.md) |
 | 绘制或修改原理图：绘图质量 | [原理图操作要求](references/zh/原理图操作要求.md) |
 | 原理图常用与专项指令 | [高频](references/zh/commands-schematic-high.md)、[低频](references/zh/commands-schematic-low.md) |
@@ -38,4 +39,5 @@ v0.20.50 中文发布包的菜单入口为“AI 指令引擎”，包含“指�
 | 查询、创建或维护符号、封装、器件 | [器件库指令](references/zh/commands-lib.md) |
 | 查询设计规则、线宽估算或 SMT 物料 | [知识与物料指令](references/zh/commands-knowledge.md) |
 | 属性、标签、网表、保存或恢复异常 | [问题排查](references/zh/pitfalls.md) |
+| 插件错误证据与问题上报 | [问题上报](references/zh/issue-reporting.md) |
 | 开发、修改或审查插件指令 | [插件开发要求](references/zh/插件开发要求.md)；扩展 API 和实时调试另用 extension-dev-skill |

@@ -1,5 +1,7 @@
 # PCB操作流程
 
+写入前先读[PCB操作要求](PCB操作要求.md)，按其中要求规划器件布局、走线和覆铜。
+
 先按[连接与环境](setup.md)核对窗口、工程、PCB 文档和单位。常用入口见[PCB高频](commands-pcb-high.md)，专项入口见[PCB低频](commands-pcb-low.md)。参数与返回字段查已核对所选窗口版本的 `/help?cmd=<命令名>`；`/help` 使用代理当前选中的窗口。
 
 ## 接收设计与核对现状
@@ -47,7 +49,7 @@ v0.20.29 候选允许取消 `QUEUED` 任务，仍须读到取消终态才报告 
 
 ## 覆铜和丝印
 
-`pcb.pourCopper` 创建的是边框；用 `rebuildPour` 重建，再用 `listPours` 或 `getPourFillReadback` 确认实际填充。填充状态为 `empty` 或 `unknown` 时不能报告铺铜完成。`rebuildPour` 的 `completed` 不证明填充新鲜、已保存或制造合格。修改边框、优先级或周边布线后再次检查填充；结果不明时停止，不以旧填充冒充本次结果。
+`pcb.pourCopper` 创建的是边框；用 `rebuildPour` 重建，再用 `listPours` 或 `getPourFillReadback` 确认实际填充。`pcb.listPours(withFill:true)` 的 `fillStatus` 为 `filled`、`empty` 或 `unknown`；`filledRegions` 是 fill 为 true 且路径源通过基础结构检查的区域数，`fillRegions` 是总区域数。缺少或无效的读回字段会得到 `unknown`。v0.20.51 在 EDA 4.1.78 的1区已填充、0区未填充样例通过保存重开核对；非法返回和全部 fill:false 分支为本地模拟验证。填充状态为 `empty` 或 `unknown` 时不能报告铺铜完成。`rebuildPour` 的 `completed` 不证明填充新鲜、已保存或制造合格。修改边框、优先级或周边布线后再次检查填充；结果不明时停止，不以旧填充冒充本次结果。
 
 局部铜皮先区分 `pour`（随规则裁剪）与 `fill`（固定填充），按[几何命令](commands-pcb-special.md)规划再执行。`modifyPour` 的任意优先级值不保证都可达到，以写后源码读回为准，不据 API 返回值假定成功。v0.20.41 实机中同网 no-op 通过、4 个改网请求写前拒绝；实际改网底层顺序问题仍未修复。v0.20.42 起暂时禁用改到不同网络或不同 `pourName`：当前值须由 source 与 fresh getter 一致确认；若请求变更网络或名称，整条请求写前拒绝，包括混合请求。同网/同名字段本身不写入，同一请求中其他允许属性仍按原规则执行并读回，未请求属性保持原值。layer、width、priority 不在禁用范围；不要求 `toAsync`，也不建议 AI 自动删除再建覆铜作为无损替代。本地回归及 EDA 4.1.78 的改网/改名写前拒绝、同值不写和允许的优先级修改保存重开已按限定样例通过；底层改网/改名顺序问题未修复。
 
@@ -65,6 +67,6 @@ v0.20.40 `pourCopper` 路径候选仅接受单 R 的一维路径或恰好一层�
 
 `pcb.exportPickPlace` 的 `fileType` 仅支持 `xlsx` 或 `csv`，默认 `csv`；`unit` 仅支持 `mm` 或 `mil`，默认 `mm`。导出后核对文件内坐标与单位，不能只看返回成功。
 
-删除前查目标图元 ID 并备份。`pcb.delete` 会在启动任务前拒绝空 ID 列表或空白 ID；读回未知时停止后续删除。`pcb.sourceRollback` 仅用于确认需要恢复的备份，恢复前核对 PCB UUID，恢复后读回并保存。关闭页签不等于可靠回滚。
+删除前查目标图元 ID 并备份。代理文件备份按工程保留最近 5 份，各 PCB 共用上限；代理不可用时回退到扩展存储的固定单键，跨工程和 PCB 共用，后一次会覆盖前一次，只留最近 1 份。`pcb.delete` 会在启动任务前拒绝空 ID 列表或空白 ID；读回未知时停止后续删除。`pcb.sourceRollback` 仅用于确认需要恢复的备份，恢复前核对 PCB UUID，恢复后读回并保存。关闭页签不等于可靠回滚。
 
 破坏性操作失败后，插件在 500 ms 内核对当前焦点、文档 UUID、文档类型和完整源码。只有确认原内容未变时才跳过 `setDocumentSource`，但仍报告操作失败；`cause` 标记 `restored:true`、`contentRestored:true`、`noRecoveryWriteNeeded:true`、`retryable:true`，并保留 `operationError`、`recovery` 和 `normalizations`。检查超时或结果不确定时，继续原整页恢复流程；源码比较仍包含 POURED。此行为是本地候选，宿主验收待完成。

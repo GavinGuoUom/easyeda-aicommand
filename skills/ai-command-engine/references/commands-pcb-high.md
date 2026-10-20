@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | Inspect current state | `pcb.listComponents`, `pcb.getComponentPads`, `pcb.listNets`, `pcb.listLayers` | Check components, pad nets, and layers. |
 | Pad connection method | `pcb.connectComponentPadDirect` | The compatibility entry point is temporarily disabled; calls are rejected before accessing the project or SDK. |
-| Placement and outline | `pcb.moveComponent`, `pcb.checkPlacement`, `pcb.drawOutline` | Place components, check clearance, and create the board outline. |
-| Routing | `pcb.routeTrack`, `pcb.placeVia` | Draw tracks and change layers. The temporary plugin policy requires each `routeTrack` segment to be at least 1 mil (25.4 μm); shorter segments are rejected before writing. This is not an SDK limit. |
+| Placement and outline | `pcb.moveComponent`, `pcb.checkPlacement`, `pcb.drawOutline` | Plan placement first according to [PCB Operating Requirements](PCB操作要求.md), then place components, check clearance, and create the board outline. |
+| Routing | `pcb.routeTrack`, `pcb.placeVia` | Plan routing and layer changes according to [PCB Operating Requirements](PCB操作要求.md). The temporary plugin policy requires each `routeTrack` segment to be at least 1 mil (25.4 μm); shorter segments are rejected before writing. This is not an SDK limit. |
 | Copper pour | `pcb.pourCopper`, `pcb.listPours`, `pcb.rebuildPour` | Create, inspect, and rebuild copper regions. |
 | Checks | `pcb.runDrc`, `pcb.getNetInfo` | Check design rules and target nets. |
 | Save and manufacturing | `pcb.save`, `pcb.exportGerber`, `pcb.exportPickPlace` | Save and generate manufacturing files as needed. |

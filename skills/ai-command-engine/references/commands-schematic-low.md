@@ -17,6 +17,8 @@ In v0.20.12, changing the style of a named wire with `schematic.modifyWire` on t
 
 Before repair commands, inspect the target object and supported `dryRun` option. If the result is unknown, do not repeat the write.
 
+`schematic.getPrimitivesInRegion` returns only primitives fully contained in the specified rectangle. A primitive that intersects the boundary without being fully contained is not returned. EDA 4.2 has not been accepted on a real host.
+
 ## EDA version limitations
 
 The user has decided to pause the following three features on the current EDA 4.1.78 host. v0.20.49 verified that each is rejected before calling the target interface, leaving the schematic source unchanged. Keep the command entry and version guard; do not try an older fallback path automatically. Resumption requires an applicable host and individual acceptance results.
@@ -35,3 +37,5 @@ Real calls on EDA 4.1.78 explicitly reported that all three commands below requi
 | --- | --- | --- | --- |
 | `schematic.getPrimitiveAtPoint` | Query the primitive at a coordinate (returns ID and type) to investigate “what is at this position?” | Locate an object by region or coordinate. | Check parameters in the target instance's help. |
 | `schematic.setAttribute` | Change a component attribute, such as designator `R?` to `R4` with `key=Designator`.<br>Only changes an existing attribute.<br>Do not use a bare or empty footprint name; see pitfalls G1/G2. | Adjust an existing object. | `primitiveId` and `key` must be non-empty strings; `value` must be a string and may be empty to clear the value. Only existing attributes can be changed. |
+
+`schematic.connectPin` in v0.20.51 preserves pin-coordinate precision instead of rounding connection endpoints. Five EDA 4.1.78 cases—half-grid offsets in four directions and an integer-aligned case—passed endpoint, netlist, and save/reopen checks. This does not establish whole-design DRC or acceptance of other wiring features.

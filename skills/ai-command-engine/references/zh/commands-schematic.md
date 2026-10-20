@@ -1,5 +1,7 @@
 # 原理图操作流程
 
+写入前先读[原理图操作要求](原理图操作要求.md)，按其中要求规划器件布局、短桩间距和标签方向。
+
 先按[连接与环境](setup.md)核对窗口、工程和活动图页。命令选择见[高频](commands-schematic-high.md)与[低频](commands-schematic-low.md)。参数、返回字段和示例从已核对所选窗口版本的 `/help?cmd=<命令名>` 读取；`/help` 不按写入请求的 `instanceId` 路由。
 
 ## 查看和放置
@@ -17,6 +19,10 @@
 | 两个引脚直接连通 | `schematic.linkWire` | 正好两个引脚，不同时指定网络名。 |
 | 一批已确定连接 | `schematic.batchWire` | 检查逐项结果和末次网表；失败项不会自动修复。 |
 | 指定路径或标签位置 | `schematic.drawWire`、`schematic.placeNetLabel` | `drawWire` 已给导线命名时，不再叠加同名标签。 |
+
+`schematic.batchWire` 的 `label` 项目前不转发 `stubLen`，传入该字段会被忽略；内部沿用 `labelWire` 默认短桩长度 60（原理图坐标单位）。需要指定长度时，逐条调用 `schematic.labelWire` 并传 `stubLen`；该指令最小长度为 20，防撞处理仍可能改变短桩方向或路径。以上参数行为已按 0.20.51 源码核对。
+
+`schematic.linkWire` 同行或同列引脚采用 U 形候选，不同行且不同列采用 L 形候选。它会检查第三方引脚和部分导线共线重叠，但不检查器件本体边界，走线仍可能压过器件。检查返回的 `route` 和图面；需要明确避开器件时，用 `schematic.drawWire` 指定路径，并核对网表和 DRC。连通审计通过不能证明图面无遮挡。
 
 `schematic.drawWire` 的相邻线段可能由宿主合并到既有导线。0.20.20 起 `primitiveIds` 表示最终仍存活并覆盖请求路径的导线 ID，`segments` 表示已执行的简单段数；另读 `created`、`reused`、`removed`，不要把段数或 SDK 返回 ID 当作新增导线数。0.20.21 修正了真实源码中 WIRE 无几何、关联 LINE 的 Y 轴与 SDK 相反所造成的写前误拒绝。当前 4.1.78 宿主一次相邻共线样例已证明旧线几何及样式改变时会返回不可重试 partial，列出复用 ID 并停止；保存重开仍是宿主合并后的状态。SDK 返回 `number[]` 或 `number[][]` 时保留原分组解析，不先展平。仅当候选段与同一 WIRE 的源码 LINE 双向一致时才采用，不能跨组推断连接。仅当同一 WIRE ID 保留、全部旧 LINE 保持且仅新增请求 LINE 的简单追加时，原有 `ATTR`（`zIndex` 除外）须全部保持。此形态下，`zIndex` 仅允许全组保持或全组统一增加新增 LINE 数 `n`；`n` 须为有限整数，且原有 ATTR 按 zIndex 的相对次序须保持，并记录 `drawingOrderChanges`。WIRE 自身及非目标对象仍严格核对；其它差异仍拒绝。v0.20.34 宿主相接第三段样例中，原 LINE、网络和样式保持，`drawingOrderChanges` 与实际变化一致；保存、关闭、重开后有效记录相同。该结果只覆盖这一简单追加形态。v0.20.35 候选允许未向 `create` 传 `net` 的新 WIRE 在几何和样式先通过后，接受 SDK 自动添加的空 NET+Relevance；ATTR header ID 须有效，parentId 须为该新 WIRE，key 须为 NET；仅 NET value 和 getter.net 必须为空字符串，Relevance 按其独立规则核对。旧 WIRE 仍严格核对；显式命名段须满足 request/source/getter 一致。`named:false` 保持未命名；回显 `net` 只是输入回显，不能证明分离线段归网。不得补名、加标签或重试。源码及真实夹具回归已通过专家最终复审；候选宿主验收待完成。A08 的写后源码与 SDK ID 集暂不一致时仍只读重采样，并受命令剩余总时限约束；每轮同核焦点、源码和模型，超时或迟到后不再读写。首次及后续读取均受限；不重试创建/修改/删除，也不继续后续线段。一致后仍须完成全部几何、网络和样式核验；仍不一致则返回 partial，附双方 ID 与采样时间。先核对实际图页，不自动重画。其它画线路径仍需分别验收。
 
@@ -46,7 +52,7 @@ EDA 4.1.78 的 `schematic.modifyText` 即时读回可成功，但保存重开后
 
 ## 完整器件更换
 
-AI Command Engine 自身没有一条完成全部替换的指令。替代型号、封装和引脚映射由 AI 与人工共同确认，独立模块复用插件执行原理图与 PCB 同步替换。其 prepareReplacement、executeReplacement、getReplacementOperation 通过独立 module-reuse:rpc:v1 调用，不是 ACE HTTP 指令。带内置 Gateway 的版本由模块技能后台隐藏启动桥接，无需单独安装 Gateway 或 AI Command Engine；覆铜、挖空、自定义开窗属于复用后的收尾修补。下面是仅使用 ACE 时的组合流程；任何一步结果未知，都先停下并只读核对。
+AI Command Engine 自身没有一条完成全部替换的指令。替代型号、封装和引脚映射由 AI 与人工共同确认，独立模块复用插件执行原理图与 PCB 同步替换。其 prepareReplacement、executeReplacement、getReplacementOperation 通过独立 module-reuse:rpc:v1 调用，不是 ACE HTTP 指令。带内置 Gateway 的版本由模块技能后台隐藏启动桥接，无需单独安装 Gateway 或 AI Command Engine；修正版只连接来源检查修订号匹配的桥接，调用时使用模块技能返回的地址，不回退到旧服务；覆铜、挖空、自定义开窗属于复用后的收尾修补。下面是仅使用 ACE 时的组合流程；任何一步结果未知，都先停下并只读核对。
 
 1. 用 `project.exportFile` 保存原生 `.epro2` 备份。激活目标页，记录旧器件的 ID、位号、位置、镜像、引脚、网络及需保留的项目属性。读取源码时核对活动页 `DOCHEAD.uuid`；按首个 `||` 分开头体，以 `(type,id)` 取最高 `ticket`，空体为删除墓碑。不把旧记录当成现值，也不把源码 Y 坐标直接传给公开 API。
 2. 查询新器件的 Device、Symbol、Footprint、引脚和物料信息。型号、制造商及供应商料号来自新器件，不继承旧件。

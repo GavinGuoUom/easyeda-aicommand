@@ -8,6 +8,34 @@ Describe a task to your AI tool, such as “check this chip’s stock and price 
 
 > This README is the primary English guide. Some linked documents and captions embedded in the demonstration animations may be in Chinese. This describes the documentation language only; it does not claim that the extension interface supports an English language switch.
 
+<a id="first-install-ai"></a>
+
+## First installation: ask your AI to set up and connect
+
+Use an AI coding tool that can read local files and run terminal commands. A chat-only tool can explain the steps, but cannot install dependencies or start the proxy on your computer. The extension, local proxy, and AI skill are separate installs.
+
+Copy the entire prompt below into your AI tool. If you already downloaded the source or extension, also provide its local path. No companion skill needs to be installed before asking for this initial setup.
+
+```text
+Help me install AI Command Engine for JLCEDA Pro for the first time. Set up the local environment, connect EDA, and verify the connection using read-only operations. Repository: https://github.com/quhuii-lgtm/easyeda-aicommand .
+
+Inspect the current setup first. Work one step at a time and report the result, any blocker, and the next action. Do not just give me a list of commands or claim completion after installing the extension.
+
+1. Confirm that you can access local files and a terminal. Identify the operating system and check Node.js and npm against package.json; the current requirement is Node.js >=20.17.0. If a tool is missing, guide me through installation from its official source and check again. Git is optional; Python is not required for direct HTTP access.
+2. Identify the extension version I have or plan to install and obtain the corresponding complete source repository. Read README.md, docs/QUICKSTART.md, package.json, and package-lock.json. Identify the extension, proxy, and skill sources and versions. If channels differ or matching source is unavailable, explain the mismatch instead of inventing a download URL or assuming compatibility.
+3. Use a fixed source directory. Inspect existing repositories, skills, and settings before making changes; preserve personal edits and credentials. Confirm that package.json, package-lock.json, and bridge/command-proxy.mjs exist.
+4. Run npm ci in that directory and check that dependencies installed successfully. Do not add --omit=dev; installing a downloaded extension does not require a build. Install the entire skills/ai-command-engine/ directory through this AI tool's supported skill mechanism, keeping references/, scripts/, and SKILL.md. The repository-root SKILL.md is only a navigation file. Confirm you can read the installed skill and references/setup.md.
+5. Check http://127.0.0.1:49720/health. If the proxy is absent, start node bridge/command-proxy.mjs and keep it running. If the port is occupied, identify the service first; do not terminate an unknown process or change the port. Check the health response and proxy version. Resolve failures before continuing. Windows URL-based automatic startup is optional.
+6. Guide me through importing or installing the .eext in JLCEDA Pro, enabling it, allowing external interaction, and opening a trial project and document. Explain where I must complete login, verification codes, system confirmations, or manual EDA actions, then wait for me. Do not create or modify a circuit.
+7. Guide me to the Chinese menu “AI 指令引擎 → 启动桥接” (AI Command Engine → Start Bridge). Query GET /connections and verify the extension version and project identity. If no instance appears, inspect extension enablement, external interaction, bridge state, and the proxy. When multiple instances exist, use my intended project instead of choosing the first entry.
+8. Use the freshly verified instanceId at the top level of POST /command to call project.getInfo. Check that JSON ok is true and that the project identity is correct; HTTP 200 alone is insufficient. Inspect document identities with read-only queries as needed. Use help for the selected instance version rather than guessing parameters.
+9. Report the Node/npm versions, source directory and revision, skill location, proxy health, EDA/extension versions, target instanceId, project/document identities, and read-only call result. State any missing evidence. An installed extension alone is not a verified EDA connection.
+
+Only set up the environment and verify connectivity. Do not place components, route tracks, modify libraries, configure SMT credentials, or upload files publicly. Wait for a separate drawing request after the read-only check succeeds.
+```
+
+A successful first connection means the proxy is healthy, `/connections` contains the intended EDA instance, and `project.getInfo` returns `ok:true` with the correct project. It does not establish drawing correctness or save/reopen persistence. See the [installation guide](docs/QUICKSTART.md) for manual commands and troubleshooting.
+
 ## Key features
 
 ### 1. Component stock, pricing, and SMT parts lookup

@@ -6,8 +6,8 @@
 | --- | --- | --- |
 | 看现状 | `pcb.listComponents`、`pcb.getComponentPads`、`pcb.listNets`、`pcb.listLayers` | 确认器件、焊盘网络和图层。 |
 | 焊盘连接方式 | `pcb.connectComponentPadDirect` | 兼容入口暂时停用；调用会在访问工程或 SDK 前拒绝。 |
-| 布局与板框 | `pcb.moveComponent`、`pcb.checkPlacement`、`pcb.drawOutline` | 摆放、查间距和建立板框。 |
-| 布线 | `pcb.routeTrack`、`pcb.placeVia` | 绘制走线与换层。`routeTrack` 暂行插件政策要求每段至少 1 mil（25.4 μm），短段写前拒绝；不是 SDK 限制。 |
+| 布局与板框 | `pcb.moveComponent`、`pcb.checkPlacement`、`pcb.drawOutline` | 先按[PCB操作要求](PCB操作要求.md)规划布局，再摆放、查间距和建立板框。 |
+| 布线 | `pcb.routeTrack`、`pcb.placeVia` | 按[PCB操作要求](PCB操作要求.md)规划走线与换层。`routeTrack` 暂行插件政策要求每段至少 1 mil（25.4 μm），短段写前拒绝；不是 SDK 限制。 |
 | 铺铜 | `pcb.pourCopper`、`pcb.listPours`、`pcb.rebuildPour` | 建立、检查和重铺铜区。 |
 | 检查 | `pcb.runDrc`、`pcb.getNetInfo` | 检查规则和目标网络。 |
 | 保存与生产 | `pcb.save`、`pcb.exportGerber`、`pcb.exportPickPlace` | 保存并按需生成生产资料。 |

@@ -2,6 +2,8 @@
 
 This page covers risks that cannot be determined from `/help` parameter tables alone. Standard workflows are in [schematic](commands-schematic.md) and [PCB](commands-pcb.md).
 
+Do not send users plugin checks that have already completed independent readback. Only add checks for objects, save state, and design quality that remain uncovered.
+
 ## Results and write state
 
 - An SDK `true`, a non-empty ID, a single screenshot, or a DRC result with no errors alone does not prove the task is complete. Use plugin readback and the required save/reopen checks for the task.
@@ -28,6 +30,8 @@ This page covers risks that cannot be determined from `/help` parameter tables a
 - Use `schematic.exportPng` for visual inspection; background `editor.screenshot` may be a cached old frame.
 
 ## PCB and libraries
+
+- `ComponentPad.getConnectedPrimitives` does not return `Poured`; it cannot establish whether a component pad does or does not contact actual poured copper.
 
 - PCB DRC does not check all body-to-body and silkscreen overlaps. `checkPlacement` is an approximation based on pad bounding boxes; skipped objects or `complete:false` do not mean placement passed.
 - The presence of a copper-area outline does not prove that it has been filled. If `filled` is unknown, do not treat it as empty or complete. Even a successful refill must be checked against saved state and the target area.

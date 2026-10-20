@@ -45,7 +45,7 @@
 | `project.create` | 新建工程 | 开始一个独立工程时使用。 | 写入未知时停止后续写入。 |
 | `project.open` | 打开指定工程并切换当前工程。SDK 声明可能直接丢失旧工程未保存的数据；不能把返回失败当作未保存保护。 | 当前工程内容已确认保存，或用户明确允许丢弃未保存内容时使用。 | 恢复未确认或需保留未保存现场时不要调用。目标不存在或无权限会在调用 openProject 前拒绝，但合法目标不具备未保存保护。 |
 | `project.moveToFolder` | 移动工程到文件夹（留空=根目录） | 整理工程所属目录时使用。 | 写入未知时停止后续写入。 |
-| `project.exportFile` | 导出 .epro/.epro2（base64 自行落盘做备份/迁移） | 备份、交付或独立检查时使用。 | `fileType` 仅接受 epro 或 epro2，省略时为 epro；导出成功不等于内容验收通过。 |
+| `project.exportFile` | 导出 .epro/.epro2（base64 自行落盘做备份/迁移） | 备份、交付或独立检查时使用。 | 需要工程管理中的“下载工程”权限；`fileType` 仅接受 epro 或 epro2，省略时为 epro；导出成功不等于内容验收通过。 |
 | `project.importFile` | 导入外部文件成新工程。<br>.PcbDoc/.SchDoc/.epro/.epro2 等可推断 fileType。<br>`newProjectName` 设置新工程显示名。 | 接收外部设计或同步内容时使用。 | 在线 .epro2 省略新名时从可靠根元数据 title 派生；名称派生与描述保留已在 EDA 4.1.78 的限定样例通过。无法可靠取名或重名时要求显式名称；空返回或异常按未知结果处理，不重发。 |
 | `project.getDocumentSource` | 读当前激活文档源数据 JSON（只读整体分析，比逐个查图元快） | 只读核对文档有效记录时使用。 | 源码坐标不能直接当作公开API坐标。 |
 | `project.modifyTitleBlock` | 改标题栏（⚠️ data 键必须是图框已存在字段，先 getPageInfo 查 titleBlockData。<br>Page Size/Symbol 不能接口切换） | 更新现有图框字段时使用。 | 只改已有字段，不切换纸张。 |

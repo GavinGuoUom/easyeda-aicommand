@@ -2,6 +2,8 @@
 
 First use [Connection and setup](setup.md) to verify the window, project, and active schematic page. Choose commands from [high-frequency](commands-schematic-high.md) and [low-frequency](commands-schematic-low.md). Read parameters, return fields, and examples from `/help?cmd=<command-name>` for the verified selected window version; `/help` is not routed by the `instanceId` on a write request.
 
+Before writing, read [Schematic operating requirements](原理图操作要求.md) and plan component layout, short-stub spacing, and label direction.
+
 ## Inspect and place
 
 1. Use `schematic.getPageInfo`, `schematic.listComponents`, and `schematic.listPins` to identify the page, components, and actual pins.
@@ -20,6 +22,10 @@ First use [Connection and setup](setup.md) to verify the window, project, and ac
 
 Do not wire NC pins. Manual routes must not cross unrelated pins or overlap collinearly with differently named wires; the host may merge touching wires. A net-label anchor must actually attach to a wire; visual proximity is not an electrical connection. If `placeNetLabel` returns unknown or floating attachment, preserve the current state and stop dependent writes. Source Y coordinates have the opposite sign from public API coordinates; do not pass source coordinates directly to drawing commands.
 
+`schematic.batchWire` does not currently forward `stubLen` from `label` items; the field is ignored. It uses the `labelWire` default stub length of 60 schematic units. To specify a length, call `schematic.labelWire` for each connection and pass `stubLen`; its minimum is 20. Collision handling may still change stub direction or path. These parameter behaviors were checked against v0.20.51 source.
+
+`schematic.linkWire` uses a U-shaped candidate for pins in the same row or column, and an L-shaped candidate when they are in different rows and columns. It checks third-party pins and some collinear wire overlaps, but not component-body boundaries, so a route may cross a component. Inspect the returned `route` and canvas. To explicitly avoid a component, use `schematic.drawWire` with a specified path and verify the netlist and DRC. A passing connectivity audit does not prove that the drawing is unobstructed.
+
 ## Modify, organize, and delete
 
 - Verify changes such as `schematic.moveComponent`, `modifyComponent`, `modifyWire`, and `modifyNetLabel` by independent readback, not an SDK boolean. `modifyComponent` submits the complete property object; preserve existing `otherProperty` and do not overwrite project-instance properties with library-device defaults.
@@ -34,7 +40,7 @@ Compare expected pins and nets with `schematic.listNets`, `listWires`, `getNetli
 
 ## Complete component replacement
 
-AI Command Engine has no single command that completes every part of a replacement. The separate module-reuse plugin provides a synchronized replacement workflow. Combine ACE commands only when needed and stop for read-only inspection if any result is unknown.
+AI Command Engine has no single command that completes every part of a replacement. The separate module-reuse plugin provides a synchronized replacement workflow. Combine ACE commands only when needed and stop for read-only inspection if any result is unknown. The revised plugin connects only to a bridge whose source-check revision matches and uses the address returned by the module skill; it does not fall back to the old service.
 
 1. Back up the native `.epro2` project with `project.exportFile`. Activate the target page and record the old component's ID, designator, position, mirror state, pins, nets, and project properties to preserve. When reading source, verify the active page's `DOCHEAD.uuid`; split header and body at the first `||`; for each `(type,id)`, use the highest `ticket`; an empty body is a deletion tombstone. Do not treat an old record as current state or pass source Y coordinates directly to the public API.
 2. Look up the new component's Device, Symbol, Footprint, pins, and part information. The model, manufacturer, and supplier part number must come from the new component; do not inherit them from the old one.

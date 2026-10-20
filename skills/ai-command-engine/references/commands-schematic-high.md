@@ -5,8 +5,8 @@
 | Stage | Recommended commands | Purpose |
 | --- | --- | --- |
 | Inspect current state | `schematic.getPageInfo`, `schematic.listComponents`, `schematic.listPins` | Verify the page, components, and pins. |
-| Place a component | `schematic.placeDevice` | Place one component and verify its resources. |
-| Connect | `schematic.labelWire`, `schematic.linkWire`, `schematic.batchWire` | Connect a pin to a named net, connect two pins, or make batch connections. |
+| Place a component | `schematic.placeDevice` | Plan the layout using [Schematic operating requirements](原理图操作要求.md), then place the component and verify its resources. |
+| Connect | `schematic.labelWire`, `schematic.linkWire`, `schematic.batchWire` | Connect a pin to a named net, connect two pins, or make batch connections. Plan short-stub spacing and label direction using [Schematic operating requirements](原理图操作要求.md). |
 | Draw precisely | `schematic.drawWire`, `schematic.placeNetLabel` | Specify wire geometry or label position. |
 | Modify | `schematic.moveComponent`, `schematic.modifyComponent`, `schematic.setAttribute` | Change position, component, or attribute. |
 | Check | `schematic.listNets`, `schematic.listWires`, `schematic.runDrc`, `schematic.getNetlist` | Verify nets, wires, rules, and connectivity. |
